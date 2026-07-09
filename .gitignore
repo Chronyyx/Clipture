@@ -5,9 +5,14 @@ release/
 *.user
 *.suo
 .vs/
+.idea/
 npm-debug.log*
 *.obj
 *.pdb
 *.ilk
 *.exe
 !assets/**/*.exe
+engine/third_party/rnnoise/model.tar.gz
+engine/third_party/rnnoise/models/*.pth
+engine/third_party/rnnoise/src/rnnoise_data_little.c
+engine/third_party/rnnoise/src/rnnoise_data_little.h
