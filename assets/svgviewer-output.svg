@@ -1,0 +1,40 @@
+<svg width="1024" height="1024" viewBox="76 76 872 872" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tile" x1="196" y1="120" x2="820" y2="904" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbf8ff"/>
+      <stop offset="0.52" stop-color="#f0e7ff"/>
+      <stop offset="1" stop-color="#decaff"/>
+    </linearGradient>
+
+    <filter id="tileShadow" x="-18%" y="-18%" width="136%" height="136%">
+      <feDropShadow dx="0" dy="26" stdDeviation="28" flood-color="#2b1a63" flood-opacity="0.22"/>
+      <feDropShadow dx="0" dy="7" stdDeviation="10" flood-color="#000000" flood-opacity="0.12"/>
+    </filter>
+
+    <filter id="frameShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#4d2bd3" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect x="108" y="108" width="808" height="808" rx="176" fill="url(#tile)" filter="url(#tileShadow)"/>
+
+  <path d="M160 206C208 150 272 130 372 130H654C790 130 866 212 866 342V420C720 324 478 292 160 368V206Z"
+        fill="#ffffff" opacity="0.26"/>
+
+  <!-- Same focus-frame placement as v4 -->
+  <g fill="none" stroke="#7C5AF8" stroke-width="42" stroke-linecap="round" stroke-linejoin="round" filter="url(#frameShadow)">
+    <path d="M198 354V238C198 216 216 198 238 198H354"/>
+    <path d="M670 198H786C808 198 826 216 826 238V354"/>
+    <path d="M826 670V786C826 808 808 826 786 826H670"/>
+    <path d="M354 826H238C216 826 198 808 198 786V670"/>
+  </g>
+
+  <!-- C scaled up about 15% from v4 -->
+  <path d="M609 408.5
+           A136 136 0 1 0 609 615.5"
+        fill="none"
+        stroke="#302066"
+        stroke-width="57.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+</svg>

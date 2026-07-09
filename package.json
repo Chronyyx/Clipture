@@ -1,0 +1,86 @@
+{
+  "name": "clipture",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NVENC-first Windows clipping app with Electron UI and native C++ capture engine.",
+  "main": "dist/main/main.js",
+  "author": "Clipture",
+  "scripts": {
+    "dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "build": "npm run build:engine && npm run build:ui",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:ui": "npm run build:electron && tsc --noEmit && vite build",
+    "build:engine": "cmake -S engine -B build/engine -A x64 && cmake --build build/engine --config Release",
+    "pack:win": "npm run build && electron-builder --win --x64 --dir",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "typecheck": "tsc --noEmit",
+    "start:dev": "electron .",
+    "start": "npm run pack:win && .\\release\\win-unpacked\\Clipture.exe"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "simple-rnnoise-wasm": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "app.clipture.desktop",
+    "productName": "Clipture",
+    "executableName": "Clipture",
+    "icon": "assets/icon.ico",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "assets",
+        "to": "assets"
+      },
+      {
+        "from": "build/engine/Release/clipture_engine.exe",
+        "to": "engine/clipture_engine.exe"
+      },
+      {
+        "from": "node_modules/ffmpeg-static/ffmpeg.exe",
+        "to": "ffmpeg/ffmpeg.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Clipture-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Clipture"
+    }
+  }
+}
