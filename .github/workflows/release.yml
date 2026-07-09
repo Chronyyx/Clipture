@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout
@@ -25,8 +25,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and publish Windows release
-        run: npm run dist:win -- --publish always
+      - name: Build Windows release
+        run: npm run dist:win -- --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
+          generate_release_notes: true
