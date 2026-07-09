@@ -339,6 +339,21 @@ function checkForAppUpdates(): void {
   autoUpdater.on("error", (error) => {
     console.error("[updates]", error);
   });
+  autoUpdater.on("update-downloaded", async (updateInfo) => {
+    const result = await dialog.showMessageBox({
+      type: "info",
+      buttons: ["Restart now", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      title: "Update ready",
+      message: `Clipture ${updateInfo.version} is ready to install.`,
+      detail: "Restart Clipture to finish updating."
+    });
+    if (result.response === 0) {
+      isQuitting = true;
+      autoUpdater.quitAndInstall();
+    }
+  });
   void autoUpdater.checkForUpdatesAndNotify().catch((error) => {
     console.error("[updates]", error);
   });
