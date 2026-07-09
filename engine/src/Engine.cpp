@@ -247,7 +247,55 @@ bool isIgnoredForegroundProcess(const std::string& exeName) {
         lower == "electron.exe";
 }
 
-bool isKnownGameProcess(const std::string& exeName, const std::string& processPath) {
+bool isRobloxProcess(const std::string& exeName) {
+    return lowerAscii(std::filesystem::path(exeName).filename().string()) == "robloxplayerbeta.exe";
+}
+
+bool isMinimizedRobloxName(const std::string& name) {
+    return lowerAscii(name) == "roblox minimized";
+}
+
+struct WindowSearchContext {
+    DWORD processId = 0;
+    bool foundVisibleRestoredWindow = false;
+};
+
+BOOL CALLBACK findVisibleRestoredWindowForProcess(HWND window, LPARAM lparam) {
+    auto* context = reinterpret_cast<WindowSearchContext*>(lparam);
+    DWORD windowProcessId = 0;
+    GetWindowThreadProcessId(window, &windowProcessId);
+    if (windowProcessId != context->processId) return TRUE;
+    if (!IsWindowVisible(window) || IsIconic(window) || GetWindow(window, GW_OWNER) != nullptr) return TRUE;
+
+    wchar_t title[2] {};
+    if (GetWindowTextW(window, title, 2) <= 0) return TRUE;
+
+    context->foundVisibleRestoredWindow = true;
+    return FALSE;
+}
+
+bool hasVisibleRestoredWindowForProcess(DWORD processId) {
+    if (processId == 0) return false;
+    WindowSearchContext context { processId, false };
+    EnumWindows(findVisibleRestoredWindowForProcess, reinterpret_cast<LPARAM>(&context));
+    return context.foundVisibleRestoredWindow;
+}
+
+std::string robloxWindowStateName(DWORD processId, HWND foregroundWindow = nullptr) {
+    if (foregroundWindow && IsWindowVisible(foregroundWindow) && !IsIconic(foregroundWindow)) {
+        return "Roblox";
+    }
+    return hasVisibleRestoredWindowForProcess(processId) ? "Roblox" : "Roblox minimized";
+}
+
+bool isKnownGameProcess(const std::string& exeName, const std::string& processPath, DWORD processId = 0, HWND foregroundWindow = nullptr) {
+    if (isRobloxProcess(exeName)) {
+        const auto robloxName = robloxWindowStateName(processId, foregroundWindow);
+        std::lock_guard<std::mutex> lock(g_exeToGameNameMutex);
+        g_exeToGameName[lowerAscii(exeName)] = robloxName;
+        return !isMinimizedRobloxName(robloxName);
+    }
+
     std::string gameName = detectInstalledGameByPath(processPath);
     if (!gameName.empty()) {
         std::lock_guard<std::mutex> lock(g_exeToGameNameMutex);
@@ -315,6 +363,7 @@ std::pair<std::string, bool> detectForegroundAppInfo(HMONITOR activeMonitor = nu
         const auto installedGame = detectInstalledGameByPath(processPath);
         if (!installedGame.empty()) return {installedGame, true};
         std::string exeName = std::filesystem::path(processPath).filename().string();
+        if (isRobloxProcess(exeName)) return {robloxWindowStateName(processId, window), true};
         const auto friendly = friendlyProcessName(processPath);
         if (!friendly.empty() && friendly != "Clipture") {
             bool isGame = (friendly != stripExtension(exeName));
@@ -561,7 +610,7 @@ void Engine::gameDetectionLoop() {
                             std::string fgExeName = (slashPos != std::string::npos) ? narrowPath.substr(slashPos + 1) : narrowPath;
 
                             if (!isIgnoredForegroundProcess(fgExeName)) {
-                                const bool isGame = isKnownGameProcess(fgExeName, narrowPath);
+                                const bool isGame = isKnownGameProcess(fgExeName, narrowPath, fgPid, foreground);
                                 if (settings_.captureGameAudio && isGame &&
                                     !containsProcessName(settings_.appAudioProcesses, fgExeName) &&
                                     !containsProcessName(dynamicSources, fgExeName)) {
@@ -609,7 +658,7 @@ void Engine::gameDetectionLoop() {
                                 wchar_t path[MAX_PATH] {};
                                 DWORD size = MAX_PATH;
                                 if (QueryFullProcessImageNameW(process, 0, path, &size) && size > 0) {
-                                    isGame = isKnownGameProcess(exeName, narrowWide(path));
+                                    isGame = isKnownGameProcess(exeName, narrowWide(path), entry.th32ProcessID);
                                 }
                                 CloseHandle(process);
                             }
@@ -903,6 +952,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         } else if (packet.sourceId.rfind("game:", 0) == 0) {
             std::string exeName = packet.sourceId.substr(5);
             std::string gameName = getGameName(exeName);
+            if (isMinimizedRobloxName(gameName)) continue;
             audioByTrack["game:" + gameName].push_back(packet);
         } else if (packet.sourceId.rfind("app:", 0) == 0) {
             audioByTrack[packet.sourceId].push_back(packet);

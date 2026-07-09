@@ -52,10 +52,93 @@ select {
   position: absolute;
   top: 0;
   left: 0;
-  right: 140px;
-  height: 24px;
+  right: 208px;
+  height: 32px;
   -webkit-app-region: drag;
   z-index: 9999;
+}
+
+.titlebar-update-controls {
+  position: absolute;
+  top: 4px;
+  right: 142px;
+  z-index: 10000;
+  display: flex;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-update-button {
+  width: 28px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  color: #d8dee9;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.9;
+}
+
+.titlebar-update-button:hover:not(:disabled),
+.titlebar-update-button.download.ready {
+  color: #ffffff;
+  background: #252932;
+  opacity: 1;
+}
+
+.titlebar-update-button:disabled {
+  cursor: default;
+}
+
+.titlebar-update-button.download.downloading,
+.titlebar-update-button.refresh.checking {
+  color: #f8fafc;
+}
+
+.titlebar-update-button.refresh.checking svg {
+  animation: update-spin 1s linear infinite;
+}
+
+.titlebar-update-button.download.ready::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px #101114;
+}
+
+.titlebar-update-button.download.downloading::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: #f8fafc;
+  animation: update-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes update-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .sidebar {

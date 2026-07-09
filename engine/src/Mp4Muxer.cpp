@@ -70,9 +70,19 @@ std::wstring clipFilePath(const std::string& saveFolder) {
     std::filesystem::create_directories(folder);
 
     const auto now = std::chrono::system_clock::now();
-    const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    const auto time = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime {};
+    localtime_s(&localTime, &time);
+    const int hour12 = localTime.tm_hour % 12 == 0 ? 12 : localTime.tm_hour % 12;
+    const wchar_t* period = localTime.tm_hour < 12 ? L"AM" : L"PM";
+
     std::wostringstream path;
-    path << folder << L"\\Clipture_" << stamp << L".mp4";
+    path << folder << L"\\Clipture "
+         << std::put_time(&localTime, L"%Y-%m-%d ")
+         << std::setw(2) << std::setfill(L'0') << hour12 << L"-"
+         << std::setw(2) << std::setfill(L'0') << localTime.tm_min << L"-"
+         << std::setw(2) << std::setfill(L'0') << localTime.tm_sec << L" "
+         << period << L".mp4";
     return path.str();
 }
 

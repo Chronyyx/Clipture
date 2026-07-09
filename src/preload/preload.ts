@@ -18,10 +18,18 @@ const api: CliptureApi = {
   revealSoundsFolder: () => ipcRenderer.invoke("sounds:reveal"),
   revealClip: (filePath: string) => ipcRenderer.invoke("library:reveal", filePath),
   renameClip: (id: string, newTitle: string) => ipcRenderer.invoke("library:rename", id, newTitle),
+  getUpdateState: () => ipcRenderer.invoke("updates:getState"),
+  checkForUpdates: () => ipcRenderer.invoke("updates:check"),
+  installUpdate: () => ipcRenderer.invoke("updates:install"),
   onLibraryChanged: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on("library:changed", listener);
     return () => ipcRenderer.removeListener("library:changed", listener);
+  },
+  onUpdateStateChanged: (callback) => {
+    const listener = (_event: any, state: any) => callback(state);
+    ipcRenderer.on("updates:stateChanged", listener);
+    return () => ipcRenderer.removeListener("updates:stateChanged", listener);
   },
   onPlaySound: (callback: (sound: string) => void) => {
     const listener = (_event: any, sound: string) => callback(sound);

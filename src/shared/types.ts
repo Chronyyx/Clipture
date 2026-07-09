@@ -126,6 +126,15 @@ export interface SaveClipResult {
   clip?: ClipRecord;
 }
 
+export type UpdateStatus = "idle" | "checking" | "available" | "downloading" | "ready" | "error";
+
+export interface UpdateState {
+  status: UpdateStatus;
+  version?: string;
+  message?: string;
+  checkedAt?: string;
+}
+
 export interface ActiveProcess {
   name: string;
   pid: number;
@@ -148,7 +157,11 @@ export interface CliptureApi {
   revealSoundsFolder: () => Promise<void>;
   revealClip: (filePath: string) => Promise<void>;
   renameClip: (id: string, newTitle: string) => Promise<boolean>;
+  getUpdateState(): Promise<UpdateState>;
+  checkForUpdates(): Promise<UpdateState>;
+  installUpdate(): Promise<void>;
   onLibraryChanged: (callback: () => void) => () => void;
+  onUpdateStateChanged: (callback: (state: UpdateState) => void) => () => void;
   onPlaySound: (callback: (sound: string) => void) => () => void;
   onShowNotification: (callback: (thumbnailUrl: string, position: string) => void) => () => void;
   hideNotification: () => void;

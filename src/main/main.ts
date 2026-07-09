@@ -6,7 +6,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameS
 import { basename, dirname, extname, join, parse } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
-import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, SaveClipResult, ClipSoundOption } from "../shared/types";
+import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, SaveClipResult, ClipSoundOption, UpdateState } from "../shared/types";
 
 const defaultSettings: ClipSettings = {
   clipLengthSeconds: 30,
@@ -327,19 +327,116 @@ let isQuitting = false;
 const engine = new EngineClient();
 let currentHotkey = "";
 const startHidden = process.argv.includes("--hidden") || process.argv.includes("--background");
+const updateCheckIntervalMs = 30 * 60 * 1000;
+let updateState: UpdateState = { status: "idle" };
+let updateCheckTimer: ReturnType<typeof setInterval> | undefined;
+let updateCheckInFlight = false;
+let updateReady = false;
+let updateListenersRegistered = false;
 
 app.setName("Clipture");
 if (process.platform === "win32") {
   app.setAppUserModelId("app.clipture.desktop");
 }
 
-function checkForAppUpdates(): void {
-  if (!app.isPackaged) return;
+function setUpdateState(nextState: UpdateState): UpdateState {
+  updateState = nextState;
+  mainWindow?.webContents.send("updates:stateChanged", updateState);
+  return updateState;
+}
+
+function updateVersion(version?: string): string | undefined {
+  return version || updateState.version;
+}
+
+function installDownloadedUpdate(): void {
+  if (!updateReady) return;
+  isQuitting = true;
+  electronUpdater.autoUpdater.quitAndInstall();
+}
+
+async function performUpdateCheck(): Promise<UpdateState> {
+  if (!app.isPackaged) {
+    return setUpdateState({
+      status: "idle",
+      message: "Updates are checked in installed builds.",
+      checkedAt: new Date().toISOString()
+    });
+  }
+
+  if (updateReady || updateCheckInFlight) return updateState;
+
+  updateCheckInFlight = true;
+  try {
+    await electronUpdater.autoUpdater.checkForUpdates();
+  } catch (error) {
+    setUpdateState({
+      status: "error",
+      version: updateState.version,
+      message: error instanceof Error ? error.message : "Update check failed.",
+      checkedAt: new Date().toISOString()
+    });
+  } finally {
+    updateCheckInFlight = false;
+  }
+  return updateState;
+}
+
+function registerUpdateListeners(): void {
+  if (updateListenersRegistered) return;
+  updateListenersRegistered = true;
   const { autoUpdater } = electronUpdater;
+
+  autoUpdater.on("checking-for-update", () => {
+    setUpdateState({
+      status: "checking",
+      version: updateState.version,
+      message: "Checking for updates...",
+      checkedAt: new Date().toISOString()
+    });
+  });
+  autoUpdater.on("update-not-available", (updateInfo) => {
+    setUpdateState({
+      status: "idle",
+      version: updateVersion(updateInfo.version),
+      message: "Clipture is up to date.",
+      checkedAt: new Date().toISOString()
+    });
+  });
+  autoUpdater.on("update-available", (updateInfo) => {
+    setUpdateState({
+      status: "downloading",
+      version: updateVersion(updateInfo.version),
+      message: `Downloading Clipture ${updateInfo.version}...`,
+      checkedAt: new Date().toISOString()
+    });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    const percent = Math.max(0, Math.min(100, Math.round(progress.percent)));
+    setUpdateState({
+      status: "downloading",
+      version: updateState.version,
+      message: `Downloading update ${percent}%`,
+      checkedAt: updateState.checkedAt
+    });
+  });
   autoUpdater.on("error", (error) => {
     console.error("[updates]", error);
+    setUpdateState({
+      status: "error",
+      version: updateState.version,
+      message: error instanceof Error ? error.message : "Update check failed.",
+      checkedAt: new Date().toISOString()
+    });
   });
   autoUpdater.on("update-downloaded", async (updateInfo) => {
+    updateReady = true;
+    setUpdateState({
+      status: "ready",
+      version: updateVersion(updateInfo.version),
+      message: `Clipture ${updateInfo.version} is ready to install.`,
+      checkedAt: new Date().toISOString()
+    });
     const result = await dialog.showMessageBox({
       type: "info",
       buttons: ["Restart now", "Later"],
@@ -350,13 +447,17 @@ function checkForAppUpdates(): void {
       detail: "Restart Clipture to finish updating."
     });
     if (result.response === 0) {
-      isQuitting = true;
-      autoUpdater.quitAndInstall();
+      installDownloadedUpdate();
     }
   });
-  void autoUpdater.checkForUpdatesAndNotify().catch((error) => {
-    console.error("[updates]", error);
-  });
+}
+
+function checkForAppUpdates(): void {
+  registerUpdateListeners();
+  void performUpdateCheck();
+  if (!updateCheckTimer) {
+    updateCheckTimer = setInterval(() => void performUpdateCheck(), updateCheckIntervalMs);
+  }
 }
 
 function appDataPath(file: string): string {
@@ -1203,6 +1304,7 @@ app.on("window-all-closed", () => {});
 
 app.on("before-quit", () => {
   isQuitting = true;
+  if (updateCheckTimer) clearInterval(updateCheckTimer);
   globalShortcut.unregisterAll();
   engine.stop();
 });
@@ -1252,6 +1354,9 @@ ipcMain.handle("library:rename", (_event, id: string, newTitle: string) => {
 ipcMain.handle("library:clipUrl", (_event, filePath: string) => (existsSync(filePath) ? pathToFileURL(filePath).toString() : ""));
 ipcMain.handle("library:clipThumbnailUrl", (_event, filePath: string) => clipThumbnailUrl(filePath));
 ipcMain.handle("library:clipPlaybackUrl", (_event, filePath: string, audioTracks: string[]) => clipPlaybackUrl(filePath, audioTracks));
+ipcMain.handle("updates:getState", () => updateState);
+ipcMain.handle("updates:check", () => performUpdateCheck());
+ipcMain.handle("updates:install", () => installDownloadedUpdate());
 ipcMain.handle("processes:list", () => listActiveProcesses());
 ipcMain.handle("audio:listInputDevices", () => engine.listAudioInputDevices());
 ipcMain.handle("displays:list", () => engine.listDisplayDevices());

@@ -1,9 +1,9 @@
-import { Activity, ChevronDown, Clock, Edit3, FolderOpen, Library, Maximize2, Pause, Play, Plus, Save, SlidersHorizontal, Volume2, X } from "lucide-react";
+import { Activity, ChevronDown, Clock, Download, Edit3, FolderOpen, Library, Maximize2, Pause, Play, Plus, RefreshCw, Save, SlidersHorizontal, Volume2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 // @ts-ignore
 import logoUrl from "../../assets/svgviewer-output.svg";
 import type { KeyboardEvent } from "react";
-import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, AudioSourceRule, ClipSoundOption } from "../shared/types";
+import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, AudioSourceRule, ClipSoundOption, UpdateState } from "../shared/types";
 
 type Tab = "library" | "settings" | "diagnostics";
 
@@ -57,6 +57,62 @@ type GateMeterSample = {
 };
 
 const emptyGateMeterSamples = Array.from({ length: 36 }, () => ({ level: 0, open: false }));
+
+const defaultUpdateState: UpdateState = { status: "idle" };
+
+function updateButtonTitle(updateState: UpdateState): string {
+  switch (updateState.status) {
+    case "checking":
+      return "Checking for updates";
+    case "downloading":
+      return updateState.message || "Downloading update";
+    case "ready":
+      return "Restart to install update";
+    case "error":
+      return updateState.message ? `Update check failed: ${updateState.message}` : "Update check failed";
+    default:
+      return "Check for updates";
+  }
+}
+
+function TitlebarUpdateControls({
+  updateState,
+  onCheck,
+  onInstall
+}: {
+  updateState: UpdateState;
+  onCheck: () => void;
+  onInstall: () => void;
+}) {
+  const checking = updateState.status === "checking";
+  const downloading = updateState.status === "downloading";
+  const ready = updateState.status === "ready";
+  const detected = updateState.status === "available" || downloading || ready;
+  return (
+    <div className="titlebar-update-controls">
+      <button
+        className={`titlebar-update-button refresh ${checking ? "checking" : ""}`}
+        title={checking ? "Checking for updates" : "Check for updates"}
+        aria-label={checking ? "Checking for updates" : "Check for updates"}
+        disabled={checking || downloading}
+        onClick={onCheck}
+      >
+        <RefreshCw size={14} strokeWidth={2.1} />
+      </button>
+      {detected && (
+        <button
+          className={`titlebar-update-button download ${updateState.status}`}
+          title={updateButtonTitle(updateState)}
+          aria-label={updateButtonTitle(updateState)}
+          disabled={downloading}
+          onClick={ready ? onInstall : undefined}
+        >
+          <Download size={16} strokeWidth={2.1} />
+        </button>
+      )}
+    </div>
+  );
+}
 
 function TestMicButton({
   volume,
@@ -263,6 +319,7 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [selectedClip, setSelectedClip] = useState<ClipRecord | undefined>();
   const [clipSounds, setClipSounds] = useState<ClipSoundOption[]>([]);
+  const [updateState, setUpdateState] = useState<UpdateState>(defaultUpdateState);
   const clipSoundUrlsRef = useRef<Record<string, string>>({});
 
   async function refresh() {
@@ -283,6 +340,8 @@ export function App() {
     void refresh();
     const timer = window.setInterval(() => void window.clipture.getDiagnostics().then(setDiagnostics), 2000);
     const unsubscribeLibrary = window.clipture.onLibraryChanged(() => void refresh());
+    void window.clipture.getUpdateState().then(setUpdateState);
+    const unsubscribeUpdates = window.clipture.onUpdateStateChanged(setUpdateState);
     const unsubscribeSound = window.clipture.onPlaySound((sound) => {
       const url = clipSoundUrlsRef.current[sound];
       if (url) {
@@ -293,6 +352,7 @@ export function App() {
     return () => {
       window.clearInterval(timer);
       unsubscribeLibrary();
+      unsubscribeUpdates();
       unsubscribeSound();
     };
   }, []);
@@ -338,9 +398,19 @@ export function App() {
     audio.play().catch(console.error);
   }
 
+  async function checkForUpdatesNow() {
+    const nextState = await window.clipture.checkForUpdates();
+    setUpdateState(nextState);
+  }
+
+  function installUpdate() {
+    void window.clipture.installUpdate();
+  }
+
   return (
     <div className="app-shell">
       <div className="titlebar-drag-region" />
+      <TitlebarUpdateControls updateState={updateState} onCheck={() => void checkForUpdatesNow()} onInstall={installUpdate} />
       <aside className="sidebar">
         <div className="brand">
           <img src={logoUrl} alt="Clipture" className="mark" />
