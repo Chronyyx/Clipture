@@ -1,5 +1,6 @@
 import { app, BrowserWindow, globalShortcut, ipcMain, shell, Tray, Menu, nativeImage, dialog, screen } from "electron";
 import type { OpenDialogOptions } from "electron";
+import electronUpdater from "electron-updater";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, parse } from "node:path";
@@ -330,6 +331,17 @@ const startHidden = process.argv.includes("--hidden") || process.argv.includes("
 app.setName("Clipture");
 if (process.platform === "win32") {
   app.setAppUserModelId("app.clipture.desktop");
+}
+
+function checkForAppUpdates(): void {
+  if (!app.isPackaged) return;
+  const { autoUpdater } = electronUpdater;
+  autoUpdater.on("error", (error) => {
+    console.error("[updates]", error);
+  });
+  void autoUpdater.checkForUpdatesAndNotify().catch((error) => {
+    console.error("[updates]", error);
+  });
 }
 
 function appDataPath(file: string): string {
@@ -1169,6 +1181,7 @@ app.whenReady().then(async () => {
   await createWindow();
   await createNotificationWindow();
   registerHotkey(readSettings());
+  checkForAppUpdates();
 });
 
 app.on("window-all-closed", () => {});
