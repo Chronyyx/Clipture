@@ -467,7 +467,6 @@ function LibraryView({
               isActive={selectedClip?.id === clip.id}
               key={clip.id}
               onPlay={() => setSelectedClip(clip)}
-              settings={settings}
             />
           ))}
         </div>
@@ -476,11 +475,12 @@ function LibraryView({
   );
 }
 
-function ClipCard({ clip, isActive, onPlay, settings }: { clip: ClipRecord; isActive: boolean; onPlay: () => void; settings?: ClipSettings }) {
-  const formattedTime = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "numeric" }).format(new Date(clip.createdAt));
+function ClipCard({ clip, isActive, onPlay }: { clip: ClipRecord; isActive: boolean; onPlay: () => void }) {
+  const createdAt = parseClipDate(clip.createdAt);
+  const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
   const [thumbnailUrl, setThumbnailUrl] = useState<string>("");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [editTitle, setEditTitle] = useState(clip.title);
+  const [editTitle, setEditTitle] = useState(displayTitle);
 
   useEffect(() => {
     let active = true;
@@ -493,7 +493,7 @@ function ClipCard({ clip, isActive, onPlay, settings }: { clip: ClipRecord; isAc
   }, [clip.filePath]);
 
   const handleRename = async () => {
-    const newTitle = editTitle.trim() || "Clipture clip";
+    const newTitle = editTitle.trim() || "Clipture";
     if (newTitle !== clip.title) {
       const success = await window.clipture.renameClip(clip.id, newTitle);
       if (success) {
@@ -543,37 +543,15 @@ function ClipCard({ clip, isActive, onPlay, settings }: { clip: ClipRecord; isAc
             />
           ) : (
             <div className="clip-title-display" onDoubleClick={() => setIsEditingTitle(true)}>
-              <span className="clip-name" title="Double click to rename">{clip.title}</span>
+              <span className="clip-name" title="Double click to rename">{displayTitle}</span>
               <button className="icon-button edit-title-button" title="Rename clip" onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}>
                 <Edit3 size={15} />
               </button>
             </div>
           )}
         </div>
-        <span title={(() => {
-          if (clip.focusedApps && clip.focusedApps.length > 0) return clip.focusedApps.join(", ");
-          
-          const bgApps = new Set(settings?.audioSources.filter(s => s.kind === "app" && s.processName).flatMap(s => [`app:${s.processName}`, s.processName!.replace(/\.exe$/i, "")]) || []);
-          const activeTracks = clip.audioTracks
-            .filter(t => t !== "system-loopback-pcm" && t !== "System audio" && t !== "microphone-pcm" && t !== "Microphone" && t !== "mixed-preview-pcm" && !bgApps.has(t))
-            .map(t => t.startsWith("app:") ? t.substring(4).replace(/\.exe$/i, "") : t.startsWith("game:") ? t.substring(5).replace(/\.exe$/i, "") : t);
-            
-          const merged = Array.from(new Set([clip.gameOrApp !== "Foreground app" ? clip.gameOrApp : null, ...activeTracks].filter(Boolean)));
-          return merged.length > 0 ? merged.join(", ") : clip.gameOrApp;
-        })()}>
-          {(() => {
-            if (clip.focusedApps && clip.focusedApps.length > 0) return clip.focusedApps.join(", ");
-            
-            const bgApps = new Set(settings?.audioSources.filter(s => s.kind === "app" && s.processName).flatMap(s => [`app:${s.processName}`, s.processName!.replace(/\.exe$/i, "")]) || []);
-            const activeTracks = clip.audioTracks
-              .filter(t => t !== "system-loopback-pcm" && t !== "System audio" && t !== "microphone-pcm" && t !== "Microphone" && t !== "mixed-preview-pcm" && !bgApps.has(t))
-              .map(t => t.startsWith("app:") ? t.substring(4).replace(/\.exe$/i, "") : t.startsWith("game:") ? t.substring(5).replace(/\.exe$/i, "") : t);
-              
-            const merged = Array.from(new Set([clip.gameOrApp !== "Foreground app" ? clip.gameOrApp : null, ...activeTracks].filter(Boolean)));
-            return merged.length > 0 ? merged.join(", ") : clip.gameOrApp;
-          })()}
-        </span>
-        <span>{formattedTime}</span>
+        <span>{formatClipDate(createdAt)}</span>
+        <span>{formatClipTime(createdAt)}</span>
         <div className="clip-card-footer">
           <span><Clock size={14} /> {clip.fps} FPS</span>
           <span>{clip.audioTracks.length} audio</span>
@@ -597,6 +575,32 @@ function displayAudioTrackName(track: string) {
 
 function displayAudioTracks(tracks: string[]) {
   return tracks.map(displayAudioTrackName).join(", ");
+}
+
+function parseClipDate(value: string) {
+  const numeric = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  const date = Number.isFinite(numeric)
+    ? new Date(value.length <= 10 ? numeric * 1000 : numeric)
+    : new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function formatClipDate(date: Date | undefined) {
+  if (!date) return "Unknown date";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}/${month}/${day}`;
+}
+
+function formatClipTime(date: Date | undefined) {
+  if (!date) return "Unknown time";
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true
+  }).format(date);
 }
 
 function formatDuration(seconds: number) {

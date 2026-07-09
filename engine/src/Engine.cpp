@@ -1023,7 +1023,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     std::ostringstream clip;
     clip << "{"
          << "\"id\":\"clip-" << nowIdSuffix() << "\","
-         << "\"title\":\"Clipture clip\","
+         << "\"title\":\"Clipture\","
          << "\"gameOrApp\":\"" << jsonEscape(fgApp) << "\","
          << "\"isGame\":" << (fgIsGame ? "true" : "false") << ","
          << "\"createdAt\":\"" << nowIsoLike() << "\","
