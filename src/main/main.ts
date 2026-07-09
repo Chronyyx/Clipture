@@ -1257,9 +1257,9 @@ function showNotificationWindow(position: string): void {
 }
 
 function createTray(): void {
-  const svgPath = resolveAssetPath("svgviewer-output.svg");
   const icoPath = resolveAssetPath("icon.ico");
-  const iconSource = svgPath || icoPath;
+  const svgPath = resolveAssetPath("svgviewer-output.svg");
+  const iconSource = icoPath || svgPath;
   const loadedIcon = iconSource ? nativeImage.createFromPath(iconSource) : nativeImage.createEmpty();
   const icon = loadedIcon.isEmpty() ? loadedIcon : loadedIcon.resize({ width: 16, height: 16 });
   icon.setTemplateImage(false);
