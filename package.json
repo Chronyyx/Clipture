@@ -1,6 +1,6 @@
 {
   "name": "clipture",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "description": "NVENC-first Windows clipping app with Electron UI and native C++ capture engine.",
   "main": "dist/main/main.js",

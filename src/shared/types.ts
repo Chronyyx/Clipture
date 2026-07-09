@@ -159,6 +159,7 @@ export interface CliptureApi {
   renameClip: (id: string, newTitle: string) => Promise<boolean>;
   getUpdateState(): Promise<UpdateState>;
   checkForUpdates(): Promise<UpdateState>;
+  downloadUpdate(): Promise<void>;
   installUpdate(): Promise<void>;
   onLibraryChanged: (callback: () => void) => () => void;
   onUpdateStateChanged: (callback: (state: UpdateState) => void) => () => void;

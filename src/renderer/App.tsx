@@ -78,24 +78,40 @@ function updateButtonTitle(updateState: UpdateState): string {
 function TitlebarUpdateControls({
   updateState,
   onCheck,
+  onDownload,
   onInstall
 }: {
   updateState: UpdateState;
   onCheck: () => void;
+  onDownload: () => void;
   onInstall: () => void;
 }) {
-  const checking = updateState.status === "checking";
+  const [forceSpin, setForceSpin] = useState(false);
+
+  const handleCheck = () => {
+    setForceSpin(true);
+    setTimeout(() => setForceSpin(false), 1000);
+    onCheck();
+  };
+
+  const checking = updateState.status === "checking" || forceSpin;
   const downloading = updateState.status === "downloading";
   const ready = updateState.status === "ready";
+  const error = updateState.status === "error";
   const detected = updateState.status === "available" || downloading || ready;
+  
+  const refreshTitle = error 
+    ? (updateState.message ? `Update failed: ${updateState.message}` : "Update check failed")
+    : (checking ? "Checking for updates" : "Check for updates");
+
   return (
     <div className="titlebar-update-controls">
       <button
-        className={`titlebar-update-button refresh ${checking ? "checking" : ""}`}
-        title={checking ? "Checking for updates" : "Check for updates"}
-        aria-label={checking ? "Checking for updates" : "Check for updates"}
+        className={`titlebar-update-button refresh ${checking ? "checking" : ""} ${error && !checking ? "error" : ""}`}
+        title={refreshTitle}
+        aria-label={refreshTitle}
         disabled={checking || downloading}
-        onClick={onCheck}
+        onClick={handleCheck}
       >
         <RefreshCw size={14} strokeWidth={2.1} />
       </button>
@@ -105,7 +121,7 @@ function TitlebarUpdateControls({
           title={updateButtonTitle(updateState)}
           aria-label={updateButtonTitle(updateState)}
           disabled={downloading}
-          onClick={ready ? onInstall : undefined}
+          onClick={ready ? onInstall : (updateState.status === "available" ? onDownload : undefined)}
         >
           <Download size={16} strokeWidth={2.1} />
         </button>
@@ -410,7 +426,12 @@ export function App() {
   return (
     <div className="app-shell">
       <div className="titlebar-drag-region" />
-      <TitlebarUpdateControls updateState={updateState} onCheck={() => void checkForUpdatesNow()} onInstall={installUpdate} />
+      <TitlebarUpdateControls 
+            updateState={updateState} 
+            onCheck={() => void checkForUpdatesNow()} 
+            onDownload={() => void window.clipture.downloadUpdate()}
+            onInstall={installUpdate} 
+          />
       <aside className="sidebar">
         <div className="brand">
           <img src={logoUrl} alt="Clipture" className="mark" />

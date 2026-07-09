@@ -101,6 +101,10 @@ select {
   animation: update-spin 1s linear infinite;
 }
 
+.titlebar-update-button.refresh.error {
+  color: #ef4444;
+}
+
 .titlebar-update-button.download.ready::after {
   content: "";
   position: absolute;

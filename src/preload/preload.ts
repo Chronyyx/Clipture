@@ -20,6 +20,7 @@ const api: CliptureApi = {
   renameClip: (id: string, newTitle: string) => ipcRenderer.invoke("library:rename", id, newTitle),
   getUpdateState: () => ipcRenderer.invoke("updates:getState"),
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
+  downloadUpdate: () => ipcRenderer.invoke("updates:download"),
   installUpdate: () => ipcRenderer.invoke("updates:install"),
   onLibraryChanged: (callback: () => void) => {
     const listener = () => callback();

@@ -1,8 +1,9 @@
 import { app, BrowserWindow, globalShortcut, ipcMain, shell, Tray, Menu, nativeImage, dialog, screen } from "electron";
 import type { OpenDialogOptions } from "electron";
-import electronUpdater from "electron-updater";
+import { autoUpdater } from "electron-updater";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { format } from "node:util";
 import { basename, dirname, extname, join, parse } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
@@ -352,7 +353,7 @@ function updateVersion(version?: string): string | undefined {
 function installDownloadedUpdate(): void {
   if (!updateReady) return;
   isQuitting = true;
-  electronUpdater.autoUpdater.quitAndInstall();
+  autoUpdater.quitAndInstall();
 }
 
 async function performUpdateCheck(): Promise<UpdateState> {
@@ -368,8 +369,11 @@ async function performUpdateCheck(): Promise<UpdateState> {
 
   updateCheckInFlight = true;
   try {
-    await electronUpdater.autoUpdater.checkForUpdates();
+    await autoUpdater.checkForUpdates();
   } catch (error) {
+    if (autoUpdater.logger) {
+      autoUpdater.logger.error(`Error in checkForUpdates(): ${error instanceof Error ? error.stack || error.message : error}`);
+    }
     setUpdateState({
       status: "error",
       version: updateState.version,
@@ -385,7 +389,6 @@ async function performUpdateCheck(): Promise<UpdateState> {
 function registerUpdateListeners(): void {
   if (updateListenersRegistered) return;
   updateListenersRegistered = true;
-  const { autoUpdater } = electronUpdater;
 
   autoUpdater.on("checking-for-update", () => {
     setUpdateState({
@@ -405,9 +408,9 @@ function registerUpdateListeners(): void {
   });
   autoUpdater.on("update-available", (updateInfo) => {
     setUpdateState({
-      status: "downloading",
+      status: "available",
       version: updateVersion(updateInfo.version),
-      message: `Downloading Clipture ${updateInfo.version}...`,
+      message: `Update ${updateInfo.version} is available.`,
       checkedAt: new Date().toISOString()
     });
   });
@@ -422,6 +425,9 @@ function registerUpdateListeners(): void {
   });
   autoUpdater.on("error", (error) => {
     console.error("[updates]", error);
+    if (autoUpdater.logger) {
+      autoUpdater.logger.error(`Update event error: ${error instanceof Error ? error.stack || error.message : error}`);
+    }
     setUpdateState({
       status: "error",
       version: updateState.version,
@@ -437,22 +443,35 @@ function registerUpdateListeners(): void {
       message: `Clipture ${updateInfo.version} is ready to install.`,
       checkedAt: new Date().toISOString()
     });
-    const result = await dialog.showMessageBox({
-      type: "info",
-      buttons: ["Restart now", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-      title: "Update ready",
-      message: `Clipture ${updateInfo.version} is ready to install.`,
-      detail: "Restart Clipture to finish updating."
-    });
-    if (result.response === 0) {
-      installDownloadedUpdate();
-    }
   });
 }
 
+let updateLoggerConfigured = false;
+function configureUpdateLogger() {
+  if (updateLoggerConfigured) return;
+  updateLoggerConfigured = true;
+  
+  const logFile = appDataPath("updates.log");
+  const logToFile = (level: string, ...args: any[]) => {
+    try {
+      appendFileSync(logFile, `[${new Date().toISOString()}] [${level}] ${format(...args)}\n`);
+    } catch (e) {}
+  };
+  
+  logToFile("INFO", "Update logger initialized.");
+  
+  autoUpdater.logger = {
+    info: (...args: any[]) => logToFile("INFO", ...args),
+    warn: (...args: any[]) => logToFile("WARN", ...args),
+    error: (...args: any[]) => logToFile("ERROR", ...args),
+    debug: (...args: any[]) => logToFile("DEBUG", ...args),
+  } as any;
+}
+
 function checkForAppUpdates(): void {
+  autoUpdater.autoDownload = false;
+  autoUpdater.disableDifferentialDownload = true;
+  configureUpdateLogger();
   registerUpdateListeners();
   void performUpdateCheck();
   if (!updateCheckTimer) {
@@ -1356,6 +1375,10 @@ ipcMain.handle("library:clipThumbnailUrl", (_event, filePath: string) => clipThu
 ipcMain.handle("library:clipPlaybackUrl", (_event, filePath: string, audioTracks: string[]) => clipPlaybackUrl(filePath, audioTracks));
 ipcMain.handle("updates:getState", () => updateState);
 ipcMain.handle("updates:check", () => performUpdateCheck());
+ipcMain.handle("updates:download", () => {
+  setUpdateState({ ...updateState, status: "downloading", message: "Starting download..." });
+  return autoUpdater.downloadUpdate();
+});
 ipcMain.handle("updates:install", () => installDownloadedUpdate());
 ipcMain.handle("processes:list", () => listActiveProcesses());
 ipcMain.handle("audio:listInputDevices", () => engine.listAudioInputDevices());
