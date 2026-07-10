@@ -24,6 +24,7 @@
 
 #include <map>
 #include <mutex>
+#include <set>
 
 namespace clipture {
 namespace {
@@ -875,6 +876,17 @@ std::vector<EncodedPacket> mixPcmPackets(const std::vector<EncodedPacket>& packe
             }
         }
     }
+    bool hasAudio = false;
+    for (const auto& val : mixBuffer) {
+        if (std::abs(val) >= 1.0f) {
+            hasAudio = true;
+            break;
+        }
+    }
+    
+    if (!hasAudio) {
+        return {};
+    }
     
     std::vector<EncodedPacket> mixed;
     int framesPerPacket = sampleRate / 100;
@@ -943,6 +955,13 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     const int64_t clipStart = clipPackets.front().pts100ns;
     const int64_t clipEnd = clipPackets.back().pts100ns + std::max<int64_t>(clipPackets.back().duration100ns, 0);
     auto capturedAudioPackets = audioPackets_.selectWindow(clipStart, clipEnd);
+    std::set<std::string> runningAppSources;
+    for (const auto& app : settings_.appAudioProcesses) {
+        if (isProcessRunningByName(captureProcessName(app))) {
+            runningAppSources.insert("app:" + app);
+        }
+    }
+
     std::map<std::string, std::vector<EncodedPacket>> audioByTrack;
     for (const auto& packet : capturedAudioPackets) {
         if (packet.sourceId == "system-loopback-pcm" && settings_.includeSystemAudio) {
@@ -953,9 +972,13 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             std::string exeName = packet.sourceId.substr(5);
             std::string gameName = getGameName(exeName);
             if (isMinimizedRobloxName(gameName)) continue;
-            audioByTrack["game:" + gameName].push_back(packet);
+            if (isProcessRunningByName(captureProcessName(exeName))) {
+                audioByTrack["game:" + gameName].push_back(packet);
+            }
         } else if (packet.sourceId.rfind("app:", 0) == 0) {
-            audioByTrack[packet.sourceId].push_back(packet);
+            if (runningAppSources.find(packet.sourceId) != runningAppSources.end()) {
+                audioByTrack[packet.sourceId].push_back(packet);
+            }
         }
     }
     

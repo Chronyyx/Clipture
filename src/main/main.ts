@@ -2,7 +2,8 @@ import { app, BrowserWindow, globalShortcut, ipcMain, shell, Tray, Menu, nativeI
 import type { OpenDialogOptions } from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { format } from "node:util";
 import { basename, dirname, extname, join, parse } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -566,17 +567,91 @@ function listClipSounds(): ClipSoundOption[] {
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
-function previewPath(filePath: string, audioTracks: string[]): string {
-  const previewDir = appDataPath("previews");
-  mkdirSync(previewDir, { recursive: true });
-  const stats = statSync(filePath);
-  const hash = createHash("sha1")
-    .update(filePath)
-    .update(String(stats.mtimeMs))
-    .update(String(stats.size))
-    .update(audioTracks.join("|"))
-    .digest("hex");
-  return join(previewDir, `${hash}.mp4`);
+let previewServerPort = 0;
+const previewCache = new Map<string, Buffer>();
+
+function setupPreviewServer() {
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    if (url.pathname === "/preview") {
+      const payload = url.searchParams.get("data");
+      if (!payload) return res.writeHead(400).end();
+      
+      const sendBuffer = (buffer: Buffer) => {
+        if (req.headers.range) {
+          const parts = req.headers.range.replace(/bytes=/, "").split("-");
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : buffer.length - 1;
+          const chunksize = (end - start) + 1;
+          res.writeHead(206, {
+            "Content-Range": `bytes ${start}-${end}/${buffer.length}`,
+            "Accept-Ranges": "bytes",
+            "Content-Length": chunksize,
+            "Content-Type": "video/mp4"
+          });
+          res.end(buffer.subarray(start, end + 1));
+        } else {
+          res.writeHead(200, {
+            "Content-Length": buffer.length,
+            "Content-Type": "video/mp4",
+            "Accept-Ranges": "bytes"
+          });
+          res.end(buffer);
+        }
+      };
+
+      if (previewCache.has(payload)) {
+        return sendBuffer(previewCache.get(payload)!);
+      }
+
+      try {
+        const { filePath, selectedAudioIndexes } = JSON.parse(Buffer.from(payload, "base64").toString("utf-8"));
+        
+        const filterInputs = selectedAudioIndexes.map((index: number) => `[0:a:${index}]`).join("");
+        const filter = `${filterInputs}amix=inputs=${selectedAudioIndexes.length}:duration=longest:dropout_transition=0[aout]`;
+        
+        const child = spawn(resolveFfmpegPath(), [
+          "-hide_banner", "-loglevel", "error",
+          "-i", filePath,
+          "-filter_complex", filter,
+          "-map", "0:v:0", "-map", "[aout]",
+          "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+          "-f", "mp4", "-movflags", "frag_keyframe+empty_moov",
+          "pipe:1"
+        ], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+        
+        const chunks: Buffer[] = [];
+        child.stdout.on("data", (c) => chunks.push(c));
+        
+        child.on("exit", (code) => {
+          if (code === 0) {
+            const buffer = Buffer.concat(chunks);
+            previewCache.clear();
+            previewCache.set(payload, buffer);
+            sendBuffer(buffer);
+          } else {
+            res.writeHead(500).end();
+          }
+        });
+      } catch (err) {
+        res.writeHead(500).end();
+      }
+    } else {
+      res.writeHead(404).end();
+    }
+  });
+
+  server.on("error", (e: NodeJS.ErrnoException) => {
+    if (e.code === "EADDRINUSE") {
+      server.listen(0, "127.0.0.1");
+    }
+  });
+
+  server.on("listening", () => {
+    previewServerPort = (server.address() as import("node:net").AddressInfo).port;
+  });
+
+  server.listen(4555, "127.0.0.1");
 }
 
 function mediaCachePath(filePath: string, folder: string, extension: string): string {
@@ -923,87 +998,21 @@ async function clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise
     return { url: pathToFileURL(filePath).toString(), mixed: false, message: "Playing original clip audio track." };
   }
 
-  const outputPath = previewPath(filePath, audioTracks);
-  if (existsSync(outputPath)) {
-    return { url: pathToFileURL(outputPath).toString(), mixed: true, message: "Playing cached mixed preview." };
-  }
+  const payload = Buffer.from(JSON.stringify({ filePath, selectedAudioIndexes })).toString("base64");
+  const url = `http://127.0.0.1:${previewServerPort}/preview?data=${encodeURIComponent(payload)}`;
 
-  const filterInputs = selectedAudioIndexes.map((index) => `[0:a:${index}]`).join("");
-  const filter = `${filterInputs}amix=inputs=${selectedAudioIndexes.length}:duration=longest:dropout_transition=0[aout]`;
-  const ffmpeg = await runFfmpeg([
-    "-y",
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-i",
-    filePath,
-    "-filter_complex",
-    filter,
-    "-map",
-    "0:v:0",
-    "-map",
-    "[aout]",
-    "-c:v",
-    "copy",
-    "-c:a",
-    "aac",
-    "-b:a",
-    "192k",
-    "-movflags",
-    "+faststart",
-    outputPath
-  ]);
-
-  if (!ffmpeg.ok || !existsSync(outputPath)) {
-    if (existsSync(outputPath)) {
-      try {
-        unlinkSync(outputPath);
-      } catch {
-        // Best effort cleanup; playback can still fall back to the original clip.
-      }
-    }
-    return { url: pathToFileURL(filePath).toString(), mixed: false, message: ffmpeg.message };
-  }
-
-  return { url: pathToFileURL(outputPath).toString(), mixed: true, message: ffmpeg.message };
+  return { url, mixed: true, message: "Streaming live mixed preview from memory." };
 }
 
 async function clipThumbnailUrl(filePath: string): Promise<string> {
   if (!existsSync(filePath)) return "";
-
-  const outputPath = mediaCachePath(filePath, "thumbnails", "jpg");
-  if (existsSync(outputPath)) return pathToFileURL(outputPath).toString();
-
-  const ffmpeg = await runFfmpeg([
-    "-y",
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-ss",
-    "00:00:01",
-    "-i",
-    filePath,
-    "-frames:v",
-    "1",
-    "-vf",
-    "scale=640:-2",
-    "-q:v",
-    "3",
-    outputPath
-  ]);
-
-  if (!ffmpeg.ok || !existsSync(outputPath)) {
-    if (existsSync(outputPath)) {
-      try {
-        unlinkSync(outputPath);
-      } catch {
-        // Best effort cleanup; the renderer can show its thumbnail fallback.
-      }
-    }
+  try {
+    const img = await nativeImage.createThumbnailFromPath(filePath, { width: 640, height: 360 });
+    return img.toDataURL();
+  } catch (err) {
+    console.error(`Failed to generate thumbnail for ${filePath}:`, err);
     return "";
   }
-
-  return pathToFileURL(outputPath).toString();
 }
 
 function readSettings(): ClipSettings {
@@ -1019,7 +1028,11 @@ function saveSettings(settings: ClipSettings): ClipSettings {
   const normalized = normalizeSettings(settings);
   mkdirSync(normalized.saveFolder, { recursive: true });
   writeFileSync(settingsPath(), JSON.stringify(normalized, null, 2));
-  app.setLoginItemSettings({ openAtLogin: normalized.startOnLogin, openAsHidden: true, args: ["--hidden"] });
+  app.setLoginItemSettings({
+    openAtLogin: normalized.startOnLogin,
+    openAsHidden: true,
+    args: app.isPackaged ? ["--hidden"] : [app.getAppPath(), "--hidden"],
+  });
   void engine.configure(normalized);
   const hotkeyStatus = registerHotkey(normalized);
   if (hotkeyStatus) console.log(`[settings] ${hotkeyStatus}`);
@@ -1309,6 +1322,7 @@ app.on("second-instance", (_event, commandLine) => {
 });
 
 app.whenReady().then(async () => {
+  setupPreviewServer();
   ensureBundledClipSounds();
   saveSettings(readSettings());
   engine.start();
