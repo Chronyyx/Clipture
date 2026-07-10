@@ -15,6 +15,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <span>
 #include <sstream>
 #include <utility>
 
@@ -23,20 +25,50 @@ namespace {
 
 using Bytes = std::vector<uint8_t>;
 
-struct Mp4Sample {
-    std::vector<std::byte> payload;
+struct SampleInfo {
+    std::size_t size = 0;
     uint64_t fileOffset = 0;
     bool keyframe = false;
     uint32_t duration = 1;
 };
 
-struct AudioTrack {
+struct OwnedSample {
+    std::vector<std::byte> payload;
+    SampleInfo info;
+};
+
+struct PcmSampleView {
+    std::span<const std::byte> payload;
+    uint32_t durationFrames = 1;
+};
+
+struct PcmAudioTrack {
+    std::string sourceId;
+    int sampleRate = 48000;
+    int channels = 2;
+    std::vector<PcmSampleView> samples;
+};
+
+struct AacAudioTrack {
     std::string sourceId;
     int sampleRate = 48000;
     int channels = 2;
     Bytes decoderConfig;
-    std::vector<Mp4Sample> samples;
+    std::vector<OwnedSample> samples;
 };
+
+using SaveTimingClock = std::chrono::steady_clock;
+
+int64_t saveTimingElapsedMs(SaveTimingClock::time_point startedAt) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(SaveTimingClock::now() - startedAt).count();
+}
+
+void logMuxSaveTiming(const char* stage, SaveTimingClock::time_point startedAt, const std::string& details = {}) {
+    std::cerr << "[save-timing] source=mux stage=" << stage
+              << " ms=" << saveTimingElapsedMs(startedAt);
+    if (!details.empty()) std::cerr << " " << details;
+    std::cerr << std::endl;
+}
 
 std::wstring widen(const std::string& value) {
     if (value.empty()) return {};
@@ -87,7 +119,7 @@ std::wstring clipFilePath(const std::string& saveFolder) {
 }
 
 bool isVideoPacket(const EncodedPacket& packet) {
-    return packet.kind == PacketKind::Video && !packet.payload.empty();
+    return packet.kind == PacketKind::Video && !payloadEmpty(packet);
 }
 
 bool isPcmAudioPacket(const EncodedPacket& packet) {
@@ -96,7 +128,7 @@ bool isPcmAudioPacket(const EncodedPacket& packet) {
         packet.sampleRate > 0 &&
         packet.channelCount > 0 &&
         packet.bitsPerSample == 16 &&
-        !packet.payload.empty();
+        !payloadEmpty(packet);
 }
 
 int aacSampleRateIndex(int sampleRate) {
@@ -190,7 +222,7 @@ Bytes fullBox(const char type[4], uint8_t version, uint32_t flags, const Bytes& 
     return box(type, full);
 }
 
-bool appendSamplePayload(IMFSample* sample, Mp4Sample& outSample) {
+bool appendSamplePayload(IMFSample* sample, OwnedSample& outSample) {
     if (!sample) return false;
 
     Microsoft::WRL::ComPtr<IMFMediaBuffer> contiguous;
@@ -206,10 +238,11 @@ bool appendSamplePayload(IMFSample* sample, Mp4Sample& outSample) {
     }
     contiguous->Unlock();
 
+    outSample.info.size = outSample.payload.size();
     return !outSample.payload.empty();
 }
 
-bool drainAacOutput(IMFTransform* encoder, AudioTrack& output, bool finalDrain, std::string& error) {
+bool drainAacOutput(IMFTransform* encoder, AacAudioTrack& output, bool finalDrain, std::string& error) {
     MFT_OUTPUT_STREAM_INFO streamInfo {};
     HRESULT hr = encoder->GetOutputStreamInfo(0, &streamInfo);
     if (FAILED(hr)) {
@@ -248,15 +281,15 @@ bool drainAacOutput(IMFTransform* encoder, AudioTrack& output, bool finalDrain, 
             return false;
         }
 
-        Mp4Sample encoded;
-        encoded.duration = 1024;
+        OwnedSample encoded;
+        encoded.info.duration = 1024;
         if (appendSamplePayload(outSample.Get(), encoded)) {
             output.samples.push_back(std::move(encoded));
         }
     }
 }
 
-bool encodePcmTrackToAac(const AudioTrack& pcmTrack, AudioTrack& aacTrack, std::string& error) {
+bool encodePcmTrackToAac(const PcmAudioTrack& pcmTrack, AacAudioTrack& aacTrack, std::string& error) {
     if (pcmTrack.samples.empty()) return false;
 
     MFT_REGISTER_TYPE_INFO outputInfo {};
@@ -378,7 +411,7 @@ bool encodePcmTrackToAac(const AudioTrack& pcmTrack, AudioTrack& aacTrack, std::
         buffer->SetCurrentLength(static_cast<DWORD>(pcmSample.payload.size()));
         sample->AddBuffer(buffer.Get());
 
-        const int64_t duration100ns = static_cast<int64_t>((10'000'000.0 * pcmSample.duration) / sampleRate);
+        const int64_t duration100ns = static_cast<int64_t>((10'000'000.0 * pcmSample.durationFrames) / sampleRate);
         sample->SetSampleTime(sampleTime);
         sample->SetSampleDuration(duration100ns);
         sampleTime += duration100ns;
@@ -409,7 +442,7 @@ bool encodePcmTrackToAac(const AudioTrack& pcmTrack, AudioTrack& aacTrack, std::
     return !aacTrack.samples.empty();
 }
 
-bool startCodeAt(const std::vector<std::byte>& data, std::size_t offset, std::size_t& size) {
+bool startCodeAt(std::span<const std::byte> data, std::size_t offset, std::size_t& size) {
     if (offset + 3 <= data.size() &&
         data[offset] == std::byte{0} &&
         data[offset + 1] == std::byte{0} &&
@@ -428,7 +461,7 @@ bool startCodeAt(const std::vector<std::byte>& data, std::size_t offset, std::si
     return false;
 }
 
-std::size_t findStartCode(const std::vector<std::byte>& data, std::size_t offset, std::size_t& size) {
+std::size_t findStartCode(std::span<const std::byte> data, std::size_t offset, std::size_t& size) {
     for (std::size_t i = offset; i + 3 <= data.size(); ++i) {
         if (startCodeAt(data, i, size)) return i;
     }
@@ -441,7 +474,13 @@ struct NalUnit {
     uint8_t type = 0;
 };
 
-std::vector<NalUnit> parseAnnexBNalus(const std::vector<std::byte>& data) {
+struct VideoSamplePlan {
+    const EncodedPacket* packet = nullptr;
+    std::vector<NalUnit> writableNalus;
+    SampleInfo info;
+};
+
+std::vector<NalUnit> parseAnnexBNalus(std::span<const std::byte> data) {
     std::vector<NalUnit> nalus;
     std::size_t offset = 0;
 
@@ -466,7 +505,8 @@ std::vector<NalUnit> parseAnnexBNalus(const std::vector<std::byte>& data) {
     return nalus;
 }
 
-std::vector<std::byte> copyNaluPayload(const std::vector<std::byte>& data, const NalUnit& nalu) {
+std::vector<std::byte> copyNaluPayload(std::span<const std::byte> data, const NalUnit& nalu) {
+    if (nalu.offset + nalu.size > data.size()) return {};
     return {
         data.begin() + static_cast<std::ptrdiff_t>(nalu.offset),
         data.begin() + static_cast<std::ptrdiff_t>(nalu.offset + nalu.size)
@@ -492,44 +532,20 @@ Bytes buildAvcDecoderConfig(const std::vector<std::byte>& sps, const std::vector
     return config;
 }
 
-Bytes extractAvcDecoderConfig(const std::vector<EncodedPacket>& video) {
-    std::vector<std::byte> sps;
-    std::vector<std::byte> pps;
-    for (const auto& packet : video) {
-        const auto nalus = parseAnnexBNalus(packet.payload);
-        for (const auto& nalu : nalus) {
-            if (nalu.type == 7 && sps.empty()) {
-                sps = copyNaluPayload(packet.payload, nalu);
-            } else if (nalu.type == 8 && pps.empty()) {
-                pps = copyNaluPayload(packet.payload, nalu);
-            }
-            if (!sps.empty() && !pps.empty()) return buildAvcDecoderConfig(sps, pps);
-        }
-    }
-
-    return {};
+bool isWritableVideoNalu(const NalUnit& nalu) {
+    return nalu.type != 7 &&
+        nalu.type != 8 &&
+        nalu.type != 9 &&
+        nalu.size > 0 &&
+        nalu.size <= 0xFFFFFFFFULL;
 }
 
-std::vector<std::byte> annexBPacketToAvccSample(const EncodedPacket& packet) {
-    const auto nalus = parseAnnexBNalus(packet.payload);
-    std::vector<std::byte> sample;
-
+std::size_t avccSampleSize(std::span<const NalUnit> nalus) {
+    std::size_t size = 0;
     for (const auto& nalu : nalus) {
-        if (nalu.type == 7 || nalu.type == 8 || nalu.type == 9) continue;
-        if (nalu.size == 0 || nalu.size > 0xFFFFFFFFULL) continue;
-
-        const auto length = static_cast<uint32_t>(nalu.size);
-        sample.push_back(static_cast<std::byte>((length >> 24) & 0xFF));
-        sample.push_back(static_cast<std::byte>((length >> 16) & 0xFF));
-        sample.push_back(static_cast<std::byte>((length >> 8) & 0xFF));
-        sample.push_back(static_cast<std::byte>(length & 0xFF));
-        sample.insert(
-            sample.end(),
-            packet.payload.begin() + static_cast<std::ptrdiff_t>(nalu.offset),
-            packet.payload.begin() + static_cast<std::ptrdiff_t>(nalu.offset + nalu.size));
+        size += sizeof(uint32_t) + nalu.size;
     }
-
-    return sample;
+    return size;
 }
 
 Bytes makeFtyp() {
@@ -758,7 +774,7 @@ Bytes makeEsds(const Bytes& decoderConfig, int audioBitrate) {
     return fullBox("esds", 0, 0, payload);
 }
 
-Bytes makeAudioStsd(const AudioTrack& track) {
+Bytes makeAudioStsd(const AacAudioTrack& track) {
     Bytes sampleEntry;
     for (int i = 0; i < 6; ++i) appendU8(sampleEntry, 0);
     appendU16(sampleEntry, 1);
@@ -778,11 +794,24 @@ Bytes makeAudioStsd(const AudioTrack& track) {
     return fullBox("stsd", 0, 0, payload);
 }
 
-Bytes makeStts(const std::vector<Mp4Sample>& samples) {
+const SampleInfo& sampleInfo(const SampleInfo& sample) {
+    return sample;
+}
+
+const SampleInfo& sampleInfo(const OwnedSample& sample) {
+    return sample.info;
+}
+
+const SampleInfo& sampleInfo(const VideoSamplePlan& sample) {
+    return sample.info;
+}
+
+template <typename Samples>
+Bytes makeStts(const Samples& samples) {
     Bytes payload;
     std::vector<std::pair<uint32_t, uint32_t>> entries;
     for (const auto& sample : samples) {
-        const uint32_t duration = std::max<uint32_t>(1, sample.duration);
+        const uint32_t duration = std::max<uint32_t>(1, sampleInfo(sample).duration);
         if (!entries.empty() && entries.back().second == duration) {
             ++entries.back().first;
         } else {
@@ -797,11 +826,12 @@ Bytes makeStts(const std::vector<Mp4Sample>& samples) {
     return fullBox("stts", 0, 0, payload);
 }
 
-Bytes makeStss(const std::vector<Mp4Sample>& samples) {
+template <typename Samples>
+Bytes makeStss(const Samples& samples) {
     Bytes payload;
     std::vector<uint32_t> syncSamples;
     for (std::size_t i = 0; i < samples.size(); ++i) {
-        if (samples[i].keyframe) syncSamples.push_back(static_cast<uint32_t>(i + 1));
+        if (sampleInfo(samples[i]).keyframe) syncSamples.push_back(static_cast<uint32_t>(i + 1));
     }
     appendU32(payload, static_cast<uint32_t>(syncSamples.size()));
     for (const auto sampleNumber : syncSamples) appendU32(payload, sampleNumber);
@@ -817,28 +847,31 @@ Bytes makeStsc() {
     return fullBox("stsc", 0, 0, payload);
 }
 
-Bytes makeStsz(const std::vector<Mp4Sample>& samples) {
+template <typename Samples>
+Bytes makeStsz(const Samples& samples) {
     Bytes payload;
     appendU32(payload, 0);
     appendU32(payload, static_cast<uint32_t>(samples.size()));
-    for (const auto& sample : samples) appendU32(payload, static_cast<uint32_t>(sample.payload.size()));
+    for (const auto& sample : samples) appendU32(payload, static_cast<uint32_t>(sampleInfo(sample).size));
     return fullBox("stsz", 0, 0, payload);
 }
 
-Bytes makeCo64(const std::vector<Mp4Sample>& samples) {
+template <typename Samples>
+Bytes makeCo64(const Samples& samples) {
     Bytes payload;
     appendU32(payload, static_cast<uint32_t>(samples.size()));
-    for (const auto& sample : samples) appendU64(payload, sample.fileOffset);
+    for (const auto& sample : samples) appendU64(payload, sampleInfo(sample).fileOffset);
     return fullBox("co64", 0, 0, payload);
 }
 
-uint32_t samplesDuration(const std::vector<Mp4Sample>& samples) {
+template <typename Samples>
+uint32_t samplesDuration(const Samples& samples) {
     uint64_t duration = 0;
-    for (const auto& sample : samples) duration += std::max<uint32_t>(1, sample.duration);
+    for (const auto& sample : samples) duration += std::max<uint32_t>(1, sampleInfo(sample).duration);
     return static_cast<uint32_t>(std::min<uint64_t>(duration, 0xFFFFFFFFULL));
 }
 
-Bytes makeVideoTrak(const Bytes& avcConfig, const std::vector<Mp4Sample>& samples, int width, int height, int /*fps*/) {
+Bytes makeVideoTrak(const Bytes& avcConfig, const std::vector<VideoSamplePlan>& samples, int width, int height, int /*fps*/) {
     const uint32_t timescale = 10'000'000u; // 100ns units — matches PTS-based sample durations
     const uint32_t duration = samplesDuration(samples);
 
@@ -866,7 +899,7 @@ Bytes makeVideoTrak(const Bytes& avcConfig, const std::vector<Mp4Sample>& sample
     return box("trak", trakPayload);
 }
 
-Bytes makeAudioTrak(const AudioTrack& track, uint32_t trackId, uint32_t movieDuration) {
+Bytes makeAudioTrak(const AacAudioTrack& track, uint32_t trackId, uint32_t movieDuration) {
     const uint32_t timescale = static_cast<uint32_t>(std::max(1, track.sampleRate));
     const uint32_t duration = samplesDuration(track.samples);
 
@@ -893,7 +926,7 @@ Bytes makeAudioTrak(const AudioTrack& track, uint32_t trackId, uint32_t movieDur
     return box("trak", trakPayload);
 }
 
-Bytes makeMoov(const Bytes& avcConfig, const std::vector<Mp4Sample>& samples, const std::vector<AudioTrack>& audioTracks, int width, int height, int fps) {
+Bytes makeMoov(const Bytes& avcConfig, const std::vector<VideoSamplePlan>& samples, const std::vector<AacAudioTrack>& audioTracks, int width, int height, int fps) {
     const uint32_t timescale = 10'000'000u; // movie timescale in 100ns units — matches video track
     const uint32_t duration = samplesDuration(samples);
 
@@ -930,8 +963,113 @@ void writeBytes(std::ofstream& out, const Bytes& bytes) {
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 }
 
-void writeBytes(std::ofstream& out, const std::vector<std::byte>& bytes) {
+void writeBytes(std::ofstream& out, std::span<const std::byte> bytes) {
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+}
+
+void writeBytes(std::ofstream& out, const std::vector<std::byte>& bytes) {
+    writeBytes(out, std::span<const std::byte>(bytes.data(), bytes.size()));
+}
+
+class BufferedByteWriter {
+public:
+    explicit BufferedByteWriter(
+        std::ofstream& out,
+        std::size_t capacity = 4 * 1024 * 1024,
+        std::function<bool()> shouldPace = {})
+        : out_(out),
+          capacity_(std::max<std::size_t>(capacity, 1)),
+          shouldPace_(std::move(shouldPace)) {
+        buffer_.reserve(capacity_);
+    }
+
+    void write(std::span<const std::byte> bytes) {
+        while (!bytes.empty()) {
+            if (buffer_.empty() && bytes.size() >= capacity_) {
+                out_.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+                noteFlush();
+                return;
+            }
+
+            const std::size_t available = capacity_ - buffer_.size();
+            if (available == 0) {
+                flush();
+                continue;
+            }
+
+            const std::size_t count = std::min(available, bytes.size());
+            buffer_.insert(buffer_.end(), bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(count));
+            bytes = bytes.subspan(count);
+        }
+    }
+
+    void flush() {
+        if (buffer_.empty()) return;
+        out_.write(reinterpret_cast<const char*>(buffer_.data()), static_cast<std::streamsize>(buffer_.size()));
+        buffer_.clear();
+        noteFlush();
+    }
+
+    std::size_t flushCount() const {
+        return flushes_;
+    }
+
+    std::size_t sleepCount() const {
+        return sleeps_;
+    }
+
+    std::size_t sleepMs() const {
+        return sleepMs_;
+    }
+
+private:
+    void noteFlush() {
+        ++flushes_;
+        if (!shouldPace_ || !shouldPace_()) return;
+        Sleep(1);
+        ++sleeps_;
+        ++sleepMs_;
+    }
+
+    std::ofstream& out_;
+    const std::size_t capacity_;
+    std::function<bool()> shouldPace_;
+    std::vector<std::byte> buffer_;
+    std::size_t flushes_ = 0;
+    std::size_t sleeps_ = 0;
+    std::size_t sleepMs_ = 0;
+};
+
+void writeU32(BufferedByteWriter& out, uint32_t value) {
+    const std::byte bytes[4] = {
+        static_cast<std::byte>((value >> 24) & 0xFF),
+        static_cast<std::byte>((value >> 16) & 0xFF),
+        static_cast<std::byte>((value >> 8) & 0xFF),
+        static_cast<std::byte>(value & 0xFF)
+    };
+    out.write(std::span<const std::byte>(bytes, 4));
+}
+
+void writeBytes(BufferedByteWriter& out, std::span<const std::byte> bytes) {
+    out.write(bytes);
+}
+
+void writeBytes(BufferedByteWriter& out, const Bytes& bytes) {
+    writeBytes(out, std::as_bytes(std::span<const uint8_t>(bytes.data(), bytes.size())));
+}
+
+void writeBytes(BufferedByteWriter& out, const std::vector<std::byte>& bytes) {
+    writeBytes(out, std::span<const std::byte>(bytes.data(), bytes.size()));
+}
+
+void writeAvccSample(BufferedByteWriter& out, const VideoSamplePlan& sample) {
+    if (!sample.packet) return;
+    const auto bytes = payloadBytes(*sample.packet);
+    for (const auto& nalu : sample.writableNalus) {
+        if (nalu.offset + nalu.size > bytes.size()) continue;
+        writeU32(out, static_cast<uint32_t>(nalu.size));
+        writeBytes(out, bytes.subspan(nalu.offset, nalu.size));
+    }
 }
 
 }  // namespace
@@ -942,145 +1080,216 @@ MuxResult muxH264ToMp4(
     int width,
     int height,
     int fps,
-    int /*bitrateMbps*/) {
+    int /*bitrateMbps*/,
+    MuxWritePacing pacing) {
     MuxResult result;
+    const auto totalStartedAt = SaveTimingClock::now();
+    logMuxSaveTiming(
+        "start",
+        totalStartedAt,
+        "packets=" + std::to_string(packets.size()) +
+            " resolution=\"" + std::to_string(width) + "x" + std::to_string(height) + "\"" +
+            " fps=" + std::to_string(fps));
 
-    std::vector<EncodedPacket> video;
-    std::vector<AudioTrack> pcmAudioTracks;
+    bool hasVideoPacket = false;
+    std::vector<VideoSamplePlan> videoSamples;
+    std::vector<PcmAudioTrack> pcmAudioTracks;
+    std::vector<std::byte> sps;
+    std::vector<std::byte> pps;
+    std::size_t videoPacketCount = 0;
+    std::size_t pcmPacketCount = 0;
+    std::size_t writableNaluCount = 0;
+    uint64_t videoSourceBytes = 0;
+    uint64_t pcmSourceBytes = 0;
+
+    const auto prepassStartedAt = SaveTimingClock::now();
     for (const auto& packet : packets) {
         if (isVideoPacket(packet)) {
-            video.push_back(packet);
+            hasVideoPacket = true;
+            ++videoPacketCount;
+            const auto bytes = payloadBytes(packet);
+            videoSourceBytes += bytes.size();
+            const auto nalus = parseAnnexBNalus(bytes);
+
+            VideoSamplePlan sample;
+            sample.packet = &packet;
+            sample.info.keyframe = packet.keyframe;
+
+            for (const auto& nalu : nalus) {
+                if (nalu.type == 7 && sps.empty()) {
+                    sps = copyNaluPayload(bytes, nalu);
+                } else if (nalu.type == 8 && pps.empty()) {
+                    pps = copyNaluPayload(bytes, nalu);
+                }
+
+                if (isWritableVideoNalu(nalu)) {
+                    sample.writableNalus.push_back(nalu);
+                }
+            }
+
+            sample.info.size = avccSampleSize(sample.writableNalus);
+            if (sample.info.size > 0) {
+                writableNaluCount += sample.writableNalus.size();
+                videoSamples.push_back(std::move(sample));
+            }
         } else if (isPcmAudioPacket(packet)) {
-            auto track = std::find_if(pcmAudioTracks.begin(), pcmAudioTracks.end(), [&](const AudioTrack& candidate) {
+            ++pcmPacketCount;
+            auto track = std::find_if(pcmAudioTracks.begin(), pcmAudioTracks.end(), [&](const PcmAudioTrack& candidate) {
                 return candidate.sourceId == packet.sourceId &&
                     candidate.sampleRate == packet.sampleRate &&
                     candidate.channels == packet.channelCount;
             });
             if (track == pcmAudioTracks.end()) {
-                pcmAudioTracks.push_back(AudioTrack {
+                pcmAudioTracks.push_back(PcmAudioTrack {
                     packet.sourceId,
                     packet.sampleRate,
                     packet.channelCount,
-                    {},
                     {}
                 });
                 track = std::prev(pcmAudioTracks.end());
             }
 
+            const auto bytes = payloadBytes(packet);
+            pcmSourceBytes += bytes.size();
             const auto bytesPerFrame = static_cast<std::size_t>(std::max(1, packet.channelCount) * 2);
-            const auto frames = static_cast<uint32_t>(std::max<std::size_t>(1, packet.payload.size() / bytesPerFrame));
-            track->samples.push_back(Mp4Sample { packet.payload, 0, false, frames });
+            const auto frames = static_cast<uint32_t>(std::max<std::size_t>(1, bytes.size() / bytesPerFrame));
+            track->samples.push_back(PcmSampleView { bytes, frames });
         }
     }
-    if (video.empty()) {
+    logMuxSaveTiming(
+        "prepass",
+        prepassStartedAt,
+        "videoPackets=" + std::to_string(videoPacketCount) +
+            " videoSamples=" + std::to_string(videoSamples.size()) +
+            " writableNalus=" + std::to_string(writableNaluCount) +
+            " videoBytes=" + std::to_string(videoSourceBytes) +
+            " pcmPackets=" + std::to_string(pcmPacketCount) +
+            " pcmTracks=" + std::to_string(pcmAudioTracks.size()) +
+            " pcmBytes=" + std::to_string(pcmSourceBytes));
+    if (!hasVideoPacket) {
         result.message = "No encoded H.264 packets are buffered yet.";
+        logMuxSaveTiming("total", totalStartedAt, "ok=false reason=no_video_packets");
         return result;
     }
 
-    const auto avcConfig = extractAvcDecoderConfig(video);
+    const auto avcConfig = buildAvcDecoderConfig(sps, pps);
     if (avcConfig.empty()) {
         result.message = "MP4 muxing failed: the selected H.264 window has no SPS/PPS decoder header yet.";
+        logMuxSaveTiming("total", totalStartedAt, "ok=false reason=missing_avc_config");
         return result;
-    }
-
-    std::vector<Mp4Sample> samples;
-    samples.reserve(video.size());
-    for (const auto& packet : video) {
-        auto payload = annexBPacketToAvccSample(packet);
-        if (!payload.empty()) samples.push_back({ std::move(payload), 0, packet.keyframe, 0 });
     }
 
     // Compute per-frame durations from PTS gaps (timescale = 10,000,000 = 100ns units).
     // Previously each frame had duration=1 at timescale=fps, which assumed exactly
     // fps*seconds frames were captured. In practice WGC delivers frames at variable
     // rates and the encoder throttle drops some, so fewer frames exist, causing speedup.
-    if (samples.size() >= 2) {
-        // Build a parallel vector of PTS values from the matching video packets.
-        // 'video' and 'samples' are not 1:1 (annexBPacketToAvccSample can return empty),
-        // so we track which video packets produced a sample.
-        std::vector<int64_t> samplePts;
-        samplePts.reserve(video.size());
-        for (const auto& packet : video) {
-            auto testPayload = annexBPacketToAvccSample(packet);
-            if (!testPayload.empty()) samplePts.push_back(packet.pts100ns);
-        }
-        for (std::size_t i = 0; i + 1 < samplePts.size(); ++i) {
-            const int64_t gap = std::max<int64_t>(1, samplePts[i + 1] - samplePts[i]);
-            samples[i].duration = static_cast<uint32_t>(std::min<int64_t>(gap, 0xFFFFFFFFLL));
+    const auto durationStartedAt = SaveTimingClock::now();
+    if (videoSamples.size() >= 2) {
+        for (std::size_t i = 0; i + 1 < videoSamples.size(); ++i) {
+            const int64_t gap = std::max<int64_t>(1, videoSamples[i + 1].packet->pts100ns - videoSamples[i].packet->pts100ns);
+            videoSamples[i].info.duration = static_cast<uint32_t>(std::min<int64_t>(gap, 0xFFFFFFFFLL));
         }
         // Last frame: use the packet's own duration or average of previous gaps.
-        if (!samplePts.empty()) {
-            const int64_t totalSpan = samplePts.back() - samplePts.front();
-            const int64_t avgDuration = totalSpan > 0 && samplePts.size() > 1
-                ? totalSpan / static_cast<int64_t>(samplePts.size() - 1)
+        if (!videoSamples.empty()) {
+            const int64_t totalSpan = videoSamples.back().packet->pts100ns - videoSamples.front().packet->pts100ns;
+            const int64_t avgDuration = totalSpan > 0 && videoSamples.size() > 1
+                ? totalSpan / static_cast<int64_t>(videoSamples.size() - 1)
                 : 10'000'000LL / std::max(1, fps);
-            samples.back().duration = static_cast<uint32_t>(std::min<int64_t>(std::max<int64_t>(1, avgDuration), 0xFFFFFFFFLL));
+            videoSamples.back().info.duration = static_cast<uint32_t>(std::min<int64_t>(std::max<int64_t>(1, avgDuration), 0xFFFFFFFFLL));
         }
-    } else if (samples.size() == 1) {
-        samples[0].duration = static_cast<uint32_t>(10'000'000LL / std::max(1, fps));
+    } else if (videoSamples.size() == 1) {
+        videoSamples[0].info.duration = static_cast<uint32_t>(10'000'000LL / std::max(1, fps));
     }
-    if (samples.empty()) {
+    if (videoSamples.empty()) {
         result.message = "MP4 muxing failed: the selected H.264 window contains no writable frame samples.";
+        logMuxSaveTiming("total", totalStartedAt, "ok=false reason=no_writable_samples");
         return result;
     }
+    logMuxSaveTiming("duration_plan", durationStartedAt, "videoSamples=" + std::to_string(videoSamples.size()));
 
-    std::vector<AudioTrack> audioTracks;
+    std::vector<AacAudioTrack> audioTracks;
     if (!pcmAudioTracks.empty()) {
+        const auto aacStartedAt = SaveTimingClock::now();
         HRESULT mfHr = MFStartup(MF_VERSION);
         if (FAILED(mfHr)) {
             result.message = hresultMessage("MFStartup failed for AAC audio encoding.", mfHr);
+            logMuxSaveTiming("total", totalStartedAt, "ok=false reason=mfstartup_failed");
             return result;
         }
 
         std::string audioError;
         for (const auto& pcmTrack : pcmAudioTracks) {
-            AudioTrack aacTrack;
-            if (encodePcmTrackToAac(pcmTrack, aacTrack, audioError)) {
+            const auto trackStartedAt = SaveTimingClock::now();
+            AacAudioTrack aacTrack;
+            const bool encoded = encodePcmTrackToAac(pcmTrack, aacTrack, audioError);
+            logMuxSaveTiming(
+                "aac_encode_track",
+                trackStartedAt,
+                "ok=" + std::string(encoded ? "true" : "false") +
+                    " source=\"" + pcmTrack.sourceId + "\"" +
+                    " pcmSamples=" + std::to_string(pcmTrack.samples.size()) +
+                    " aacSamples=" + std::to_string(aacTrack.samples.size()));
+            if (encoded) {
                 audioTracks.push_back(std::move(aacTrack));
             }
         }
         MFShutdown();
+        logMuxSaveTiming(
+            "aac_encode",
+            aacStartedAt,
+            "pcmTracks=" + std::to_string(pcmAudioTracks.size()) +
+                " aacTracks=" + std::to_string(audioTracks.size()));
 
         if (audioTracks.empty() && !pcmAudioTracks.empty()) {
             result.message = audioError.empty()
                 ? "AAC audio encoding failed for every captured audio track."
                 : audioError;
+            logMuxSaveTiming("total", totalStartedAt, "ok=false reason=aac_encode_failed");
             return result;
         }
     }
 
-    samples.front().keyframe = true;
+    videoSamples.front().info.keyframe = true;
 
+    const auto metadataStartedAt = SaveTimingClock::now();
     const auto path = clipFilePath(saveFolder);
     const auto ftyp = makeFtyp();
     uint64_t mdatPayloadSize = 0;
-    for (const auto& sample : samples) mdatPayloadSize += sample.payload.size();
+    for (const auto& sample : videoSamples) mdatPayloadSize += sample.info.size;
     for (const auto& track : audioTracks) {
-        for (const auto& sample : track.samples) mdatPayloadSize += sample.payload.size();
+        for (const auto& sample : track.samples) mdatPayloadSize += sample.info.size;
     }
 
     const bool largeMdat = mdatPayloadSize + 8 > 0xFFFFFFFFULL;
     const uint64_t mdatHeaderSize = largeMdat ? 16 : 8;
     uint64_t nextOffset = ftyp.size() + mdatHeaderSize;
-    for (auto& sample : samples) {
-        sample.fileOffset = nextOffset;
-        nextOffset += sample.payload.size();
+    for (auto& sample : videoSamples) {
+        sample.info.fileOffset = nextOffset;
+        nextOffset += sample.info.size;
     }
     for (auto& track : audioTracks) {
         for (auto& sample : track.samples) {
-            sample.fileOffset = nextOffset;
-            nextOffset += sample.payload.size();
+            sample.info.fileOffset = nextOffset;
+            nextOffset += sample.info.size;
         }
     }
 
-    const auto moov = makeMoov(avcConfig, samples, audioTracks, width, height, fps);
+    const auto moov = makeMoov(avcConfig, videoSamples, audioTracks, width, height, fps);
+    logMuxSaveTiming(
+        "metadata",
+        metadataStartedAt,
+        "mdatBytes=" + std::to_string(mdatPayloadSize) +
+            " moovBytes=" + std::to_string(moov.size()) +
+            " audioTracks=" + std::to_string(audioTracks.size()));
 
     std::ofstream out(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
     if (!out) {
         result.message = "MP4 muxing failed: could not create output file.";
+        logMuxSaveTiming("total", totalStartedAt, "ok=false reason=create_output_failed");
         return result;
     }
 
+    const auto headerStartedAt = SaveTimingClock::now();
     writeBytes(out, ftyp);
     if (largeMdat) {
         writeU32(out, 1);
@@ -1090,23 +1299,74 @@ MuxResult muxH264ToMp4(
         writeU32(out, static_cast<uint32_t>(mdatPayloadSize + 8));
         writeType(out, "mdat");
     }
-    for (const auto& sample : samples) writeBytes(out, sample.payload);
-    for (const auto& track : audioTracks) {
-        for (const auto& sample : track.samples) writeBytes(out, sample.payload);
+    logMuxSaveTiming("write_header", headerStartedAt, "largeMdat=" + std::string(largeMdat ? "true" : "false"));
+
+    BufferedByteWriter bufferedOut(out, 4 * 1024 * 1024, std::move(pacing.shouldPace));
+    const auto videoWriteStartedAt = SaveTimingClock::now();
+    uint64_t videoWrittenBytes = 0;
+    for (const auto& sample : videoSamples) {
+        writeAvccSample(bufferedOut, sample);
+        videoWrittenBytes += sample.info.size;
     }
+    bufferedOut.flush();
+    const auto videoFlushes = bufferedOut.flushCount();
+    const auto videoSleeps = bufferedOut.sleepCount();
+    const auto videoSleepMs = bufferedOut.sleepMs();
+    logMuxSaveTiming(
+        "write_video_mdat",
+        videoWriteStartedAt,
+        "samples=" + std::to_string(videoSamples.size()) +
+            " bytes=" + std::to_string(videoWrittenBytes) +
+            " flushes=" + std::to_string(videoFlushes) +
+            " paceSleeps=" + std::to_string(videoSleeps) +
+            " paceSleepMs=" + std::to_string(videoSleepMs));
+
+    const auto audioWriteStartedAt = SaveTimingClock::now();
+    const auto audioFlushesBefore = bufferedOut.flushCount();
+    const auto audioSleepsBefore = bufferedOut.sleepCount();
+    const auto audioSleepMsBefore = bufferedOut.sleepMs();
+    uint64_t audioWrittenBytes = 0;
+    for (const auto& track : audioTracks) {
+        for (const auto& sample : track.samples) {
+            writeBytes(bufferedOut, sample.payload);
+            audioWrittenBytes += sample.info.size;
+        }
+    }
+    bufferedOut.flush();
+    logMuxSaveTiming(
+        "write_audio_mdat",
+        audioWriteStartedAt,
+        "tracks=" + std::to_string(audioTracks.size()) +
+            " bytes=" + std::to_string(audioWrittenBytes) +
+            " flushes=" + std::to_string(bufferedOut.flushCount() - audioFlushesBefore) +
+            " paceSleeps=" + std::to_string(bufferedOut.sleepCount() - audioSleepsBefore) +
+            " paceSleepMs=" + std::to_string(bufferedOut.sleepMs() - audioSleepMsBefore));
+
+    const auto moovWriteStartedAt = SaveTimingClock::now();
     writeBytes(out, moov);
+    logMuxSaveTiming("write_moov", moovWriteStartedAt, "bytes=" + std::to_string(moov.size()));
+
+    const auto closeStartedAt = SaveTimingClock::now();
     out.close();
+    logMuxSaveTiming("file_close", closeStartedAt);
 
     if (!out) {
         std::error_code ignored;
         std::filesystem::remove(path, ignored);
         result.message = "MP4 muxing failed while writing the output file.";
+        logMuxSaveTiming("total", totalStartedAt, "ok=false reason=write_failed");
         return result;
     }
 
     result.ok = true;
     result.filePath = narrow(path);
     result.message = "Saved MP4 clip.";
+    logMuxSaveTiming(
+        "total",
+        totalStartedAt,
+        "ok=true videoBytes=" + std::to_string(videoWrittenBytes) +
+            " audioBytes=" + std::to_string(audioWrittenBytes) +
+            " path=\"" + result.filePath + "\"");
     return result;
 }
 

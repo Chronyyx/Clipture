@@ -37,8 +37,8 @@ const api: CliptureApi = {
     ipcRenderer.on("play-sound", listener);
     return () => ipcRenderer.removeListener("play-sound", listener);
   },
-  onShowNotification: (callback: (thumbnailUrl: string, position: string) => void) => {
-    const listener = (_event: any, thumbnailUrl: string, position: string) => callback(thumbnailUrl, position);
+  onShowNotification: (callback: (thumbnailUrl: string, position: string, message?: string) => void) => {
+    const listener = (_event: any, thumbnailUrl: string, position: string, message?: string) => callback(thumbnailUrl, position, message);
     ipcRenderer.on("show-notification", listener);
     return () => ipcRenderer.removeListener("show-notification", listener);
   },

@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <memory>
 #include <sstream>
 #include <regex>
 #include <cstdlib>
@@ -25,6 +26,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <span>
 
 namespace clipture {
 namespace {
@@ -79,6 +81,19 @@ std::string jsonEscape(const std::string& value) {
         }
     }
     return out.str();
+}
+
+using SaveTimingClock = std::chrono::steady_clock;
+
+int64_t saveTimingElapsedMs(SaveTimingClock::time_point startedAt) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(SaveTimingClock::now() - startedAt).count();
+}
+
+void logEngineSaveTiming(const char* stage, SaveTimingClock::time_point startedAt, const std::string& details = {}) {
+    std::cerr << "[save-timing] source=engine stage=" << stage
+              << " ms=" << saveTimingElapsedMs(startedAt);
+    if (!details.empty()) std::cerr << " " << details;
+    std::cerr << std::endl;
 }
 
 std::string stripExtension(std::string value);
@@ -432,7 +447,7 @@ std::vector<std::vector<EncodedPacket>> splitVideoSegmentsByEncodedResolution(co
     int currentWidth = 0;
     int currentHeight = 0;
     for (const auto& packet : packets) {
-        if (packet.kind != PacketKind::Video || packet.payload.empty()) continue;
+        if (packet.kind != PacketKind::Video || payloadEmpty(packet)) continue;
         const int packetWidth = packet.encodedWidth > 0 ? packet.encodedWidth : currentWidth;
         const int packetHeight = packet.encodedHeight > 0 ? packet.encodedHeight : currentHeight;
         if (segments.empty() ||
@@ -459,42 +474,6 @@ std::pair<int, int> encoderMaxDimensions(const EngineSettings& settings) {
     return maxDisplayDimensions();
 }
 
-bool startCodeAt(const std::vector<std::byte>& data, std::size_t offset, std::size_t& size) {
-    if (offset + 3 <= data.size() &&
-        data[offset] == std::byte{0} &&
-        data[offset + 1] == std::byte{0} &&
-        data[offset + 2] == std::byte{1}) {
-        size = 3;
-        return true;
-    }
-    if (offset + 4 <= data.size() &&
-        data[offset] == std::byte{0} &&
-        data[offset + 1] == std::byte{0} &&
-        data[offset + 2] == std::byte{0} &&
-        data[offset + 3] == std::byte{1}) {
-        size = 4;
-        return true;
-    }
-    return false;
-}
-
-bool packetContainsIdrFrame(const EncodedPacket& packet) {
-    const auto& data = packet.payload;
-    for (std::size_t i = 0; i + 4 < data.size(); ++i) {
-        std::size_t startCodeSize = 0;
-        if (!startCodeAt(data, i, startCodeSize)) continue;
-        const std::size_t nalOffset = i + startCodeSize;
-        if (nalOffset >= data.size()) continue;
-        const auto nalType = std::to_integer<unsigned char>(data[nalOffset]) & 0x1F;
-        if (nalType == 5) return true;
-    }
-    return false;
-}
-
-bool isKeyframePacket(const EncodedPacket& packet) {
-    return packet.keyframe || packetContainsIdrFrame(packet);
-}
-
 int actualClipDurationSeconds(const std::vector<EncodedPacket>& packets, int requestedDurationSeconds) {
     if (packets.empty()) return requestedDurationSeconds;
     const int64_t firstPts = packets.front().pts100ns;
@@ -507,10 +486,8 @@ int actualClipDurationSeconds(const std::vector<EncodedPacket>& packets, int req
 std::vector<EncodedPacket> selectVideoWindowForClip(const std::vector<EncodedPacket>& packets, int durationSeconds) {
     std::vector<EncodedPacket> video;
     for (const auto& packet : packets) {
-        if (packet.kind == PacketKind::Video && !packet.payload.empty()) {
-            auto copy = packet;
-            copy.keyframe = isKeyframePacket(packet);
-            video.push_back(std::move(copy));
+        if (packet.kind == PacketKind::Video && !payloadEmpty(packet)) {
+            video.push_back(packet);
         }
     }
     if (video.empty()) return {};
@@ -533,22 +510,22 @@ std::vector<EncodedPacket> selectVideoWindowForClip(const std::vector<EncodedPac
 
     for (std::size_t i = firstIndex + 1; i > 0; --i) {
         const std::size_t index = i - 1;
-        if (isKeyframePacket(video[index])) {
+        if (video[index].keyframe) {
             firstIndex = index;
             break;
         }
     }
 
-    if (!isKeyframePacket(video[firstIndex])) {
+    if (!video[firstIndex].keyframe) {
         for (std::size_t i = firstIndex; i < video.size(); ++i) {
-            if (isKeyframePacket(video[i])) {
+            if (video[i].keyframe) {
                 firstIndex = i;
                 break;
             }
         }
     }
 
-    if (!isKeyframePacket(video[firstIndex])) firstIndex = 0;
+    if (!video[firstIndex].keyframe) firstIndex = 0;
 
     return { video.begin() + static_cast<std::ptrdiff_t>(firstIndex), video.end() };
 }
@@ -864,8 +841,9 @@ std::vector<EncodedPacket> mixPcmPackets(const std::vector<EncodedPacket>& packe
         if (offset100ns < 0) continue;
         int64_t offsetSamples = (offset100ns * sampleRate) / 10'000'000;
         
-        const int16_t* pcm = reinterpret_cast<const int16_t*>(p.payload.data());
-        int numSamples = static_cast<int>(p.payload.size() / (channels * sizeof(int16_t)));
+        const auto bytes = payloadBytes(p);
+        const int16_t* pcm = reinterpret_cast<const int16_t*>(bytes.data());
+        int numSamples = static_cast<int>(bytes.size() / (channels * sizeof(int16_t)));
         
         for (int i = 0; i < numSamples; ++i) {
             for (int ch = 0; ch < channels; ++ch) {
@@ -903,9 +881,9 @@ std::vector<EncodedPacket> mixPcmPackets(const std::vector<EncodedPacket>& packe
         mp.sampleRate = sampleRate;
         mp.channelCount = channels;
         mp.bitsPerSample = 16;
-        mp.payload.resize(frames * channels * sizeof(int16_t));
+        mp.payload = std::make_shared<PacketPayload>(frames * channels * sizeof(int16_t));
         
-        int16_t* outPcm = reinterpret_cast<int16_t*>(mp.payload.data());
+        int16_t* outPcm = reinterpret_cast<int16_t*>(mutablePayload(mp).data());
         for (int j = 0; j < frames; ++j) {
             for (int ch = 0; ch < channels; ++ch) {
                 float val = mixBuffer[(i + j) * channels + ch];
@@ -919,21 +897,58 @@ std::vector<EncodedPacket> mixPcmPackets(const std::vector<EncodedPacket>& packe
 
 SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     SaveClipResult result;
+    const auto totalStartedAt = SaveTimingClock::now();
+    logEngineSaveTiming("start", totalStartedAt, "durationSeconds=" + std::to_string(request.durationSeconds));
+    const int saveStartDroppedFrames = frameQueue_.droppedFrames();
+    const int saveStartEncoderAccepted = encoderWorker_ ? encoderWorker_->framesAccepted() : 0;
+    const int saveStartEncoderEncoded = encoderWorker_ ? encoderWorker_->framesEncoded() : 0;
+    auto saveStutterDeltaDetails = [&]() {
+        const int currentDroppedFrames = frameQueue_.droppedFrames();
+        const int currentEncoderAccepted = encoderWorker_ ? encoderWorker_->framesAccepted() : 0;
+        const int currentEncoderEncoded = encoderWorker_ ? encoderWorker_->framesEncoded() : 0;
+        return " droppedFramesDelta=" + std::to_string(currentDroppedFrames - saveStartDroppedFrames) +
+            " encoderAcceptedDelta=" + std::to_string(currentEncoderAccepted - saveStartEncoderAccepted) +
+            " encoderEncodedDelta=" + std::to_string(currentEncoderEncoded - saveStartEncoderEncoded);
+    };
+    auto saveTotalDetails = [&](const std::string& details) {
+        return details + saveStutterDeltaDetails();
+    };
+    MuxWritePacing savePacing {
+        [this, saveStartDroppedFrames]() {
+            return frameQueue_.droppedFrames() > saveStartDroppedFrames;
+        }
+    };
+    logEngineSaveTiming(
+        "stutter_baseline",
+        totalStartedAt,
+        "droppedFrames=" + std::to_string(saveStartDroppedFrames) +
+            " encoderAccepted=" + std::to_string(saveStartEncoderAccepted) +
+            " encoderEncoded=" + std::to_string(saveStartEncoderEncoded));
 
     if (diagnostics_.activeEncoder != EncoderName::Nvenc) {
         result.message = "Cannot save clip: direct NVENC is not available, and this MVP requires NVENC first.";
+        logEngineSaveTiming("total", totalStartedAt, saveTotalDetails("ok=false reason=nvenc_unavailable"));
         return result;
     }
 
     if (videoPackets_.size() == 0) {
         result.message = "No encoded H.264 packets are buffered yet. Keep diagnostics open and wait for Encoder packets to rise above 0.";
+        logEngineSaveTiming("total", totalStartedAt, saveTotalDetails("ok=false reason=no_video_packets"));
         return result;
     }
 
     const int duration = std::clamp(request.durationSeconds, 5, 600);
-    auto clipPackets = selectVideoWindowForClip(videoPackets_.snapshot(), duration);
+    const auto snapshotStartedAt = SaveTimingClock::now();
+    auto videoSnapshot = videoPackets_.snapshot();
+    logEngineSaveTiming("video_snapshot", snapshotStartedAt, "packets=" + std::to_string(videoSnapshot.size()));
+
+    const auto videoSelectStartedAt = SaveTimingClock::now();
+    auto clipPackets = selectVideoWindowForClip(videoSnapshot, duration);
+    videoSnapshot.clear();
+    logEngineSaveTiming("video_select", videoSelectStartedAt, "clipPackets=" + std::to_string(clipPackets.size()));
     if (clipPackets.empty()) {
         result.message = "No complete keyframe-starting H.264 window is buffered yet. Wait about one second and try again.";
+        logEngineSaveTiming("total", totalStartedAt, saveTotalDetails("ok=false reason=no_keyframe_window"));
         return result;
     }
     const int actualDuration = actualClipDurationSeconds(clipPackets, duration);
@@ -954,10 +969,25 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     std::vector<EncodedPacket> muxPackets = clipPackets;
     const int64_t clipStart = clipPackets.front().pts100ns;
     const int64_t clipEnd = clipPackets.back().pts100ns + std::max<int64_t>(clipPackets.back().duration100ns, 0);
+    const auto audioSelectStartedAt = SaveTimingClock::now();
     auto capturedAudioPackets = audioPackets_.selectWindow(clipStart, clipEnd);
+    logEngineSaveTiming("audio_select", audioSelectStartedAt, "packets=" + std::to_string(capturedAudioPackets.size()));
+
+    const auto audioGroupStartedAt = SaveTimingClock::now();
+    std::map<std::string, bool> processRunningCache;
+    auto isCaptureProcessRunning = [&](const std::string& name) {
+        const auto processName = captureProcessName(name);
+        auto cached = processRunningCache.find(processName);
+        if (cached != processRunningCache.end()) return cached->second;
+
+        const bool running = isProcessRunningByName(processName);
+        processRunningCache[processName] = running;
+        return running;
+    };
+
     std::set<std::string> runningAppSources;
     for (const auto& app : settings_.appAudioProcesses) {
-        if (isProcessRunningByName(captureProcessName(app))) {
+        if (isCaptureProcessRunning(app)) {
             runningAppSources.insert("app:" + app);
         }
     }
@@ -972,7 +1002,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             std::string exeName = packet.sourceId.substr(5);
             std::string gameName = getGameName(exeName);
             if (isMinimizedRobloxName(gameName)) continue;
-            if (isProcessRunningByName(captureProcessName(exeName))) {
+            if (isCaptureProcessRunning(exeName)) {
                 audioByTrack["game:" + gameName].push_back(packet);
             }
         } else if (packet.sourceId.rfind("app:", 0) == 0) {
@@ -981,12 +1011,32 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             }
         }
     }
+    logEngineSaveTiming(
+        "audio_group",
+        audioGroupStartedAt,
+        "tracks=" + std::to_string(audioByTrack.size()) +
+            " packets=" + std::to_string(capturedAudioPackets.size()) +
+            " processChecks=" + std::to_string(processRunningCache.size()));
     
     std::vector<EncodedPacket> normalizedAudioPackets;
+    const auto audioMixStartedAt = SaveTimingClock::now();
+    std::size_t mixedAudioPacketCount = 0;
     for (const auto& [trackId, packets] : audioByTrack) {
+        const auto trackMixStartedAt = SaveTimingClock::now();
         auto mixedTrack = mixPcmPackets(packets, trackId, clipStart, clipEnd);
+        logEngineSaveTiming(
+            "audio_mix_track",
+            trackMixStartedAt,
+            "track=\"" + jsonEscape(trackId) + "\" inputPackets=" + std::to_string(packets.size()) +
+                " outputPackets=" + std::to_string(mixedTrack.size()));
+        mixedAudioPacketCount += mixedTrack.size();
         normalizedAudioPackets.insert(normalizedAudioPackets.end(), mixedTrack.begin(), mixedTrack.end());
     }
+    logEngineSaveTiming(
+        "audio_mix",
+        audioMixStartedAt,
+        "tracks=" + std::to_string(audioByTrack.size()) +
+            " outputPackets=" + std::to_string(mixedAudioPacketCount));
 
     std::vector<EncodedPacket> audioPackets = normalizedAudioPackets;
     auto videoSegments = splitVideoSegmentsByEncodedResolution(clipPackets);
@@ -1002,7 +1052,13 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             const int64_t segmentStart = segment.front().pts100ns;
             const int64_t segmentEnd = segment.back().pts100ns + std::max<int64_t>(segment.back().duration100ns, 0);
             for (const auto& [trackId, trackPackets] : audioByTrack) {
+                const auto segmentMixStartedAt = SaveTimingClock::now();
                 auto mixedTrack = mixPcmPackets(trackPackets, trackId, segmentStart, segmentEnd);
+                logEngineSaveTiming(
+                    "audio_mix_segment_track",
+                    segmentMixStartedAt,
+                    "track=\"" + jsonEscape(trackId) + "\" inputPackets=" + std::to_string(trackPackets.size()) +
+                        " outputPackets=" + std::to_string(mixedTrack.size()));
                 segmentMuxPackets.insert(segmentMuxPackets.end(), mixedTrack.begin(), mixedTrack.end());
             }
 
@@ -1011,15 +1067,24 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                 segmentWidth = width;
                 segmentHeight = height;
             }
+            const auto muxStartedAt = SaveTimingClock::now();
             const auto segmentMux = muxH264ToMp4(
                 segmentMuxPackets,
                 request.saveFolder,
                 segmentWidth,
                 segmentHeight,
                 diagnostics_.fps,
-                diagnostics_.bitrateMbps);
+                diagnostics_.bitrateMbps,
+                savePacing);
+            logEngineSaveTiming(
+                "mux_segment",
+                muxStartedAt,
+                "ok=" + std::string(segmentMux.ok ? "true" : "false") +
+                    " packets=" + std::to_string(segmentMuxPackets.size()) +
+                    " resolution=\"" + formatResolution(segmentWidth, segmentHeight) + "\"");
             if (!segmentMux.ok) {
                 result.message = segmentMux.message;
+                logEngineSaveTiming("total", totalStartedAt, saveTotalDetails("ok=false reason=mux_segment_failed"));
                 return result;
             }
             segmentFiles.push_back(segmentMux.filePath);
@@ -1028,21 +1093,32 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         }
         if (segmentFiles.empty()) {
             result.message = "Segmented MP4 muxing failed: no video segments were writable.";
+            logEngineSaveTiming("total", totalStartedAt, saveTotalDetails("ok=false reason=no_segment_files"));
             return result;
         }
         outputFilePath = stitchedPathForSegments(segmentFiles.front());
     } else {
         muxPackets.insert(muxPackets.end(), audioPackets.begin(), audioPackets.end());
+        const auto muxStartedAt = SaveTimingClock::now();
         const auto mux = muxH264ToMp4(
             muxPackets,
             request.saveFolder,
             width,
             height,
             diagnostics_.fps,
-            diagnostics_.bitrateMbps);
+            diagnostics_.bitrateMbps,
+            savePacing);
+        logEngineSaveTiming(
+            "mux",
+            muxStartedAt,
+            "ok=" + std::string(mux.ok ? "true" : "false") +
+                " packets=" + std::to_string(muxPackets.size()) +
+                " videoPackets=" + std::to_string(clipPackets.size()) +
+                " audioPackets=" + std::to_string(audioPackets.size()));
 
         if (!mux.ok) {
             result.message = mux.message;
+            logEngineSaveTiming("total", totalStartedAt, saveTotalDetails("ok=false reason=mux_failed"));
             return result;
         }
         outputFilePath = mux.filePath;
@@ -1147,6 +1223,12 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         ? muxMessage
         : "Saved segmented MP4 clip for export stitching.";
     result.clipJson = clip.str();
+    logEngineSaveTiming(
+        "total",
+        totalStartedAt,
+        saveTotalDetails("ok=true videoPackets=" + std::to_string(clipPackets.size()) +
+            " audioPackets=" + std::to_string(audioPackets.size()) +
+            " segments=" + std::to_string(segmentFiles.size())));
     return result;
 }
 

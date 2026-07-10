@@ -348,7 +348,7 @@ int16_t clampToS16(float value) {
     return static_cast<int16_t>(std::lrintf(value * 32767.0f));
 }
 
-void convertToS16(const BYTE* data, UINT32 frames, DWORD flags, const WAVEFORMATEX* format, int& outChannels, std::vector<std::byte>& output) {
+void convertToS16(const BYTE* data, UINT32 frames, DWORD flags, const WAVEFORMATEX* format, int& outChannels, PacketPayload& output) {
     const int inputChannels = std::max<int>(1, format ? format->nChannels : 2);
     const int outputChannels = std::min<int>(2, inputChannels);
     const int bits = sourceBitsPerSample(format);
@@ -388,7 +388,7 @@ void convertToS16(const BYTE* data, UINT32 frames, DWORD flags, const WAVEFORMAT
     }
 }
 
-void fillSilentS16(UINT32 frames, int channels, std::vector<std::byte>& output) {
+void fillSilentS16(UINT32 frames, int channels, PacketPayload& output) {
     const std::size_t outputSamples = static_cast<std::size_t>(frames) * static_cast<std::size_t>(std::max(1, channels));
     output.resize(outputSamples * sizeof(int16_t));
     std::fill(output.begin(), output.end(), std::byte { 0 });
@@ -718,7 +718,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                 packet.channelCount = fallbackChannels;
                 packet.bitsPerSample = 16;
                 packet.payload = packets_.acquirePayload(static_cast<std::size_t>(frames) * fallbackChannels * sizeof(int16_t));
-                fillSilentS16(frames, fallbackChannels, packet.payload);
+                fillSilentS16(frames, fallbackChannels, mutablePayload(packet));
                 packets_.push(std::move(packet));
                 nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / fallbackSampleRate);
                 ++packetsCaptured_;
@@ -790,7 +790,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
             packet.channelCount = outputChannelsForSilence;
             packet.bitsPerSample = 16;
             packet.payload = packets_.acquirePayload(static_cast<std::size_t>(catchUpFrames) * outputChannelsForSilence * sizeof(int16_t));
-            fillSilentS16(catchUpFrames, outputChannelsForSilence, packet.payload);
+            fillSilentS16(catchUpFrames, outputChannelsForSilence, mutablePayload(packet));
             packets_.push(std::move(packet));
             nextPts100ns += catchUpDuration100ns;
             ++packetsCaptured_;
@@ -809,7 +809,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                 int outputChannels = 0;
                 const int estimatedChannels = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
                 auto pcm = packets_.acquirePayload(static_cast<std::size_t>(frames) * estimatedChannels * sizeof(int16_t));
-                convertToS16(data, frames, flags, mixFormat, outputChannels, pcm);
+                convertToS16(data, frames, flags, mixFormat, outputChannels, *pcm);
 
                 const float vol = micVolume_.load();
                 const bool isolation = micIsolation_.load();
@@ -818,7 +818,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                 const bool autoGate = autoNoiseGate_.load();
                 const float gateThreshold = noiseGateThreshold_.load();
                 const int gateDebounceMs = noiseGateDebounceMs_.load();
-                auto* pcm16 = reinterpret_cast<int16_t*>(pcm.data());
+                auto* pcm16 = reinterpret_cast<int16_t*>(pcm->data());
 
                 for (UINT32 i = 0; i < frames; ++i) {
                     float mono = 0.0f;
@@ -873,7 +873,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                     const float targetGateGain = gateOpen ? 1.0f : 0.0f;
 
                     auto outPcm = packets_.acquirePayload(static_cast<std::size_t>(rnnoiseFrameSize) * outputChannels * sizeof(int16_t));
-                    auto* out16 = reinterpret_cast<int16_t*>(outPcm.data());
+                    auto* out16 = reinterpret_cast<int16_t*>(outPcm->data());
 
                     for (int j = 0; j < rnnoiseFrameSize; ++j) {
                         const float gateStep = targetGateGain > currentGateGain ? 0.18f : 0.05f;
@@ -930,7 +930,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                     packet.channelCount = outputChannelsForSilence;
                     packet.bitsPerSample = 16;
                     packet.payload = packets_.acquirePayload(static_cast<std::size_t>(frames) * outputChannelsForSilence * sizeof(int16_t));
-                    fillSilentS16(frames, outputChannelsForSilence, packet.payload);
+                    fillSilentS16(frames, outputChannelsForSilence, mutablePayload(packet));
                     packets_.push(std::move(packet));
                     nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
                     ++packetsCaptured_;
@@ -1045,7 +1045,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
             int outputChannels = 0;
             const int estimatedChannels = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
             auto pcm = packets_.acquirePayload(static_cast<std::size_t>(frames) * estimatedChannels * sizeof(int16_t));
-            convertToS16(data, frames, flags, mixFormat, outputChannels, pcm);
+            convertToS16(data, frames, flags, mixFormat, outputChannels, *pcm);
 
             if (sourceId == "microphone-pcm") {
                 const float vol = micVolume_.load();
@@ -1056,7 +1056,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                 const float gateThreshold = noiseGateThreshold_.load();
                 const int gateDebounceMs = noiseGateDebounceMs_.load();
                 
-                auto* pcm16 = reinterpret_cast<int16_t*>(pcm.data());
+                auto* pcm16 = reinterpret_cast<int16_t*>(pcm->data());
                 
                 for (UINT32 i = 0; i < frames; ++i) {
                     float mono = 0.0f;
@@ -1111,7 +1111,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                     float targetGateGain = gateOpen ? 1.0f : 0.0f;
                     
                     auto outPcm = packets_.acquirePayload(static_cast<std::size_t>(rnnoiseFrameSize) * outputChannels * sizeof(int16_t));
-                    auto* out16 = reinterpret_cast<int16_t*>(outPcm.data());
+                    auto* out16 = reinterpret_cast<int16_t*>(outPcm->data());
                     
                     for (int j = 0; j < rnnoiseFrameSize; ++j) {
                         const float gateStep = targetGateGain > currentGateGain ? 0.18f : 0.05f;
@@ -1191,7 +1191,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                 packet.channelCount = outputChannelsForSilence;
                 packet.bitsPerSample = 16;
                 packet.payload = packets_.acquirePayload(static_cast<std::size_t>(frames) * outputChannelsForSilence * sizeof(int16_t));
-                fillSilentS16(frames, outputChannelsForSilence, packet.payload);
+                fillSilentS16(frames, outputChannelsForSilence, mutablePayload(packet));
                 packets_.push(std::move(packet));
                 nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
                 ++packetsCaptured_;
@@ -1331,7 +1331,7 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
             int outputChannels = 0;
             const int estimatedChannels = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
             auto pcm = packets_.acquirePayload(static_cast<std::size_t>(frames) * estimatedChannels * sizeof(int16_t));
-            convertToS16(data, frames, flags, mixFormat, outputChannels, pcm);
+            convertToS16(data, frames, flags, mixFormat, outputChannels, *pcm);
 
             EncodedPacket packet;
             packet.kind = PacketKind::Audio;
@@ -1371,7 +1371,7 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
                 packet.channelCount = outputChannelsForSilence;
                 packet.bitsPerSample = 16;
                 packet.payload = packets_.acquirePayload(static_cast<std::size_t>(frames) * outputChannelsForSilence * sizeof(int16_t));
-                fillSilentS16(frames, outputChannelsForSilence, packet.payload);
+                fillSilentS16(frames, outputChannelsForSilence, mutablePayload(packet));
                 packets_.push(std::move(packet));
                 nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
                 ++packetsCaptured_;

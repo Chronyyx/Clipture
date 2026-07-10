@@ -336,6 +336,7 @@ export function App() {
   const [selectedClip, setSelectedClip] = useState<ClipRecord | undefined>();
   const [clipSounds, setClipSounds] = useState<ClipSoundOption[]>([]);
   const [updateState, setUpdateState] = useState<UpdateState>(defaultUpdateState);
+  const [isSavingClip, setIsSavingClip] = useState(false);
   const clipSoundUrlsRef = useRef<Record<string, string>>({});
 
   async function refresh() {
@@ -394,10 +395,18 @@ export function App() {
   }, [clips, durationFilter, query]);
 
   async function saveClip() {
+    if (isSavingClip) return;
     const length = settings?.clipLengthSeconds ?? 30;
-    const result = await window.clipture.saveClip(length);
-    setNotice(result.message);
-    await refresh();
+    setIsSavingClip(true);
+    try {
+      const result = await window.clipture.saveClip(length);
+      setNotice(result.message);
+      await refresh();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not save clip.");
+    } finally {
+      setIsSavingClip(false);
+    }
   }
 
   async function updateSettings(patch: Partial<ClipSettings>) {
@@ -462,8 +471,8 @@ export function App() {
             <h1>{activeTab === "library" ? "Clip Library" : activeTab === "settings" ? "Settings" : "Diagnostics"}</h1>
             {activeTab === "diagnostics" && <p>{diagnostics.status}</p>}
           </div>
-          <button className="primary" onClick={saveClip}>
-            <Save size={18} /> Save last {settings?.clipLengthSeconds ?? 30}s
+          <button className="primary" onClick={saveClip} disabled={isSavingClip}>
+            <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${settings?.clipLengthSeconds ?? 30}s`}
           </button>
         </header>
 

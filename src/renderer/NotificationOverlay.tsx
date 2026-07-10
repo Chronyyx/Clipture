@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Film } from "lucide-react";
 
 export function NotificationOverlay() {
-  const [activeNotification, setActiveNotification] = useState<{ position: string; id: number } | null>(null);
+  const [activeNotification, setActiveNotification] = useState<{ position: string; id: number; message: string } | null>(null);
   const [animatingOut, setAnimatingOut] = useState(false);
 
   useEffect(() => {
@@ -12,8 +12,8 @@ export function NotificationOverlay() {
     if (root) root.style.background = 'transparent';
     let timeoutId: number;
 
-    const unsubscribe = window.clipture.onShowNotification((_filePath, position) => {
-      setActiveNotification({ position, id: Date.now() });
+    const unsubscribe = window.clipture.onShowNotification((_filePath, position, message = "Clip saved!") => {
+      setActiveNotification({ position, id: Date.now(), message });
       setAnimatingOut(false);
       
       // Clear any existing timeout
@@ -39,7 +39,7 @@ export function NotificationOverlay() {
 
   if (!activeNotification) return null;
 
-  const { position, id } = activeNotification;
+  const { position, id, message } = activeNotification;
 
   return (
     <div className={`notification-container ${position}`}>
@@ -50,7 +50,7 @@ export function NotificationOverlay() {
           </div>
         </div>
         <div className="notification-text">
-          <span>Clip Saved!</span>
+          <span>{message}</span>
         </div>
       </div>
     </div>

@@ -13,6 +13,7 @@
 #include <deque>
 #include <memory>
 #include <sstream>
+#include <span>
 #include <vector>
 
 namespace clipture {
@@ -42,7 +43,7 @@ std::string statusName(NVENCSTATUS status) {
     }
 }
 
-bool startCodeAt(const std::vector<std::byte>& data, std::size_t offset, std::size_t& size) {
+bool startCodeAt(std::span<const std::byte> data, std::size_t offset, std::size_t& size) {
     if (offset + 3 <= data.size() &&
         data[offset] == std::byte{0} &&
         data[offset + 1] == std::byte{0} &&
@@ -61,7 +62,7 @@ bool startCodeAt(const std::vector<std::byte>& data, std::size_t offset, std::si
     return false;
 }
 
-bool containsH264NalType(const std::vector<std::byte>& data, uint8_t wantedType) {
+bool containsH264NalType(std::span<const std::byte> data, uint8_t wantedType) {
     for (std::size_t i = 0; i + 4 < data.size(); ++i) {
         std::size_t startCodeSize = 0;
         if (!startCodeAt(data, i, startCodeSize)) continue;
@@ -720,9 +721,9 @@ private:
         packet.sourceHeight = slot.frameSourceHeight;
         packet.payload = packetPool_.acquirePayload(lock.bitstreamSizeInBytes);
         if (lock.bitstreamSizeInBytes > 0 && lock.bitstreamBufferPtr) {
-            std::memcpy(packet.payload.data(), lock.bitstreamBufferPtr, lock.bitstreamSizeInBytes);
+            std::memcpy(mutablePayload(packet).data(), lock.bitstreamBufferPtr, lock.bitstreamSizeInBytes);
         }
-        packet.keyframe = packet.keyframe || containsH264NalType(packet.payload, 5);
+        packet.keyframe = packet.keyframe || containsH264NalType(payloadBytes(packet), 5);
 
         funcs_.nvEncUnlockBitstream(encoder_, slot.bitstreamBuffer);
         if (slot.mappedInput) {
@@ -737,7 +738,7 @@ private:
         slot.frameSourceWidth = 0;
         slot.frameSourceHeight = 0;
         slot.inFlight = false;
-        produced = !packet.payload.empty();
+        produced = !payloadEmpty(packet);
         status = asyncEnabled_
             ? "Direct NVENC async pipeline is outputting H.264 packets."
             : "Direct NVENC is outputting H.264 packets.";

@@ -164,7 +164,7 @@ export interface CliptureApi {
   onLibraryChanged: (callback: () => void) => () => void;
   onUpdateStateChanged: (callback: (state: UpdateState) => void) => () => void;
   onPlaySound: (callback: (sound: string) => void) => () => void;
-  onShowNotification: (callback: (thumbnailUrl: string, position: string) => void) => () => void;
+  onShowNotification: (callback: (thumbnailUrl: string, position: string, message?: string) => void) => () => void;
   hideNotification: () => void;
   selectFolder(currentPath: string): Promise<string | undefined>;
 }

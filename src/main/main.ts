@@ -53,6 +53,55 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
   return Math.round(Math.min(max, Math.max(min, numeric)));
 }
 
+function saveClipEngineTimeoutMs(durationSeconds: number): number {
+  const boundedDuration = clampNumber(durationSeconds, defaultSettings.clipLengthSeconds, 5, 600);
+  return Math.min(30 * 60 * 1000, Math.max(3 * 60 * 1000, boundedDuration * 3000 + 60 * 1000));
+}
+
+function saveTimingNowMs(): number {
+  return Date.now();
+}
+
+function saveTimingElapsedMs(startedAtMs: number): number {
+  return Math.max(0, saveTimingNowMs() - startedAtMs);
+}
+
+function formatSaveTimingValue(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === null || value === undefined) return String(value);
+  return JSON.stringify(value);
+}
+
+function appendSaveTimingLog(line: string): void {
+  try {
+    appendFileSync(appDataPath("save-timing.log"), `[${new Date().toISOString()}] ${line}\n`);
+  } catch {
+    // Timing logs are diagnostic only; saving clips should never depend on file logging.
+  }
+}
+
+function logSaveTimingLine(line: string): void {
+  console.log(line);
+  appendSaveTimingLog(line);
+}
+
+function logEngineStderr(chunk: Buffer): void {
+  const text = chunk.toString();
+  console.error(`[engine] ${text}`);
+  for (const line of text.split(/\r?\n/)) {
+    if (line.includes("[save-timing]")) appendSaveTimingLog(`[engine] ${line}`);
+  }
+}
+
+function logSaveTiming(saveId: string, stage: string, startedAtMs: number, details: Record<string, unknown> = {}): void {
+  const suffix = Object.entries(details)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${formatSaveTimingValue(value)}`)
+    .join(" ");
+  logSaveTimingLine(`[save-timing] id=${saveId} stage=${stage} ms=${saveTimingElapsedMs(startedAtMs)}${suffix ? ` ${suffix}` : ""}`);
+}
+
 function normalizeSettings(settings: ClipSettings): ClipSettings {
   const defaultsById = new Map(defaultSettings.audioSources.map((source) => [source.id, source]));
   const existingById = new Map((settings.audioSources ?? []).map((source) => [source.id, source]));
@@ -134,7 +183,7 @@ class EngineClient {
   private child: ChildProcessWithoutNullStreams | undefined;
   private nextId = 1;
   private buffer = "";
-  private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private lastDiagnostics: EngineDiagnostics = {
     captureApi: "Windows.Graphics.Capture",
     activeEncoder: "Unavailable",
@@ -181,11 +230,14 @@ class EngineClient {
 
     this.child = spawn(enginePath, [], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     this.child.stdout.on("data", (chunk: Buffer) => this.readStdout(chunk));
-    this.child.stderr.on("data", (chunk: Buffer) => console.error(`[engine] ${chunk.toString()}`));
+    this.child.stderr.on("data", (chunk: Buffer) => logEngineStderr(chunk));
     this.child.on("exit", () => {
       this.child = undefined;
       this.lastDiagnostics = { ...this.lastDiagnostics, activeEncoder: "Unavailable", encoderMode: "Unavailable", engineRunning: false, degraded: true, status: "Native engine exited." };
-      for (const pending of this.pending.values()) pending.reject(new Error("Native engine exited."));
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("Native engine exited."));
+      }
       this.pending.clear();
     });
   }
@@ -233,7 +285,7 @@ class EngineClient {
     if (!this.child) {
       return { ok: false, message: this.lastDiagnostics.status };
     }
-    return this.request<SaveClipResult>("saveClip", { durationSeconds, saveFolder }, 60000);
+    return this.request<SaveClipResult>("saveClip", { durationSeconds, saveFolder }, saveClipEngineTimeoutMs(durationSeconds));
   }
 
   async configure(settings: ClipSettings): Promise<EngineDiagnostics> {
@@ -287,12 +339,12 @@ class EngineClient {
     const message = JSON.stringify({ id, type, ...payload });
     this.child.stdin.write(`${message}\n`);
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (!this.pending.has(id)) return;
         this.pending.delete(id);
         reject(new Error(`Engine request timed out: ${type}`));
       }, timeoutMs);
+      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
     });
   }
 
@@ -314,6 +366,7 @@ class EngineClient {
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
+      clearTimeout(pending.timer);
       if (message.error) pending.reject(new Error(message.error));
       else pending.resolve(message.payload);
     } catch (error) {
@@ -335,6 +388,7 @@ let updateCheckTimer: ReturnType<typeof setInterval> | undefined;
 let updateCheckInFlight = false;
 let updateReady = false;
 let updateListenersRegistered = false;
+let saveClipInProgress = false;
 
 app.setName("Clipture");
 if (process.platform === "win32") {
@@ -767,8 +821,10 @@ async function processClipFile(
   target: { width: number; height: number },
   actual: { width: number; height: number },
   reencodeBitrateMbps: number,
-  audioTracks: string[]
+  audioTracks: string[],
+  saveTimingId?: string
 ): Promise<{ ok: boolean; message: string; tracksUpdated: boolean; newTracks: string[] }> {
+  const totalStartedAt = saveTimingNowMs();
   const settings = readSettings();
   const systemSource = settings.audioSources.find((s) => s.id === "system" && s.enabled);
   const captureAllSystem = systemSource?.captureAllSystem ?? true;
@@ -800,7 +856,12 @@ async function processClipFile(
     (actual.width !== target.width || actual.height !== target.height);
   const needsMix = systemMixTracks.length > 1;
 
-  if (!existsSync(filePath)) return { ok: true, message: "Clip file was not found.", tracksUpdated: false, newTracks: audioTracks };
+  if (!existsSync(filePath)) {
+    if (saveTimingId) {
+      logSaveTiming(saveTimingId, "postprocess.missing_file", totalStartedAt, { filePath });
+    }
+    return { ok: true, message: "Clip file was not found.", tracksUpdated: false, newTracks: audioTracks };
+  }
 
   const outputPath = filePath.replace(/\.mp4$/i, `.processed.mp4`);
   
@@ -852,6 +913,16 @@ async function processClipFile(
   const tracksChanged = newTracks.length !== audioTracks.length || newTracks.some((t, i) => t !== audioTracks[i]);
 
   if (!needsScale && !needsMix) {
+    if (saveTimingId) {
+      logSaveTiming(saveTimingId, "postprocess.skipped", totalStartedAt, {
+        needsScale,
+        needsMix,
+        tracksChanged,
+        audioTracks: audioTracks.length,
+        target: `${target.width}x${target.height}`,
+        actual: `${actual.width}x${actual.height}`
+      });
+    }
     return { ok: true, message: "No processing needed.", tracksUpdated: tracksChanged, newTracks };
   }
 
@@ -870,42 +941,159 @@ async function processClipFile(
 
   args.push("-movflags", "+faststart", outputPath);
 
+  if (saveTimingId) {
+    logSaveTiming(saveTimingId, "postprocess.start", totalStartedAt, {
+      needsScale,
+      needsMix,
+      tracksChanged,
+      video: needsScale ? "h264_nvenc" : "copy",
+      audio: needsMix ? "aac" : "copy",
+      audioTracks: audioTracks.length,
+      target: `${target.width}x${target.height}`,
+      actual: `${actual.width}x${actual.height}`
+    });
+  }
+  const ffmpegStartedAt = saveTimingNowMs();
   const ffmpeg = await runFfmpeg(args);
-  if (!ffmpeg.ok || !existsSync(outputPath)) return { ok: ffmpeg.ok, message: ffmpeg.message, tracksUpdated: false, newTracks: audioTracks };
+  if (saveTimingId) {
+    logSaveTiming(saveTimingId, "postprocess.ffmpeg", ffmpegStartedAt, { ok: ffmpeg.ok });
+  }
+  if (!ffmpeg.ok || !existsSync(outputPath)) {
+    if (saveTimingId) {
+      logSaveTiming(saveTimingId, "postprocess.total", totalStartedAt, { ok: false, reason: ffmpeg.message });
+    }
+    return { ok: ffmpeg.ok, message: ffmpeg.message, tracksUpdated: false, newTracks: audioTracks };
+  }
 
   try {
     unlinkSync(filePath);
     renameSync(outputPath, filePath);
   } catch (error) {
+    if (saveTimingId) {
+      logSaveTiming(saveTimingId, "postprocess.total", totalStartedAt, { ok: false, reason: "replace_failed" });
+    }
     return { ok: false, message: error instanceof Error ? error.message : "Could not replace clip with processed output.", tracksUpdated: false, newTracks: audioTracks };
   }
 
+  if (saveTimingId) {
+    logSaveTiming(saveTimingId, "postprocess.total", totalStartedAt, { ok: true });
+  }
   return { ok: true, message: needsScale && needsMix ? "Scaled and mixed audio." : needsScale ? "Scaled video." : "Mixed system audio.", tracksUpdated: needsMix, newTracks };
 }
 
 async function stitchSegmentedClip(
   clip: ClipRecord,
   target: { width: number; height: number },
-  reencodeBitrateMbps: number
+  reencodeBitrateMbps: number,
+  saveTimingId?: string
 ): Promise<{ ok: boolean; message: string }> {
+  const totalStartedAt = saveTimingNowMs();
   const segmentFiles = clip.segmentFiles?.filter((file) => existsSync(file)) ?? [];
-  if (segmentFiles.length <= 1) return { ok: true, message: "No segment stitching needed." };
+  if (segmentFiles.length <= 1) {
+    if (saveTimingId) logSaveTiming(saveTimingId, "stitch.skipped", totalStartedAt, { segmentCount: segmentFiles.length });
+    return { ok: true, message: "No segment stitching needed." };
+  }
 
   const targetWidth = target.width > 0 ? target.width : parseResolutionLabel(clip.recommendedResolution).width;
   const targetHeight = target.height > 0 ? target.height : parseResolutionLabel(clip.recommendedResolution).height;
   if (targetWidth <= 0 || targetHeight <= 0) {
+    if (saveTimingId) logSaveTiming(saveTimingId, "stitch.total", totalStartedAt, { ok: false, reason: "missing_target_resolution" });
     return { ok: false, message: "Segment stitching needs a target resolution." };
   }
 
   const segmentResolutions = clip.segmentResolutions?.map(parseResolutionLabel) ?? [];
+  const sameSegmentResolution =
+    segmentResolutions.length === segmentFiles.length &&
+    segmentResolutions.length > 0 &&
+    segmentResolutions.every((resolution) =>
+      resolution.width === segmentResolutions[0].width &&
+      resolution.height === segmentResolutions[0].height
+    );
+  const targetMatchesSegments =
+    sameSegmentResolution &&
+    segmentResolutions[0].width === targetWidth &&
+    segmentResolutions[0].height === targetHeight;
+  if (saveTimingId) {
+    logSaveTiming(saveTimingId, "stitch.start", totalStartedAt, {
+      segmentCount: segmentFiles.length,
+      target: `${targetWidth}x${targetHeight}`,
+      sameResolution: sameSegmentResolution,
+      canStreamCopy: targetMatchesSegments,
+      audioTracks: clip.audioTracks.length
+    });
+  }
+
+  if (targetMatchesSegments) {
+    const concatListPath = join(dirname(clip.filePath), `${parse(clip.filePath).name}.concat.txt`);
+    const concatList = segmentFiles
+      .map((file) => `file '${file.replace(/'/g, "'\\''")}'`)
+      .join("\n");
+    try {
+      writeFileSync(concatListPath, concatList);
+      const copyStartedAt = saveTimingNowMs();
+      const ffmpeg = await runFfmpeg([
+        "-y",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", concatListPath,
+        "-c", "copy",
+        "-movflags", "+faststart",
+        clip.filePath
+      ]);
+      if (saveTimingId) {
+        logSaveTiming(saveTimingId, "stitch.ffmpeg", copyStartedAt, { ok: ffmpeg.ok, mode: "copy" });
+      }
+      try {
+        unlinkSync(concatListPath);
+      } catch {
+        // Best effort cleanup.
+      }
+      if (ffmpeg.ok && existsSync(clip.filePath)) {
+        for (const file of segmentFiles) {
+          try {
+            unlinkSync(file);
+          } catch {
+            // Best effort cleanup; the stitched clip is already written.
+          }
+        }
+        clip.segmentFiles = undefined;
+        clip.segmentResolutions = undefined;
+        clip.resolution = `${targetWidth}x${targetHeight}`;
+        if (saveTimingId) logSaveTiming(saveTimingId, "stitch.total", totalStartedAt, { ok: true, mode: "copy" });
+        return { ok: true, message: "Stitched segmented video with stream copy." };
+      }
+      try {
+        if (existsSync(clip.filePath)) unlinkSync(clip.filePath);
+      } catch {
+        // Fall back to re-encoding below.
+      }
+    } catch (error) {
+      if (saveTimingId) {
+        logSaveTiming(saveTimingId, "stitch.copy_fallback", totalStartedAt, {
+          reason: error instanceof Error ? error.message : "concat_list_failed"
+        });
+      }
+    }
+  }
+
   const canUseGpuScale =
     segmentResolutions.length === segmentFiles.length &&
     segmentResolutions.every((resolution) =>
       resolution.width > 0 &&
       resolution.height > 0 &&
       resolution.width * targetHeight === resolution.height * targetWidth
-    );
+  );
+  const filterStartedAt = saveTimingNowMs();
   const filterSupport = canUseGpuScale ? await queryFfmpegFilterSupport() : { scaleCuda: false, scaleNpp: false };
+  if (saveTimingId) {
+    logSaveTiming(saveTimingId, "stitch.filter_support", filterStartedAt, {
+      canUseGpuScale,
+      scaleCuda: filterSupport.scaleCuda,
+      scaleNpp: filterSupport.scaleNpp
+    });
+  }
 
   const buildArgs = (mode: "cuda" | "npp" | "cpu"): string[] => {
     const args = ["-y", "-hide_banner", "-loglevel", "error"];
@@ -963,7 +1151,11 @@ async function stitchSegmentedClip(
   let usedMode: "cuda" | "npp" | "cpu" = "cpu";
   for (const mode of modes) {
     usedMode = mode;
+    const ffmpegStartedAt = saveTimingNowMs();
     ffmpeg = await runFfmpeg(buildArgs(mode));
+    if (saveTimingId) {
+      logSaveTiming(saveTimingId, "stitch.ffmpeg", ffmpegStartedAt, { ok: ffmpeg.ok, mode });
+    }
     if (ffmpeg.ok && existsSync(clip.filePath)) break;
     try {
       if (existsSync(clip.filePath)) unlinkSync(clip.filePath);
@@ -971,7 +1163,10 @@ async function stitchSegmentedClip(
       // Retry cleanup is best effort.
     }
   }
-  if (!ffmpeg.ok || !existsSync(clip.filePath)) return { ok: ffmpeg.ok, message: ffmpeg.message };
+  if (!ffmpeg.ok || !existsSync(clip.filePath)) {
+    if (saveTimingId) logSaveTiming(saveTimingId, "stitch.total", totalStartedAt, { ok: false, mode: usedMode, reason: ffmpeg.message });
+    return { ok: ffmpeg.ok, message: ffmpeg.message };
+  }
 
   for (const file of segmentFiles) {
     try {
@@ -983,6 +1178,7 @@ async function stitchSegmentedClip(
   clip.segmentFiles = undefined;
   clip.segmentResolutions = undefined;
   clip.resolution = `${targetWidth}x${targetHeight}`;
+  if (saveTimingId) logSaveTiming(saveTimingId, "stitch.total", totalStartedAt, { ok: true, mode: usedMode });
   return { ok: true, message: usedMode === "cpu" ? "Stitched segmented video." : `Stitched segmented video with GPU ${usedMode} scaling.` };
 }
 
@@ -1055,8 +1251,8 @@ function registerHotkey(settings: ClipSettings): string | null {
 
   let registered = false;
   try {
-    registered = globalShortcut.register(accelerator, async () => {
-      await saveClipAndRecord(readSettings().clipLengthSeconds);
+    registered = globalShortcut.register(accelerator, () => {
+      triggerSaveClipFromBackground();
     });
   } catch {
     registered = false;
@@ -1085,87 +1281,155 @@ function writeClips(clips: ClipRecord[]): void {
   writeFileSync(clipsPath(), JSON.stringify(clips, null, 2));
 }
 
+function triggerSaveClipFromBackground(): void {
+  void saveClipAndRecord(readSettings().clipLengthSeconds).then((result) => {
+    if (!result.ok) console.warn(`[clip] ${result.message}`);
+  }).catch((error) => {
+    console.error("Failed to save clip:", error);
+  });
+}
+
 async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeconds): Promise<SaveClipResult> {
-  const settings = readSettings();
-  if (settings.clipSound && settings.clipSound !== 'none') {
-    mainWindow?.webContents.send("play-sound", settings.clipSound);
-  }
-  
-  if (settings.showNotification && notificationWindow) {
-    showNotificationWindow(settings.notificationPosition || 'top-right');
-    notificationWindow.webContents.send("show-notification", "", settings.notificationPosition || 'top-right');
+  const saveId = `save-${Date.now().toString(36)}`;
+  if (saveClipInProgress) {
+    logSaveTimingLine(`[save-timing] id=${saveId} stage=rejected reason="in_progress"`);
+    return { ok: false, message: "A clip is already being saved. Wait for it to finish before saving another one." };
   }
 
-  const result = await engine.saveClip(durationSeconds);
-  if (result.ok && result.clip) {
-    const presetResolution = recordingOutputResolution(settings);
-    const targetResolution = presetResolution.width > 0 && presetResolution.height > 0
-      ? presetResolution
-      : parseResolutionLabel(result.clip.recommendedResolution);
-    const targetResolutionLabel = targetResolution.width > 0 && targetResolution.height > 0
-      ? `${targetResolution.width}x${targetResolution.height}`
-      : "";
-    const reencodeBitrateMbps = settings.autoBitrate
-      ? autoBitrateForResolution(targetResolution.width > 0 && targetResolution.height > 0 ? targetResolution : parseResolutionLabel(result.clip.resolution), settings.fps, settings.maxAutoBitrateMbps)
-      : settings.bitrateMbps;
+  saveClipInProgress = true;
+  const totalStartedAt = saveTimingNowMs();
+  let finalStatus = "unknown";
+  try {
+    const settings = readSettings();
+    logSaveTiming(saveId, "start", totalStartedAt, {
+      durationSeconds,
+      resolutionPreset: settings.resolutionPreset,
+      fps: settings.fps,
+      audioSources: settings.audioSources.filter((source) => source.enabled).length
+    });
 
-    if (result.clip.segmentFiles && result.clip.segmentFiles.length > 1) {
-      const stitchResult = await stitchSegmentedClip(result.clip, targetResolution, reencodeBitrateMbps);
-      result.message = `${result.message} ${stitchResult.message}`;
-      if (!stitchResult.ok) {
-        result.ok = false;
-        return result;
-      }
+    if (settings.clipSound && settings.clipSound !== "none") {
+      mainWindow?.webContents.send("play-sound", settings.clipSound);
     }
 
-    const actualResolution = parseResolutionLabel(result.clip.resolution);
-    const processResult = await processClipFile(result.clip.filePath, targetResolution, actualResolution, reencodeBitrateMbps, result.clip.audioTracks);
-    
-    if (processResult.ok) {
-      if (targetResolutionLabel) {
-        result.clip.resolution = targetResolutionLabel;
-      }
-      if (processResult.tracksUpdated) {
-        result.clip.audioTracks = processResult.newTracks;
-      }
-      result.message = `${result.message} ${processResult.message}`;
-    } else {
-      result.message = `${result.message} Processing failed: ${processResult.message}`;
+    if (settings.showNotification && notificationWindow) {
+      showNotificationWindow(settings.notificationPosition || "top-right");
+      notificationWindow.webContents.send("show-notification", "", settings.notificationPosition || "top-right", "Saving clip...");
     }
 
-    let gameFolder = result.clip.gameOrApp || "Other";
-    const lowerGame = gameFolder.toLowerCase();
-    
-    if (lowerGame.includes("explorer") || lowerGame.includes("desktop")) {
-      gameFolder = "Explorer";
-    } else if (!result.clip.isGame) {
-      gameFolder = "Apps";
-    } else {
-      gameFolder = gameFolder.replace(/[\\/:*?"<>|]/g, "_").trim() || "Other";
-    }
+    const engineStartedAt = saveTimingNowMs();
+    const result = await engine.saveClip(durationSeconds);
+    logSaveTiming(saveId, "engine.saveClip", engineStartedAt, { ok: result.ok });
+    if (result.ok && result.clip) {
+      const presetResolution = recordingOutputResolution(settings);
+      const targetResolution = presetResolution.width > 0 && presetResolution.height > 0
+        ? presetResolution
+        : parseResolutionLabel(result.clip.recommendedResolution);
+      const targetResolutionLabel = targetResolution.width > 0 && targetResolution.height > 0
+        ? `${targetResolution.width}x${targetResolution.height}`
+        : "";
+      const reencodeBitrateMbps = settings.autoBitrate
+        ? autoBitrateForResolution(targetResolution.width > 0 && targetResolution.height > 0 ? targetResolution : parseResolutionLabel(result.clip.resolution), settings.fps, settings.maxAutoBitrateMbps)
+        : settings.bitrateMbps;
 
-    const currentDir = dirname(result.clip.filePath);
-    const newDir = join(currentDir, gameFolder);
-    if (!existsSync(newDir)) {
-      try { mkdirSync(newDir, { recursive: true }); } catch (e) { /* ignore */ }
-    }
-    
-    const newFilePath = join(newDir, basename(result.clip.filePath));
-    if (newFilePath !== result.clip.filePath && existsSync(result.clip.filePath)) {
-      try {
-        renameSync(result.clip.filePath, newFilePath);
-        result.clip.filePath = newFilePath;
-      } catch (e) {
-        console.error("Failed to move clip to game subfolder:", e);
+      if (result.clip.segmentFiles && result.clip.segmentFiles.length > 1) {
+        const stitchStartedAt = saveTimingNowMs();
+        const stitchResult = await stitchSegmentedClip(result.clip, targetResolution, reencodeBitrateMbps, saveId);
+        logSaveTiming(saveId, "stitch.call", stitchStartedAt, { ok: stitchResult.ok });
+        result.message = `${result.message} ${stitchResult.message}`;
+        if (!stitchResult.ok) {
+          result.ok = false;
+          finalStatus = "stitch_failed";
+          return result;
+        }
       }
+
+      const actualResolution = parseResolutionLabel(result.clip.resolution);
+      const processStartedAt = saveTimingNowMs();
+      const processResult = await processClipFile(result.clip.filePath, targetResolution, actualResolution, reencodeBitrateMbps, result.clip.audioTracks, saveId);
+      logSaveTiming(saveId, "postprocess.call", processStartedAt, { ok: processResult.ok });
+
+      if (processResult.ok) {
+        if (targetResolutionLabel) {
+          result.clip.resolution = targetResolutionLabel;
+        }
+        if (processResult.tracksUpdated) {
+          result.clip.audioTracks = processResult.newTracks;
+        }
+        result.message = `${result.message} ${processResult.message}`;
+      } else {
+        result.message = `${result.message} Processing failed: ${processResult.message}`;
+      }
+
+      const finalizeStartedAt = saveTimingNowMs();
+      let gameFolder = result.clip.gameOrApp || "Other";
+      const lowerGame = gameFolder.toLowerCase();
+
+      if (lowerGame.includes("explorer") || lowerGame.includes("desktop")) {
+        gameFolder = "Explorer";
+      } else if (!result.clip.isGame) {
+        gameFolder = "Apps";
+      } else {
+        gameFolder = gameFolder.replace(/[\\/:*?"<>|]/g, "_").trim() || "Other";
+      }
+
+      const currentDir = dirname(result.clip.filePath);
+      const newDir = join(currentDir, gameFolder);
+      if (!existsSync(newDir)) {
+        try { mkdirSync(newDir, { recursive: true }); } catch (e) { /* ignore */ }
+      }
+
+      const newFilePath = join(newDir, basename(result.clip.filePath));
+      const shouldMoveClip = newFilePath !== result.clip.filePath && existsSync(result.clip.filePath);
+      let movedClip = false;
+      if (shouldMoveClip) {
+        try {
+          renameSync(result.clip.filePath, newFilePath);
+          result.clip.filePath = newFilePath;
+          movedClip = true;
+        } catch (e) {
+          console.error("Failed to move clip to game subfolder:", e);
+        }
+      }
+
+      const clips = readClips();
+      clips.unshift(result.clip);
+      writeClips(clips);
+      mainWindow?.webContents.send("library:changed");
+      logSaveTiming(saveId, "finalize", finalizeStartedAt, {
+        moved: movedClip,
+        filePath: result.clip.filePath
+      });
+
+      if (settings.showNotification && notificationWindow) {
+        showNotificationWindow(settings.notificationPosition || "top-right");
+        notificationWindow.webContents.send("show-notification", "", settings.notificationPosition || "top-right", "Clip saved!");
+      }
+    } else if (settings.showNotification && notificationWindow) {
+      showNotificationWindow(settings.notificationPosition || "top-right");
+      notificationWindow.webContents.send("show-notification", "", settings.notificationPosition || "top-right", "Clip failed");
     }
-    
-    const clips = readClips();
-    clips.unshift(result.clip);
-    writeClips(clips);
-    mainWindow?.webContents.send("library:changed");
+    finalStatus = result.ok ? "ok" : "failed";
+    return result;
+  } catch (error) {
+    console.error("Failed to save clip:", error);
+    finalStatus = "exception";
+    const settings = readSettings();
+    if (settings.showNotification && notificationWindow) {
+      showNotificationWindow(settings.notificationPosition || "top-right");
+      notificationWindow.webContents.send("show-notification", "", settings.notificationPosition || "top-right", "Clip failed");
+    }
+    const message = error instanceof Error ? error.message : "Could not save clip.";
+    return {
+      ok: false,
+      message: message.includes("Engine request timed out: saveClip")
+        ? "Clip save is taking longer than expected. Wait a moment and try again; the engine may still be finishing the previous save."
+        : message
+    };
+  } finally {
+    logSaveTiming(saveId, "total", totalStartedAt, { status: finalStatus });
+    saveClipInProgress = false;
   }
-  return result;
 }
 
 function resolveEnginePath(): string | undefined {
@@ -1300,7 +1564,7 @@ function createTray(): void {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Open Clipture", click: () => mainWindow?.show() },
-      { label: "Save Clip", click: async () => saveClipAndRecord(readSettings().clipLengthSeconds) },
+      { label: "Save Clip", click: () => triggerSaveClipFromBackground() },
       { label: "Open Clips Folder", click: () => shell.openPath(readSettings().saveFolder) },
       { type: "separator" },
       { label: "Exit", click: () => app.quit() }
