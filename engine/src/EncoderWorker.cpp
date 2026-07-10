@@ -14,6 +14,7 @@
 #include <memory>
 #include <sstream>
 #include <span>
+#include <iostream>
 #include <vector>
 
 namespace clipture {
@@ -82,6 +83,24 @@ GUID nvencPresetGuid(int preset) {
         case 5: return NV_ENC_PRESET_P5_GUID;
         case 3:
         default: return NV_ENC_PRESET_P3_GUID;
+    }
+}
+
+GUID legacyNvencPresetGuid(int preset) {
+    static const GUID NV_ENC_PRESET_LEGACY_LOW_LATENCY_DEFAULT_GUID = {0x49df21c5, 0x6afa, 0x47d4, {0xb1, 0x59, 0x5f, 0x4a, 0xbb, 0x11, 0xbb, 0xcb}};
+    static const GUID NV_ENC_PRESET_LEGACY_LOW_LATENCY_HQ_GUID = {0xa70176cd, 0xa9bc, 0x41e0, {0xb1, 0x76, 0xb7, 0xd2, 0x72, 0x24, 0xb5, 0x82}};
+    static const GUID NV_ENC_PRESET_LEGACY_LOW_LATENCY_HP_GUID = {0xc5f733b9, 0xea97, 0x4cf9, {0xbe, 0xca, 0xa4, 0x6b, 0xa6, 0x7f, 0xbe, 0x8a}};
+    
+    switch (std::clamp(preset, 1, 5)) {
+        case 1:
+        case 2:
+            return NV_ENC_PRESET_LEGACY_LOW_LATENCY_HP_GUID;
+        case 3:
+        case 4:
+            return NV_ENC_PRESET_LEGACY_LOW_LATENCY_DEFAULT_GUID;
+        case 5:
+        default:
+            return NV_ENC_PRESET_LEGACY_LOW_LATENCY_HQ_GUID;
     }
 }
 
@@ -176,9 +195,22 @@ public:
             presetGuid,
             NV_ENC_TUNING_INFO_LOW_LATENCY,
             &presetConfig);
+        
+        bool usingLegacyFallback = false;
         if (nvStatus != NV_ENC_SUCCESS) {
-            status = "NvEncGetEncodePresetConfigEx failed: " + statusName(nvStatus);
-            return false;
+            // Fallback for older Pascal GPUs or older drivers
+            usingLegacyFallback = true;
+            presetGuid_ = legacyNvencPresetGuid(boundedPreset);
+            nvStatus = funcs_.nvEncGetEncodePresetConfigEx(
+                encoder_,
+                NV_ENC_CODEC_H264_GUID,
+                presetGuid_,
+                NV_ENC_TUNING_INFO_UNDEFINED,
+                &presetConfig);
+            if (nvStatus != NV_ENC_SUCCESS) {
+                status = "NvEncGetEncodePresetConfigEx (fallback) failed: " + statusName(nvStatus);
+                return false;
+            }
         }
 
         encodeConfig_ = presetConfig.presetCfg;
@@ -197,7 +229,7 @@ public:
         initParams_ = {};
         initParams_.version = NV_ENC_INITIALIZE_PARAMS_VER;
         initParams_.encodeGUID = NV_ENC_CODEC_H264_GUID;
-        initParams_.presetGUID = presetGuid;
+        initParams_.presetGUID = presetGuid_;
         initParams_.encodeWidth = static_cast<uint32_t>(std::max(1, outputWidth));
         initParams_.encodeHeight = static_cast<uint32_t>(std::max(1, outputHeight));
         initParams_.darWidth = initParams_.encodeWidth;
@@ -207,7 +239,7 @@ public:
         asyncEnabled_ = true;
         initParams_.enableEncodeAsync = asyncEnabled_ ? 1 : 0;
         initParams_.enablePTD = 1;
-        initParams_.tuningInfo = NV_ENC_TUNING_INFO_LOW_LATENCY;
+        initParams_.tuningInfo = usingLegacyFallback ? NV_ENC_TUNING_INFO_UNDEFINED : NV_ENC_TUNING_INFO_LOW_LATENCY;
         initParams_.maxEncodeWidth = static_cast<uint32_t>(maxEncodeWidth_);
         initParams_.maxEncodeHeight = static_cast<uint32_t>(maxEncodeHeight_);
         initParams_.encodeConfig = &encodeConfig_;
