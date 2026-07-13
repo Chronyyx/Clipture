@@ -50,6 +50,20 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 }
 )";
 
+bool sameTextureDesc(const D3D11_TEXTURE2D_DESC& a, const D3D11_TEXTURE2D_DESC& b) {
+    return a.Width == b.Width &&
+        a.Height == b.Height &&
+        a.MipLevels == b.MipLevels &&
+        a.ArraySize == b.ArraySize &&
+        a.Format == b.Format &&
+        a.SampleDesc.Count == b.SampleDesc.Count &&
+        a.SampleDesc.Quality == b.SampleDesc.Quality &&
+        a.Usage == b.Usage &&
+        a.BindFlags == b.BindFlags &&
+        a.CPUAccessFlags == b.CPUAccessFlags &&
+        a.MiscFlags == b.MiscFlags;
+}
+
 Tonemapper::Tonemapper(Microsoft::WRL::ComPtr<ID3D11Device> device)
     : device_(device) {
     device_->GetImmediateContext(&context_);
@@ -119,45 +133,71 @@ bool Tonemapper::Process(
         errorMsg = "Tonemapper not initialized";
         return false;
     }
-
-    // Create SRV for input
-    D3D11_TEXTURE2D_DESC inDesc;
-    inputFloat16->GetDesc(&inDesc);
-    
-    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Format = inDesc.Format;
-    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels = 1;
-
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> inputSRV;
-    HRESULT hr = device_->CreateShaderResourceView(inputFloat16.Get(), &srvDesc, &inputSRV);
-    if (FAILED(hr)) {
-        errorMsg = "CreateShaderResourceView failed: " + std::to_string(hr);
+    if (!inputFloat16 || !outputUnorm8) {
+        errorMsg = "Tonemapper input or output texture is null";
         return false;
     }
 
-    // Create UAV for output
+    D3D11_TEXTURE2D_DESC inDesc;
+    inputFloat16->GetDesc(&inDesc);
+    bool recreatedInputView = false;
+    if (!cachedInputSRV_ ||
+        cachedInputTexture_.Get() != inputFloat16.Get() ||
+        !sameTextureDesc(cachedInputDesc_, inDesc)) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = inDesc.Format;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> inputSRV;
+        HRESULT hr = device_->CreateShaderResourceView(inputFloat16.Get(), &srvDesc, &inputSRV);
+        if (FAILED(hr)) {
+            errorMsg = "CreateShaderResourceView failed: " + std::to_string(hr);
+            return false;
+        }
+        cachedInputTexture_ = inputFloat16;
+        cachedInputSRV_ = inputSRV;
+        cachedInputDesc_ = inDesc;
+        recreatedInputView = true;
+    }
+
     D3D11_TEXTURE2D_DESC outDesc;
     outputUnorm8->GetDesc(&outDesc);
+    bool recreatedOutputView = false;
+    if (!cachedOutputUAV_ ||
+        cachedOutputTexture_.Get() != outputUnorm8.Get() ||
+        !sameTextureDesc(cachedOutputDesc_, outDesc)) {
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+        uavDesc.Format = outDesc.Format;
+        uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 
-    D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-    uavDesc.Format = outDesc.Format;
-    uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+        Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> outputUAV;
+        HRESULT hr = device_->CreateUnorderedAccessView(outputUnorm8.Get(), &uavDesc, &outputUAV);
+        if (FAILED(hr)) {
+            errorMsg = "CreateUnorderedAccessView failed: " + std::to_string(hr);
+            return false;
+        }
+        cachedOutputTexture_ = outputUnorm8;
+        cachedOutputUAV_ = outputUAV;
+        cachedOutputDesc_ = outDesc;
+        recreatedOutputView = true;
+    }
 
-    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> outputUAV;
-    hr = device_->CreateUnorderedAccessView(outputUnorm8.Get(), &uavDesc, &outputUAV);
-    if (FAILED(hr)) {
-        errorMsg = "CreateUnorderedAccessView failed: " + std::to_string(hr);
-        return false;
+    if (recreatedInputView || recreatedOutputView) {
+        std::cerr << "[perf] tonemapper_views"
+                  << " inputRecreated=" << (recreatedInputView ? "true" : "false")
+                  << " outputRecreated=" << (recreatedOutputView ? "true" : "false")
+                  << " size=" << outDesc.Width << "x" << outDesc.Height
+                  << std::endl;
     }
 
     // Dispatch compute shader
     context_->CSSetShader(computeShader_.Get(), nullptr, 0);
     
-    ID3D11ShaderResourceView* srvs[] = { inputSRV.Get() };
+    ID3D11ShaderResourceView* srvs[] = { cachedInputSRV_.Get() };
     context_->CSSetShaderResources(0, 1, srvs);
     
-    ID3D11UnorderedAccessView* uavs[] = { outputUAV.Get() };
+    ID3D11UnorderedAccessView* uavs[] = { cachedOutputUAV_.Get() };
     context_->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
     // Calculate thread groups (8x8 threads per group)

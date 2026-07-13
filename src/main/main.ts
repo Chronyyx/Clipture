@@ -1322,9 +1322,12 @@ async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeco
     logSaveTiming(saveId, "engine.saveClip", engineStartedAt, { ok: result.ok });
     if (result.ok && result.clip) {
       const presetResolution = recordingOutputResolution(settings);
+      const actualResolution = parseResolutionLabel(result.clip.resolution);
       const targetResolution = presetResolution.width > 0 && presetResolution.height > 0
         ? presetResolution
-        : parseResolutionLabel(result.clip.recommendedResolution);
+        : actualResolution.width > 0 && actualResolution.height > 0
+          ? actualResolution
+          : parseResolutionLabel(result.clip.recommendedResolution);
       const targetResolutionLabel = targetResolution.width > 0 && targetResolution.height > 0
         ? `${targetResolution.width}x${targetResolution.height}`
         : "";
@@ -1344,7 +1347,6 @@ async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeco
         }
       }
 
-      const actualResolution = parseResolutionLabel(result.clip.resolution);
       const processStartedAt = saveTimingNowMs();
       const processResult = await processClipFile(result.clip.filePath, targetResolution, actualResolution, reencodeBitrateMbps, result.clip.audioTracks, saveId);
       logSaveTiming(saveId, "postprocess.call", processStartedAt, { ok: processResult.ok });

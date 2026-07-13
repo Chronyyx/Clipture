@@ -300,7 +300,7 @@ Diagnostics collectDiagnostics() {
     diagnostics.microphoneDevice = defaultEndpointName(eCapture);
     diagnostics.nvencAvailable = nvenc;
     diagnostics.activeEncoder = nvenc ? EncoderName::Nvenc : EncoderName::Unavailable;
-    diagnostics.encoderMode = nvenc ? "NVENC async P3 (4 output buffers)" : "Unavailable";
+    diagnostics.encoderMode = nvenc ? "NVENC P3 (async with sync compatibility fallback)" : "Unavailable";
     diagnostics.hardwareAcceleration = nvenc;
     diagnostics.degraded = !nvenc;
     diagnostics.status = nvenc

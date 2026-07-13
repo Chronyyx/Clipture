@@ -20,7 +20,20 @@
 namespace clipture {
 namespace {
 
+constexpr uint32_t kBundledNvencHeaderApiMajor = NVENCAPI_MAJOR_VERSION;
+constexpr uint32_t kBundledNvencHeaderApiMinor = NVENCAPI_MINOR_VERSION;
+constexpr uint32_t kBundledNvencHeaderApiRaw = NVENCAPI_VERSION;
+constexpr uint32_t kNvencStructSignature = 0x7u;
+constexpr uint32_t kNvencExtendedStructFlag = 1u << 31;
+
 using NvEncodeApiCreateInstance = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
+using NvEncodeApiGetMaxSupportedVersion = NVENCSTATUS(NVENCAPI*)(uint32_t*);
+
+std::string hex32(uint32_t value) {
+    std::ostringstream out;
+    out << "0x" << std::hex << value;
+    return out.str();
+}
 
 std::string statusName(NVENCSTATUS status) {
     switch (status) {
@@ -39,9 +52,99 @@ std::string statusName(NVENCSTATUS status) {
         case NV_ENC_ERR_UNSUPPORTED_PARAM: return "NV_ENC_ERR_UNSUPPORTED_PARAM";
         case NV_ENC_ERR_LOCK_BUSY: return "NV_ENC_ERR_LOCK_BUSY";
         case NV_ENC_ERR_NOT_ENOUGH_BUFFER: return "NV_ENC_ERR_NOT_ENOUGH_BUFFER";
+        case NV_ENC_ERR_INVALID_VERSION: return "NV_ENC_ERR_INVALID_VERSION";
+        case NV_ENC_ERR_MAP_FAILED: return "NV_ENC_ERR_MAP_FAILED";
+        case NV_ENC_ERR_NEED_MORE_INPUT: return "NV_ENC_ERR_NEED_MORE_INPUT";
+        case NV_ENC_ERR_ENCODER_BUSY: return "NV_ENC_ERR_ENCODER_BUSY";
+        case NV_ENC_ERR_EVENT_NOT_REGISTERD: return "NV_ENC_ERR_EVENT_NOT_REGISTERD";
         case NV_ENC_ERR_GENERIC: return "NV_ENC_ERR_GENERIC";
-        default: return "NVENC error " + std::to_string(static_cast<int>(status));
+        case NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY: return "NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY";
+        case NV_ENC_ERR_UNIMPLEMENTED: return "NV_ENC_ERR_UNIMPLEMENTED";
+        case NV_ENC_ERR_RESOURCE_REGISTER_FAILED: return "NV_ENC_ERR_RESOURCE_REGISTER_FAILED";
+        case NV_ENC_ERR_RESOURCE_NOT_REGISTERED: return "NV_ENC_ERR_RESOURCE_NOT_REGISTERED";
+        case NV_ENC_ERR_RESOURCE_NOT_MAPPED: return "NV_ENC_ERR_RESOURCE_NOT_MAPPED";
+        case NV_ENC_ERR_NEED_MORE_OUTPUT: return "NV_ENC_ERR_NEED_MORE_OUTPUT";
+        default: return "NVENC_UNKNOWN_STATUS";
     }
+}
+
+std::string statusDetails(NVENCSTATUS status) {
+    std::ostringstream out;
+    const auto code = static_cast<uint32_t>(status);
+    out << statusName(status)
+        << "(code=" << static_cast<int>(status)
+        << ", raw=" << hex32(code) << ")";
+    return out.str();
+}
+
+uint32_t nvencDriverApiMajor(uint32_t version) {
+    return version >> 4;
+}
+
+uint32_t nvencDriverApiMinor(uint32_t version) {
+    return version & 0x0Fu;
+}
+
+std::string nvencDriverApiVersionName(uint32_t version) {
+    return std::to_string(nvencDriverApiMajor(version)) + "." + std::to_string(nvencDriverApiMinor(version));
+}
+
+uint32_t nvencDriverApiVersionRaw(uint32_t major, uint32_t minor) {
+    return (major << 4) | minor;
+}
+
+uint32_t nvencHeaderApiVersionRaw(uint32_t major, uint32_t minor) {
+    return major | (minor << 24);
+}
+
+uint32_t nvencHeaderApiMajor(uint32_t version) {
+    return version & 0x00FFFFFFu;
+}
+
+uint32_t nvencHeaderApiMinor(uint32_t version) {
+    return version >> 24;
+}
+
+std::string nvencHeaderApiVersionName(uint32_t version) {
+    return std::to_string(nvencHeaderApiMajor(version)) + "." +
+        std::to_string(nvencHeaderApiMinor(version));
+}
+
+std::string nvencDriverApiVersionLabel(uint32_t version) {
+    if (version == 0) return "unknown";
+    return nvencDriverApiVersionName(version) + "(" + hex32(version) + ")";
+}
+
+std::string nvencHeaderApiVersionLabel(uint32_t version) {
+    return nvencHeaderApiVersionName(version) + "(" + hex32(version) + ")";
+}
+
+bool chooseNvencApiVersion(uint32_t driverMaxVersion, uint32_t& apiVersion, std::string& reason) {
+    if (driverMaxVersion == 0) {
+        reason = "NVIDIA driver did not report a maximum NVENC API version.";
+        return false;
+    }
+
+    const uint32_t driverMajor = nvencDriverApiMajor(driverMaxVersion);
+    const uint32_t driverMinor = nvencDriverApiMinor(driverMaxVersion);
+    if (driverMajor < kBundledNvencHeaderApiMajor) {
+        reason = "NVIDIA driver NVENC API " + nvencDriverApiVersionLabel(driverMaxVersion) +
+            " is older than this build requires (" + std::to_string(kBundledNvencHeaderApiMajor) + ".0+).";
+        return false;
+    }
+
+    const uint32_t selectedMinor = driverMajor > kBundledNvencHeaderApiMajor
+        ? kBundledNvencHeaderApiMinor
+        : std::min(driverMinor, kBundledNvencHeaderApiMinor);
+    apiVersion = nvencHeaderApiVersionRaw(kBundledNvencHeaderApiMajor, selectedMinor);
+    reason = "driverMaxApi=" + nvencDriverApiVersionLabel(driverMaxVersion) +
+        " selectedApi=" + nvencHeaderApiVersionLabel(apiVersion);
+    return true;
+}
+
+uint32_t nvencStructVersionForApi(uint32_t version, uint32_t apiVersion, bool extended = false) {
+    return apiVersion | (version << 16) | (kNvencStructSignature << 28) |
+        (extended ? kNvencExtendedStructFlag : 0u);
 }
 
 bool startCodeAt(std::span<const std::byte> data, std::size_t offset, std::size_t& size) {
@@ -115,6 +218,48 @@ std::string nvencPresetName(int preset) {
     }
 }
 
+std::string nvencTuningName(NV_ENC_TUNING_INFO tuning) {
+    switch (tuning) {
+        case NV_ENC_TUNING_INFO_LOW_LATENCY: return "low-latency";
+        case NV_ENC_TUNING_INFO_HIGH_QUALITY: return "high-quality";
+        case NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY: return "ultra-low-latency";
+        case NV_ENC_TUNING_INFO_LOSSLESS: return "lossless";
+        case NV_ENC_TUNING_INFO_ULTRA_HIGH_QUALITY: return "ultra-high-quality";
+        case NV_ENC_TUNING_INFO_UNDEFINED:
+        default: return "undefined";
+    }
+}
+
+struct EncodeDimensions {
+    int width = 0;
+    int height = 0;
+    bool capped = false;
+};
+
+int evenEncodeDimension(int value) {
+    return std::max(2, value & ~1);
+}
+
+EncodeDimensions fitEncodeDimensions(int width, int height, int capWidth, int capHeight) {
+    EncodeDimensions result {
+        evenEncodeDimension(std::max(1, width)),
+        evenEncodeDimension(std::max(1, height)),
+        false,
+    };
+
+    if (capWidth > 0 && result.width > capWidth) {
+        result.height = evenEncodeDimension((result.height * capWidth) / result.width);
+        result.width = evenEncodeDimension(capWidth);
+        result.capped = true;
+    }
+    if (capHeight > 0 && result.height > capHeight) {
+        result.width = evenEncodeDimension((result.width * capHeight) / result.height);
+        result.height = evenEncodeDimension(capHeight);
+        result.capped = true;
+    }
+    return result;
+}
+
 class NvencSession {
 public:
     explicit NvencSession(PacketRingBuffer& packetPool)
@@ -144,140 +289,252 @@ public:
             return false;
         }
 
-        module_ = LoadLibraryW(L"nvEncodeAPI64.dll");
-        if (!module_) module_ = LoadLibraryW(L"nvEncodeAPI.dll");
+        if (!module_) {
+            module_ = LoadLibraryW(L"nvEncodeAPI64.dll");
+            if (!module_) module_ = LoadLibraryW(L"nvEncodeAPI.dll");
+        }
         if (!module_) {
             status = "NVENC initialize failed: nvEncodeAPI DLL not found.";
             return false;
         }
-
         auto createInstance = reinterpret_cast<NvEncodeApiCreateInstance>(GetProcAddress(module_, "NvEncodeAPICreateInstance"));
         if (!createInstance) {
             status = "NVENC initialize failed: NvEncodeAPICreateInstance missing.";
             return false;
         }
-
-        funcs_ = {};
-        funcs_.version = NV_ENCODE_API_FUNCTION_LIST_VER;
-        NVENCSTATUS nvStatus = createInstance(&funcs_);
-        if (nvStatus != NV_ENC_SUCCESS) {
-            status = "NvEncodeAPICreateInstance failed: " + statusName(nvStatus);
+        const auto getMaxSupportedVersion = reinterpret_cast<NvEncodeApiGetMaxSupportedVersion>(
+            GetProcAddress(module_, "NvEncodeAPIGetMaxSupportedVersion"));
+        uint32_t driverMaxApiVersion = 0;
+        if (getMaxSupportedVersion) {
+            const NVENCSTATUS versionStatus = getMaxSupportedVersion(&driverMaxApiVersion);
+            if (versionStatus != NV_ENC_SUCCESS) {
+                driverMaxApiVersion = 0;
+                if (!initFailureLogged_) {
+                    std::cerr << "[encoder] NvEncodeAPIGetMaxSupportedVersion failed: "
+                              << statusDetails(versionStatus) << std::endl;
+                }
+            }
+        }
+        uint32_t selectedApiVersion = 0;
+        std::string apiSelection;
+        if (!chooseNvencApiVersion(driverMaxApiVersion, selectedApiVersion, apiSelection)) {
+            status = "NVENC initialize failed: " + apiSelection;
+            if (!initFailureLogged_) {
+                std::cerr << "[encoder] " << status << std::endl;
+                initFailureLogged_ = true;
+            }
             return false;
         }
 
+        apiVersion_ = selectedApiVersion;
+        funcs_ = {};
+        funcs_.version = nvencStructVersionForApi(2, apiVersion_);
+        NVENCSTATUS nvStatus = createInstance(&funcs_);
+        if (nvStatus != NV_ENC_SUCCESS) {
+            status = "NvEncodeAPICreateInstance failed: " + statusDetails(nvStatus) + " " + apiSelection;
+            if (!initFailureLogged_) {
+                std::cerr << "[encoder] " << status << std::endl;
+                initFailureLogged_ = true;
+            }
+            return false;
+        }
+
+        device_.Reset();
         texture->GetDevice(&device_);
         if (!device_) {
             status = "NVENC initialize failed: could not get D3D11 device from captured texture.";
             return false;
         }
 
-        NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS openParams {};
-        openParams.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
-        openParams.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
-        openParams.device = device_.Get();
-        openParams.apiVersion = NVENCAPI_VERSION;
-        nvStatus = funcs_.nvEncOpenEncodeSessionEx(&openParams, &encoder_);
-        if (nvStatus != NV_ENC_SUCCESS) {
-            status = "NvEncOpenEncodeSessionEx failed: " + statusName(nvStatus);
-            return false;
-        }
-
         const int boundedPreset = std::clamp(nvencPreset, 1, 5);
-        presetGuid_ = nvencPresetGuid(boundedPreset);
-        const GUID presetGuid = presetGuid_;
+        struct InitAttempt {
+            GUID presetGuid;
+            NV_ENC_TUNING_INFO tuningInfo;
+            bool async;
+            const char* presetFamily;
+        };
+        const InitAttempt attempts[] = {
+            { nvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_LOW_LATENCY, true, "modern" },
+            { nvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_LOW_LATENCY, false, "modern" },
+            { legacyNvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_UNDEFINED, true, "legacy" },
+            { legacyNvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_UNDEFINED, false, "legacy" },
+        };
+        auto logInitAttemptFailure = [this](const InitAttempt& attempt, const std::string& reason) {
+            if (initFailureLogged_) return;
+            std::cerr << "[encoder] NVENC init attempt failed"
+                      << " presetFamily=" << attempt.presetFamily
+                      << " tuning=" << nvencTuningName(attempt.tuningInfo)
+                      << " async=" << (attempt.async ? "true" : "false")
+                      << " error=\"" << reason << "\""
+                      << std::endl;
+        };
 
-        NV_ENC_PRESET_CONFIG presetConfig {};
-        presetConfig.version = NV_ENC_PRESET_CONFIG_VER;
-        presetConfig.presetCfg.version = NV_ENC_CONFIG_VER;
-        nvStatus = funcs_.nvEncGetEncodePresetConfigEx(
-            encoder_,
-            NV_ENC_CODEC_H264_GUID,
-            presetGuid,
-            NV_ENC_TUNING_INFO_LOW_LATENCY,
-            &presetConfig);
-        
-        bool usingLegacyFallback = false;
-        if (nvStatus != NV_ENC_SUCCESS) {
-            // Fallback for older Pascal GPUs or older drivers
-            usingLegacyFallback = true;
-            presetGuid_ = legacyNvencPresetGuid(boundedPreset);
-            nvStatus = funcs_.nvEncGetEncodePresetConfigEx(
-                encoder_,
-                NV_ENC_CODEC_H264_GUID,
-                presetGuid_,
-                NV_ENC_TUNING_INFO_UNDEFINED,
-                &presetConfig);
+        std::string lastFailure;
+        for (const auto& attempt : attempts) {
+            destroyEncoderResources();
+            apiVersion_ = selectedApiVersion;
+
+            NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS openParams {};
+            openParams.version = nvencStructVersionForApi(1, apiVersion_);
+            openParams.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
+            openParams.device = device_.Get();
+            openParams.apiVersion = apiVersion_;
+            nvStatus = funcs_.nvEncOpenEncodeSessionEx(&openParams, &encoder_);
             if (nvStatus != NV_ENC_SUCCESS) {
-                status = "NvEncGetEncodePresetConfigEx (fallback) failed: " + statusName(nvStatus);
-                return false;
+                lastFailure = "NvEncOpenEncodeSessionEx failed: " + statusDetails(nvStatus) + " " + apiSelection;
+                logInitAttemptFailure(attempt, lastFailure);
+                continue;
             }
+
+            const int asyncSupport = queryEncodeCap(NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT);
+            if (attempt.async && asyncSupport == 0) {
+                lastFailure = "NVENC device reports async encode is unsupported.";
+                logInitAttemptFailure(attempt, lastFailure);
+                continue;
+            }
+            const int capWidth = queryEncodeCap(NV_ENC_CAPS_WIDTH_MAX);
+            const int capHeight = queryEncodeCap(NV_ENC_CAPS_HEIGHT_MAX);
+            const int requestedWidth = std::max(1, outputWidth);
+            const int requestedHeight = std::max(1, outputHeight);
+            const auto encodeSize = fitEncodeDimensions(requestedWidth, requestedHeight, capWidth, capHeight);
+
+            presetGuid_ = attempt.presetGuid;
+
+            NV_ENC_PRESET_CONFIG presetConfig {};
+            presetConfig.version = nvencStructVersionForApi(5, apiVersion_, true);
+            presetConfig.presetCfg.version = nvencStructVersionForApi(9, apiVersion_, true);
+            bool usedLegacyPresetConfigApi = false;
+            nvStatus = funcs_.nvEncGetEncodePresetConfigEx
+                ? funcs_.nvEncGetEncodePresetConfigEx(
+                    encoder_,
+                    NV_ENC_CODEC_H264_GUID,
+                    presetGuid_,
+                    attempt.tuningInfo,
+                    &presetConfig)
+                : NV_ENC_ERR_UNIMPLEMENTED;
+            if (nvStatus != NV_ENC_SUCCESS &&
+                std::strcmp(attempt.presetFamily, "legacy") == 0 &&
+                funcs_.nvEncGetEncodePresetConfig) {
+                presetConfig = {};
+                presetConfig.version = nvencStructVersionForApi(5, apiVersion_, true);
+                presetConfig.presetCfg.version = nvencStructVersionForApi(9, apiVersion_, true);
+                nvStatus = funcs_.nvEncGetEncodePresetConfig(
+                    encoder_,
+                    NV_ENC_CODEC_H264_GUID,
+                    presetGuid_,
+                    &presetConfig);
+                usedLegacyPresetConfigApi = nvStatus == NV_ENC_SUCCESS;
+            }
+            if (nvStatus != NV_ENC_SUCCESS) {
+                lastFailure = "NvEncGetEncodePresetConfigEx failed: " + statusDetails(nvStatus);
+                logInitAttemptFailure(attempt, lastFailure);
+                continue;
+            }
+
+            encodeConfig_ = presetConfig.presetCfg;
+            encodeConfig_.gopLength = static_cast<uint32_t>(std::max(1, fps));
+            encodeConfig_.frameIntervalP = 1;
+            encodeConfig_.frameFieldMode = NV_ENC_PARAMS_FRAME_FIELD_MODE_FRAME;
+            encodeConfig_.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
+            encodeConfig_.rcParams.averageBitRate = static_cast<uint32_t>(std::max(1, bitrateMbps) * 1'000'000);
+            encodeConfig_.rcParams.maxBitRate = encodeConfig_.rcParams.averageBitRate;
+            encodeConfig_.encodeCodecConfig.h264Config.idrPeriod = encodeConfig_.gopLength;
+            encodeConfig_.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
+
+            requestedWidth_ = requestedWidth;
+            requestedHeight_ = requestedHeight;
+            h264CapWidth_ = capWidth > 0 ? capWidth : 0;
+            h264CapHeight_ = capHeight > 0 ? capHeight : 0;
+            maxEncodeWidth_ = std::max(encodeSize.width, maxEncodeWidth);
+            maxEncodeHeight_ = std::max(encodeSize.height, maxEncodeHeight);
+            if (h264CapWidth_ > 0) maxEncodeWidth_ = std::min(maxEncodeWidth_, h264CapWidth_);
+            if (h264CapHeight_ > 0) maxEncodeHeight_ = std::min(maxEncodeHeight_, h264CapHeight_);
+
+            initParams_ = {};
+            initParams_.version = nvencStructVersionForApi(7, apiVersion_, true);
+            initParams_.encodeGUID = NV_ENC_CODEC_H264_GUID;
+            initParams_.presetGUID = presetGuid_;
+            initParams_.encodeWidth = static_cast<uint32_t>(encodeSize.width);
+            initParams_.encodeHeight = static_cast<uint32_t>(encodeSize.height);
+            initParams_.darWidth = initParams_.encodeWidth;
+            initParams_.darHeight = initParams_.encodeHeight;
+            initParams_.frameRateNum = static_cast<uint32_t>(std::max(1, fps));
+            initParams_.frameRateDen = 1;
+            asyncEnabled_ = attempt.async;
+            initParams_.enableEncodeAsync = asyncEnabled_ ? 1 : 0;
+            initParams_.enablePTD = 1;
+            initParams_.tuningInfo = attempt.tuningInfo;
+            initParams_.maxEncodeWidth = static_cast<uint32_t>(maxEncodeWidth_);
+            initParams_.maxEncodeHeight = static_cast<uint32_t>(maxEncodeHeight_);
+            initParams_.encodeConfig = &encodeConfig_;
+            nvStatus = funcs_.nvEncInitializeEncoder(encoder_, &initParams_);
+            if (nvStatus != NV_ENC_SUCCESS) {
+                lastFailure = "NvEncInitializeEncoder failed: " + statusDetails(nvStatus);
+                logInitAttemptFailure(attempt, lastFailure);
+                continue;
+            }
+
+            if (!createOutputSlots(status)) {
+                lastFailure = status;
+                logInitAttemptFailure(attempt, lastFailure);
+                continue;
+            }
+
+            width_ = encodeSize.width;
+            height_ = encodeSize.height;
+            fps_ = std::max(1, fps);
+            bitrateMbps_ = std::max(1, bitrateMbps);
+            initialized_ = true;
+            initFailureLogged_ = false;
+            status = asyncEnabled_
+                ? "Direct NVENC H.264 async " + nvencPresetName(boundedPreset) + " session initialized."
+                : "Direct NVENC H.264 sync compatibility " + nvencPresetName(boundedPreset) + " session initialized.";
+            if (attempt.presetFamily == std::string("legacy")) {
+                status += " Legacy preset fallback is active.";
+            }
+            if (encodeSize.capped) {
+                status += " Output was fit to NVENC H.264 caps from " +
+                    std::to_string(requestedWidth) + "x" + std::to_string(requestedHeight) +
+                    " to " + std::to_string(width_) + "x" + std::to_string(height_) + ".";
+            }
+            (void)usedLegacyPresetConfigApi;
+            return true;
         }
 
-        encodeConfig_ = presetConfig.presetCfg;
-        encodeConfig_.gopLength = static_cast<uint32_t>(std::max(1, fps));
-        encodeConfig_.frameIntervalP = 1;
-        encodeConfig_.frameFieldMode = NV_ENC_PARAMS_FRAME_FIELD_MODE_FRAME;
-        encodeConfig_.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
-        encodeConfig_.rcParams.averageBitRate = static_cast<uint32_t>(std::max(1, bitrateMbps) * 1'000'000);
-        encodeConfig_.rcParams.maxBitRate = encodeConfig_.rcParams.averageBitRate;
-        encodeConfig_.encodeCodecConfig.h264Config.idrPeriod = encodeConfig_.gopLength;
-        encodeConfig_.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
-
-        maxEncodeWidth_ = std::max(std::max(1, outputWidth), maxEncodeWidth);
-        maxEncodeHeight_ = std::max(std::max(1, outputHeight), maxEncodeHeight);
-
-        initParams_ = {};
-        initParams_.version = NV_ENC_INITIALIZE_PARAMS_VER;
-        initParams_.encodeGUID = NV_ENC_CODEC_H264_GUID;
-        initParams_.presetGUID = presetGuid_;
-        initParams_.encodeWidth = static_cast<uint32_t>(std::max(1, outputWidth));
-        initParams_.encodeHeight = static_cast<uint32_t>(std::max(1, outputHeight));
-        initParams_.darWidth = initParams_.encodeWidth;
-        initParams_.darHeight = initParams_.encodeHeight;
-        initParams_.frameRateNum = static_cast<uint32_t>(std::max(1, fps));
-        initParams_.frameRateDen = 1;
-        asyncEnabled_ = true;
-        initParams_.enableEncodeAsync = asyncEnabled_ ? 1 : 0;
-        initParams_.enablePTD = 1;
-        initParams_.tuningInfo = usingLegacyFallback ? NV_ENC_TUNING_INFO_UNDEFINED : NV_ENC_TUNING_INFO_LOW_LATENCY;
-        initParams_.maxEncodeWidth = static_cast<uint32_t>(maxEncodeWidth_);
-        initParams_.maxEncodeHeight = static_cast<uint32_t>(maxEncodeHeight_);
-        initParams_.encodeConfig = &encodeConfig_;
-        nvStatus = funcs_.nvEncInitializeEncoder(encoder_, &initParams_);
-        if (nvStatus != NV_ENC_SUCCESS) {
-            status = "NvEncInitializeEncoder failed: " + statusName(nvStatus);
-            return false;
+        destroyEncoderResources();
+        status = lastFailure.empty()
+            ? "NVENC initialize failed: no compatible H.264 initialization path worked."
+            : "NVENC initialize failed: no compatible H.264 initialization path worked. Last error: " + lastFailure;
+        if (!initFailureLogged_) {
+            std::cerr << "[encoder] " << status << std::endl;
+            initFailureLogged_ = true;
         }
-
-        if (!createOutputSlots(status)) {
-            return false;
-        }
-
-        width_ = std::max(1, outputWidth);
-        height_ = std::max(1, outputHeight);
-        fps_ = std::max(1, fps);
-        bitrateMbps_ = std::max(1, bitrateMbps);
-        initialized_ = true;
-        status = asyncEnabled_
-            ? "Direct NVENC H.264 async " + nvencPresetName(boundedPreset) + " session initialized."
-            : "Direct NVENC H.264 " + nvencPresetName(boundedPreset) + " session initialized.";
-        return true;
+        return false;
     }
 
     bool needsReconfigure(int outputWidth, int outputHeight, int fps, int bitrateMbps) const {
         if (!initialized_) return false;
-        return width_ != std::max(1, outputWidth) ||
-            height_ != std::max(1, outputHeight) ||
+        return requestedWidth_ != std::max(1, outputWidth) ||
+            requestedHeight_ != std::max(1, outputHeight) ||
             fps_ != std::max(1, fps) ||
             bitrateMbps_ != std::max(1, bitrateMbps);
     }
 
+    int outputWidth() const {
+        return width_;
+    }
+
+    int outputHeight() const {
+        return height_;
+    }
+
     bool canReconfigureTo(int outputWidth, int outputHeight) const {
+        const auto encodeSize = fitEncodeDimensions(outputWidth, outputHeight, h264CapWidth_, h264CapHeight_);
         return initialized_ &&
             outputWidth > 0 &&
             outputHeight > 0 &&
-            outputWidth <= maxEncodeWidth_ &&
-            outputHeight <= maxEncodeHeight_;
+            encodeSize.width <= maxEncodeWidth_ &&
+            encodeSize.height <= maxEncodeHeight_;
     }
 
     bool reconfigure(
@@ -297,6 +554,9 @@ public:
             status = "NVENC reconfigure needs a larger dynamic encode canvas.";
             return false;
         }
+        const int requestedWidth = outputWidth;
+        const int requestedHeight = outputHeight;
+        const auto encodeSize = fitEncodeDimensions(requestedWidth, requestedHeight, h264CapWidth_, h264CapHeight_);
 
         if (!drainAll(packets, status)) {
             return false;
@@ -307,8 +567,8 @@ public:
         encodeConfig_.rcParams.maxBitRate = encodeConfig_.rcParams.averageBitRate;
         encodeConfig_.encodeCodecConfig.h264Config.idrPeriod = encodeConfig_.gopLength;
 
-        initParams_.encodeWidth = static_cast<uint32_t>(outputWidth);
-        initParams_.encodeHeight = static_cast<uint32_t>(outputHeight);
+        initParams_.encodeWidth = static_cast<uint32_t>(encodeSize.width);
+        initParams_.encodeHeight = static_cast<uint32_t>(encodeSize.height);
         initParams_.darWidth = initParams_.encodeWidth;
         initParams_.darHeight = initParams_.encodeHeight;
         initParams_.frameRateNum = static_cast<uint32_t>(fps);
@@ -316,14 +576,14 @@ public:
         initParams_.encodeConfig = &encodeConfig_;
 
         NV_ENC_RECONFIGURE_PARAMS params {};
-        params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+        params.version = nvencStructVersionForApi(2, apiVersion_, true);
         params.reInitEncodeParams = initParams_;
         params.resetEncoder = 1;
         params.forceIDR = 1;
 
         const NVENCSTATUS nvStatus = funcs_.nvEncReconfigureEncoder(encoder_, &params);
         if (nvStatus != NV_ENC_SUCCESS) {
-            status = "NvEncReconfigureEncoder failed: " + statusName(nvStatus);
+            status = "NvEncReconfigureEncoder failed: " + statusDetails(nvStatus);
             return false;
         }
 
@@ -331,12 +591,18 @@ public:
         scaledTexture_.Reset();
         videoProcessor_.Reset();
         videoProcessorEnumerator_.Reset();
-        width_ = outputWidth;
-        height_ = outputHeight;
+        requestedWidth_ = requestedWidth;
+        requestedHeight_ = requestedHeight;
+        width_ = encodeSize.width;
+        height_ = encodeSize.height;
         fps_ = fps;
         bitrateMbps_ = bitrateMbps;
         frameIndex_ = 0;
         status = "Direct NVENC reconfigured output to " + std::to_string(width_) + "x" + std::to_string(height_) + ".";
+        if (encodeSize.capped) {
+            status += " Output was fit to NVENC H.264 caps from " +
+                std::to_string(requestedWidth) + "x" + std::to_string(requestedHeight) + ".";
+        }
         return true;
     }
 
@@ -390,16 +656,16 @@ public:
         }
 
         NV_ENC_MAP_INPUT_RESOURCE mapped {};
-        mapped.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
+        mapped.version = nvencStructVersionForApi(4, apiVersion_);
         mapped.registeredResource = registeredInput->registeredResource;
         NVENCSTATUS nvStatus = funcs_.nvEncMapInputResource(encoder_, &mapped);
         if (nvStatus != NV_ENC_SUCCESS) {
-            status = "NvEncMapInputResource failed: " + statusName(nvStatus);
+            status = "NvEncMapInputResource failed: " + statusDetails(nvStatus);
             return false;
         }
 
         NV_ENC_PIC_PARAMS pic {};
-        pic.version = NV_ENC_PIC_PARAMS_VER;
+        pic.version = nvencStructVersionForApi(7, apiVersion_, true);
         pic.inputWidth = static_cast<uint32_t>(inputFrame.width);
         pic.inputHeight = static_cast<uint32_t>(inputFrame.height);
         pic.inputPitch = static_cast<uint32_t>(inputFrame.width);
@@ -424,7 +690,7 @@ public:
         }
         if (nvStatus != NV_ENC_SUCCESS) {
             funcs_.nvEncUnmapInputResource(encoder_, mapped.mappedResource);
-            status = "NvEncEncodePicture failed: " + statusName(nvStatus);
+            status = "NvEncEncodePicture failed: " + statusDetails(nvStatus);
             return false;
         }
 
@@ -634,10 +900,10 @@ private:
         outputSlots_.resize(outputSlotCount_);
         for (auto& slot : outputSlots_) {
             NV_ENC_CREATE_BITSTREAM_BUFFER bitstream {};
-            bitstream.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
+            bitstream.version = nvencStructVersionForApi(1, apiVersion_);
             NVENCSTATUS nvStatus = funcs_.nvEncCreateBitstreamBuffer(encoder_, &bitstream);
             if (nvStatus != NV_ENC_SUCCESS) {
-                status = "NvEncCreateBitstreamBuffer failed: " + statusName(nvStatus);
+                status = "NvEncCreateBitstreamBuffer failed: " + statusDetails(nvStatus);
                 return false;
             }
             slot.bitstreamBuffer = bitstream.bitstreamBuffer;
@@ -649,18 +915,33 @@ private:
                     return false;
                 }
 
+                if (!funcs_.nvEncRegisterAsyncEvent) {
+                    status = "NVENC async event registration is unavailable in this driver API.";
+                    return false;
+                }
+
                 NV_ENC_EVENT_PARAMS eventParams {};
-                eventParams.version = NV_ENC_EVENT_PARAMS_VER;
+                eventParams.version = nvencStructVersionForApi(2, apiVersion_);
                 eventParams.completionEvent = slot.completionEvent;
                 nvStatus = funcs_.nvEncRegisterAsyncEvent(encoder_, &eventParams);
                 if (nvStatus != NV_ENC_SUCCESS) {
-                    status = "NvEncRegisterAsyncEvent failed: " + statusName(nvStatus);
+                    status = "NvEncRegisterAsyncEvent failed: " + statusDetails(nvStatus);
                     return false;
                 }
                 slot.eventRegistered = true;
             }
         }
         return true;
+    }
+
+    int queryEncodeCap(NV_ENC_CAPS cap) {
+        if (!encoder_) return -1;
+        NV_ENC_CAPS_PARAM params {};
+        params.version = nvencStructVersionForApi(1, apiVersion_);
+        params.capsToQuery = cap;
+        int value = 0;
+        const NVENCSTATUS nvStatus = funcs_.nvEncGetEncodeCaps(encoder_, NV_ENC_CODEC_H264_GUID, &params, &value);
+        return nvStatus == NV_ENC_SUCCESS ? value : -1;
     }
 
     bool inputResourceInFlight(NV_ENC_REGISTERED_PTR registeredResource) const {
@@ -706,8 +987,13 @@ private:
 
         auto& slot = outputSlots_[index];
         if (asyncEnabled_) {
-            const DWORD waitResult = WaitForSingleObject(slot.completionEvent, wait ? INFINITE : 0);
-            if (waitResult == WAIT_TIMEOUT) return true;
+            const DWORD waitResult = WaitForSingleObject(slot.completionEvent, wait ? asyncDrainWaitTimeoutMs_ : 0);
+            if (waitResult == WAIT_TIMEOUT) {
+                if (!wait) return true;
+                status = "NVENC async wait timed out after " + std::to_string(asyncDrainWaitTimeoutMs_) + " ms.";
+                std::cerr << "[perf] nvenc_async_wait_timeout timeoutMs=" << asyncDrainWaitTimeoutMs_ << std::endl;
+                return false;
+            }
             if (waitResult != WAIT_OBJECT_0) {
                 status = "NVENC async wait failed.";
                 return false;
@@ -730,13 +1016,13 @@ private:
     bool lockOutputSlot(OutputSlot& slot, EncodedPacket& packet, std::string& status, bool& produced) {
         produced = false;
         NV_ENC_LOCK_BITSTREAM lock {};
-        lock.version = NV_ENC_LOCK_BITSTREAM_VER;
+        lock.version = nvencStructVersionForApi(2, apiVersion_, true);
         lock.outputBitstream = slot.bitstreamBuffer;
         lock.doNotWait = 0;
 
         NVENCSTATUS nvStatus = funcs_.nvEncLockBitstream(encoder_, &lock);
         if (nvStatus != NV_ENC_SUCCESS) {
-            status = "NvEncLockBitstream failed: " + statusName(nvStatus);
+            status = "NvEncLockBitstream failed: " + statusDetails(nvStatus);
             return false;
         }
 
@@ -833,7 +1119,7 @@ private:
         }
 
         NV_ENC_REGISTER_RESOURCE registered {};
-        registered.version = NV_ENC_REGISTER_RESOURCE_VER;
+        registered.version = nvencStructVersionForApi(5, apiVersion_);
         registered.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
         registered.width = static_cast<uint32_t>(width);
         registered.height = static_cast<uint32_t>(height);
@@ -845,7 +1131,7 @@ private:
 
         const NVENCSTATUS nvStatus = funcs_.nvEncRegisterResource(encoder_, &registered);
         if (nvStatus != NV_ENC_SUCCESS) {
-            status = "NvEncRegisterResource failed: " + statusName(nvStatus);
+            status = "NvEncRegisterResource failed: " + statusDetails(nvStatus);
             return nullptr;
         }
 
@@ -858,7 +1144,8 @@ private:
         return &registeredInputs_.back();
     }
 
-    void destroy() {
+    void destroyEncoderResources() {
+        initialized_ = false;
         if (encoder_) {
             std::vector<EncodedPacket> ignoredPackets;
             std::string ignoredStatus;
@@ -879,7 +1166,7 @@ private:
                 slot.frameSourceHeight = 0;
                 if (slot.eventRegistered) {
                     NV_ENC_EVENT_PARAMS eventParams {};
-                    eventParams.version = NV_ENC_EVENT_PARAMS_VER;
+                    eventParams.version = nvencStructVersionForApi(2, apiVersion_);
                     eventParams.completionEvent = slot.completionEvent;
                     funcs_.nvEncUnregisterAsyncEvent(encoder_, &eventParams);
                     slot.eventRegistered = false;
@@ -916,10 +1203,36 @@ private:
         videoContext_.Reset();
         videoDevice_.Reset();
         context_.Reset();
+        presetGuid_ = {};
+        encodeConfig_ = {};
+        initParams_ = {};
+        asyncEnabled_ = false;
+        requestedWidth_ = 0;
+        requestedHeight_ = 0;
+        width_ = 0;
+        height_ = 0;
+        fps_ = 30;
+        bitrateMbps_ = 40;
+        maxEncodeWidth_ = 0;
+        maxEncodeHeight_ = 0;
+        h264CapWidth_ = 0;
+        h264CapHeight_ = 0;
+        scalerInputWidth_ = 0;
+        scalerInputHeight_ = 0;
+        scalerOutputWidth_ = 0;
+        scalerOutputHeight_ = 0;
+        frameIndex_ = 0;
+        nextOutputSlot_ = 0;
+    }
+
+    void destroy() {
+        destroyEncoderResources();
+        device_.Reset();
         if (module_) {
             FreeLibrary(module_);
             module_ = nullptr;
         }
+        funcs_ = {};
     }
 
     HMODULE module_ = nullptr;
@@ -942,12 +1255,18 @@ private:
     std::deque<std::size_t> inFlightOrder_;
     bool asyncEnabled_ = false;
     bool initialized_ = false;
+    bool initFailureLogged_ = false;
+    uint32_t apiVersion_ = kBundledNvencHeaderApiRaw;
+    int requestedWidth_ = 0;
+    int requestedHeight_ = 0;
     int width_ = 0;
     int height_ = 0;
     int fps_ = 30;
     int bitrateMbps_ = 40;
     int maxEncodeWidth_ = 0;
     int maxEncodeHeight_ = 0;
+    int h264CapWidth_ = 0;
+    int h264CapHeight_ = 0;
     int scalerInputWidth_ = 0;
     int scalerInputHeight_ = 0;
     int scalerOutputWidth_ = 0;
@@ -956,6 +1275,7 @@ private:
     std::size_t nextOutputSlot_ = 0;
     static constexpr std::size_t maxRegisteredInputs_ = 16;
     static constexpr std::size_t outputSlotCount_ = 4;
+    static constexpr DWORD asyncDrainWaitTimeoutMs_ = 1000;
 };
 
 }  // namespace
@@ -1157,6 +1477,7 @@ void EncoderWorker::run() {
 
             if (currentFreshFrameVersion != activeFreshFrameVersion) {
                 activeFreshFrameVersion = currentFreshFrameVersion;
+                session = std::make_unique<NvencSession>(packets_);
                 currentFrame.reset();
                 auto freshFrame = frames_.waitPop();
                 if (!running_) break;
@@ -1186,11 +1507,12 @@ void EncoderWorker::run() {
                     nvencPreset,
                     status_)) {
                 std::vector<EncodedPacket> encodedPackets;
+                bool encoderReady = true;
                 if (session->needsReconfigure(outputWidth, outputHeight, fps, bitrateMbps) &&
                     !session->reconfigure(outputWidth, outputHeight, fps, bitrateMbps, encodedPackets, status_)) {
                     pushPackets(encodedPackets);
                     session = std::make_unique<NvencSession>(packets_);
-                    session->initialize(
+                    encoderReady = session->initialize(
                         frameToEncode.texture.Get(),
                         frameToEncode.width,
                         frameToEncode.height,
@@ -1203,9 +1525,20 @@ void EncoderWorker::run() {
                         nvencPreset,
                         status_);
                 }
+                if (!encoderReady) {
+                    ++encodedFrameCount;
+                    continue;
+                }
+                outputWidth_ = session->outputWidth();
+                outputHeight_ = session->outputHeight();
+                scalingActive_ = frameToEncode.width != session->outputWidth() || frameToEncode.height != session->outputHeight();
                 pushPackets(encodedPackets);
                 if (session->encode(frameToEncode, encodedPackets, status_)) {
                     pushPackets(encodedPackets);
+                } else {
+                    pushPackets(encodedPackets);
+                    std::cerr << "[encoder] Resetting NVENC session after encode failure: " << status_ << std::endl;
+                    session = std::make_unique<NvencSession>(packets_);
                 }
             }
             encodedFrameCount++;

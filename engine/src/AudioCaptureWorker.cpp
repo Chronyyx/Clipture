@@ -1,4 +1,5 @@
 #include "clipture/AudioCaptureWorker.hpp"
+#include "clipture/ProcessSnapshot.hpp"
 
 #include <Windows.h>
 #include <audioclient.h>
@@ -8,7 +9,6 @@
 #include <propkeydef.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <propidl.h>
-#include <tlhelp32.h>
 #include <wrl/implements.h>
 #include <wrl/client.h>
 
@@ -19,10 +19,11 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
-#include <cwctype>
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <utility>
+#include <vector>
 
 namespace clipture {
 namespace {
@@ -133,6 +134,79 @@ struct ResolvedMicDevice {
     bool explicitSelection = false;
 };
 
+class RnnoiseFrameQueue {
+public:
+    explicit RnnoiseFrameQueue(int frameSize)
+        : frameSize_(static_cast<std::size_t>(std::max(1, frameSize))) {
+        buffer_.resize(frameSize_ * 4);
+    }
+
+    void push(float sample) {
+        ensureCapacity(size_ + 1);
+        buffer_[(head_ + size_) % buffer_.size()] = sample;
+        ++size_;
+        maxDepth_ = std::max(maxDepth_, size_);
+    }
+
+    bool popFrame(std::vector<float>& frame) {
+        if (size_ < frameSize_) return false;
+        if (frame.size() != frameSize_) frame.resize(frameSize_);
+
+        for (std::size_t i = 0; i < frameSize_; ++i) {
+            frame[i] = buffer_[(head_ + i) % buffer_.size()];
+        }
+
+        head_ = (head_ + frameSize_) % buffer_.size();
+        size_ -= frameSize_;
+        if (size_ == 0) head_ = 0;
+        return true;
+    }
+
+    std::size_t pending() const {
+        return size_;
+    }
+
+    std::size_t maxDepth() const {
+        return maxDepth_;
+    }
+
+private:
+    void ensureCapacity(std::size_t required) {
+        if (required <= buffer_.size()) return;
+        std::vector<float> next(std::max(required, buffer_.size() * 2));
+        for (std::size_t i = 0; i < size_; ++i) {
+            next[i] = buffer_[(head_ + i) % buffer_.size()];
+        }
+        buffer_ = std::move(next);
+        head_ = 0;
+    }
+
+    std::vector<float> buffer_;
+    std::size_t head_ = 0;
+    std::size_t size_ = 0;
+    std::size_t maxDepth_ = 0;
+    std::size_t frameSize_ = 0;
+};
+
+void maybeLogRnnoiseQueueDepth(
+    const std::string& sourceId,
+    const RnnoiseFrameQueue& queue,
+    int frameSize,
+    std::chrono::steady_clock::time_point& lastLog) {
+    const auto warningDepth = static_cast<std::size_t>(std::max(1, frameSize) * 4);
+    if (queue.maxDepth() < warningDepth) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastLog < std::chrono::seconds(10)) return;
+    lastLog = now;
+
+    std::cerr << "[perf] rnnoise_queue source=\"" << sourceId << "\""
+              << " maxDepth=" << queue.maxDepth()
+              << " pending=" << queue.pending()
+              << " frameSize=" << frameSize
+              << std::endl;
+}
+
 std::wstring widen(const std::string& value) {
     if (value.empty()) return {};
     const int needed = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
@@ -140,13 +214,6 @@ std::wstring widen(const std::string& value) {
     std::wstring result(static_cast<std::size_t>(needed - 1), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, result.data(), needed);
     return result;
-}
-
-std::wstring lower(std::wstring value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
-        return static_cast<wchar_t>(std::towlower(ch));
-    });
-    return value;
 }
 
 std::string narrow(const wchar_t* value) {
@@ -294,25 +361,7 @@ std::string sourceIdForProcessSpec(const std::string& sourceSpec) {
 }
 
 DWORD findProcessIdByName(const std::string& processName) {
-    const auto wanted = lower(widen(processName));
-    if (wanted.empty()) return 0;
-
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) return 0;
-
-    PROCESSENTRY32W entry {};
-    entry.dwSize = sizeof(entry);
-    DWORD processId = 0;
-    if (Process32FirstW(snapshot, &entry)) {
-        do {
-            if (lower(entry.szExeFile) == wanted) {
-                processId = entry.th32ProcessID;
-                break;
-            }
-        } while (Process32NextW(snapshot, &entry));
-    }
-    CloseHandle(snapshot);
-    return processId;
+    return RunningProcessSnapshot::captureNameOnly().processIdForName(processName);
 }
 
 int64_t now100ns() {
@@ -765,8 +814,11 @@ void AudioCaptureWorker::runMicrophoneCapture() {
         }
 
         DenoiseState* rnnoiseState = nullptr;
-        std::vector<float> rnnoiseBuffer;
         const int rnnoiseFrameSize = rnnoise_get_frame_size();
+        RnnoiseFrameQueue rnnoiseQueue(rnnoiseFrameSize);
+        std::vector<float> rnnoiseFrameIn(static_cast<std::size_t>(rnnoiseFrameSize));
+        std::vector<float> rnnoiseFrameOut(static_cast<std::size_t>(rnnoiseFrameSize));
+        auto lastRnnoiseQueueLog = std::chrono::steady_clock::now() - std::chrono::seconds(10);
         float currentGateGain = 1.0f;
         int gateHoldFrames = 0;
 
@@ -826,10 +878,10 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                         mono += pcm16[i * outputChannels + ch];
                     }
                     mono /= outputChannels;
-                    rnnoiseBuffer.push_back(mono);
+                    rnnoiseQueue.push(mono);
                 }
 
-                while (rnnoiseBuffer.size() >= static_cast<std::size_t>(rnnoiseFrameSize)) {
+                while (rnnoiseQueue.popFrame(rnnoiseFrameIn)) {
                     const bool needsRnnoise = isolation || (gateEnabled && autoGate);
                     if (needsRnnoise && !rnnoiseState) {
                         rnnoiseState = rnnoise_create(nullptr);
@@ -838,12 +890,10 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                         rnnoiseState = nullptr;
                     }
 
-                    std::vector<float> frameOut;
                     float vadProb = 0.0f;
                     const bool rnnoiseReady = needsRnnoise && rnnoiseState;
                     if (rnnoiseReady) {
-                        frameOut.resize(rnnoiseFrameSize);
-                        vadProb = rnnoise_process_frame(rnnoiseState, frameOut.data(), rnnoiseBuffer.data());
+                        vadProb = rnnoise_process_frame(rnnoiseState, rnnoiseFrameOut.data(), rnnoiseFrameIn.data());
                     }
 
                     bool isSpeaking = true;
@@ -854,7 +904,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                     } else {
                         float sum = 0.0f;
                         for (int j = 0; j < rnnoiseFrameSize; ++j) {
-                            float s = rnnoiseBuffer[j] / 32768.0f;
+                            float s = rnnoiseFrameIn[j] / 32768.0f;
                             sum += s * s;
                         }
                         float rms = std::sqrt(sum / rnnoiseFrameSize);
@@ -879,8 +929,8 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                         const float gateStep = targetGateGain > currentGateGain ? 0.18f : 0.05f;
                         currentGateGain += (targetGateGain - currentGateGain) * gateStep;
 
-                        const float original = rnnoiseBuffer[j];
-                        const float processed = (isolation && rnnoiseReady) ? frameOut[j] : original;
+                        const float original = rnnoiseFrameIn[j];
+                        const float processed = (isolation && rnnoiseReady) ? rnnoiseFrameOut[j] : original;
                         const float w = (isolation && rnnoiseReady) ? weight : 0.0f;
 
                         float blended = (original * (1.0f - w)) + (processed * w);
@@ -906,8 +956,8 @@ void AudioCaptureWorker::runMicrophoneCapture() {
 
                     nextPts100ns += packet.duration100ns;
                     ++packetsCaptured_;
-                    rnnoiseBuffer.erase(rnnoiseBuffer.begin(), rnnoiseBuffer.begin() + rnnoiseFrameSize);
                 }
+                maybeLogRnnoiseQueueDepth("microphone-pcm", rnnoiseQueue, rnnoiseFrameSize, lastRnnoiseQueueLog);
 
                 capturedPacket = true;
                 captureClient->ReleaseBuffer(frames);
@@ -1019,8 +1069,11 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
     }
 
     DenoiseState* rnnoiseState = nullptr;
-    std::vector<float> rnnoiseBuffer;
     const int rnnoiseFrameSize = rnnoise_get_frame_size(); // 480
+    RnnoiseFrameQueue rnnoiseQueue(rnnoiseFrameSize);
+    std::vector<float> rnnoiseFrameIn(static_cast<std::size_t>(rnnoiseFrameSize));
+    std::vector<float> rnnoiseFrameOut(static_cast<std::size_t>(rnnoiseFrameSize));
+    auto lastRnnoiseQueueLog = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
     DWORD taskIndex = 0;
     HANDLE avrtHandle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
@@ -1064,10 +1117,10 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                         mono += pcm16[i * outputChannels + ch];
                     }
                     mono /= outputChannels;
-                    rnnoiseBuffer.push_back(mono);
+                    rnnoiseQueue.push(mono);
                 }
                 
-                while (rnnoiseBuffer.size() >= static_cast<std::size_t>(rnnoiseFrameSize)) {
+                while (rnnoiseQueue.popFrame(rnnoiseFrameIn)) {
                     const bool needsRnnoise = isolation || (gateEnabled && autoGate);
                     if (needsRnnoise && !rnnoiseState) {
                         rnnoiseState = rnnoise_create(nullptr);
@@ -1076,12 +1129,10 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                         rnnoiseState = nullptr;
                     }
 
-                    std::vector<float> frameOut;
                     float vadProb = 0.0f;
                     const bool rnnoiseReady = needsRnnoise && rnnoiseState;
                     if (rnnoiseReady) {
-                        frameOut.resize(rnnoiseFrameSize);
-                        vadProb = rnnoise_process_frame(rnnoiseState, frameOut.data(), rnnoiseBuffer.data());
+                        vadProb = rnnoise_process_frame(rnnoiseState, rnnoiseFrameOut.data(), rnnoiseFrameIn.data());
                     }
                     
                     bool isSpeaking = true;
@@ -1092,7 +1143,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                     } else {
                         float sum = 0.0f;
                         for (int j = 0; j < rnnoiseFrameSize; ++j) {
-                            float s = rnnoiseBuffer[j] / 32768.0f;
+                            float s = rnnoiseFrameIn[j] / 32768.0f;
                             sum += s * s;
                         }
                         float rms = std::sqrt(sum / rnnoiseFrameSize);
@@ -1117,8 +1168,8 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                         const float gateStep = targetGateGain > currentGateGain ? 0.18f : 0.05f;
                         currentGateGain += (targetGateGain - currentGateGain) * gateStep;
                         
-                        float original = rnnoiseBuffer[j];
-                        float processed = (isolation && rnnoiseReady) ? frameOut[j] : original;
+                        float original = rnnoiseFrameIn[j];
+                        float processed = (isolation && rnnoiseReady) ? rnnoiseFrameOut[j] : original;
                         float w = (isolation && rnnoiseReady) ? weight : 0.0f;
                         
                         float blended = (original * (1.0f - w)) + (processed * w);
@@ -1144,9 +1195,8 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                     
                     nextPts100ns += packet.duration100ns;
                     ++packetsCaptured_;
-                    
-                    rnnoiseBuffer.erase(rnnoiseBuffer.begin(), rnnoiseBuffer.begin() + rnnoiseFrameSize);
                 }
+                maybeLogRnnoiseQueueDepth(sourceId, rnnoiseQueue, rnnoiseFrameSize, lastRnnoiseQueueLog);
                 
                 capturedPacket = true;
                 captureClient->ReleaseBuffer(frames);
@@ -1216,11 +1266,12 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
     // Retry finding the process a few times — the process may still be starting up
     // when the audio worker launches, or the snapshot may miss it briefly.
     DWORD processId = 0;
-    for (int attempt = 0; attempt < 5 && running_ && !stopRequested->load(); ++attempt) {
+    constexpr int maxProcessLookupAttempts = 3;
+    for (int attempt = 0; attempt < maxProcessLookupAttempts && running_ && !stopRequested->load(); ++attempt) {
         processId = findProcessIdByName(captureName);
         if (processId != 0) break;
-        std::cerr << "[audio] Process not found (attempt " << (attempt + 1) << "/5): " << captureName << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::cerr << "[audio] Process not found (attempt " << (attempt + 1) << "/" << maxProcessLookupAttempts << "): " << captureName << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
     if (processId == 0) {
         std::cerr << "[audio] FAILED: Process not found after retries: " << captureName << std::endl;

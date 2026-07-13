@@ -2,6 +2,7 @@
 #include "clipture/CaptureSession.hpp"
 #include "clipture/Mp4Muxer.hpp"
 #include "clipture/NativeRuntime.hpp"
+#include "clipture/ProcessSnapshot.hpp"
 
 #include <Windows.h>
 
@@ -21,7 +22,6 @@
 #include <vector>
 #include <thread>
 #include <atomic>
-#include <TlHelp32.h>
 
 #include <map>
 #include <mutex>
@@ -327,28 +327,6 @@ bool isKnownGameProcess(const std::string& exeName, const std::string& processPa
     return false;
 }
 
-bool isProcessRunningByName(const std::string& exeName) {
-    const auto wanted = lowerAscii(captureProcessName(exeName));
-    if (wanted.empty()) return false;
-
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) return false;
-
-    PROCESSENTRY32W entry {};
-    entry.dwSize = sizeof(entry);
-    bool found = false;
-    if (Process32FirstW(snapshot, &entry)) {
-        do {
-            if (lowerAscii(narrowWide(entry.szExeFile)) == wanted) {
-                found = true;
-                break;
-            }
-        } while (Process32NextW(snapshot, &entry));
-    }
-    CloseHandle(snapshot);
-    return found;
-}
-
 std::pair<std::string, bool> detectForegroundAppInfo(HMONITOR activeMonitor = nullptr) {
     HWND window = GetForegroundWindow();
     if (!window) return {"Foreground app", false};
@@ -442,22 +420,31 @@ std::pair<int, int> lowestSourceResolutionFromPackets(const std::vector<EncodedP
     return { bestWidth, bestHeight };
 }
 
-std::vector<std::vector<EncodedPacket>> splitVideoSegmentsByEncodedResolution(const std::vector<EncodedPacket>& packets) {
-    std::vector<std::vector<EncodedPacket>> segments;
+struct VideoSegmentRange {
+    std::size_t begin = 0;
+    std::size_t end = 0;
+    int width = 0;
+    int height = 0;
+};
+
+std::vector<VideoSegmentRange> splitVideoSegmentRangesByEncodedResolution(const std::vector<EncodedPacket>& packets) {
+    std::vector<VideoSegmentRange> segments;
     int currentWidth = 0;
     int currentHeight = 0;
-    for (const auto& packet : packets) {
+    for (std::size_t index = 0; index < packets.size(); ++index) {
+        const auto& packet = packets[index];
         if (packet.kind != PacketKind::Video || payloadEmpty(packet)) continue;
         const int packetWidth = packet.encodedWidth > 0 ? packet.encodedWidth : currentWidth;
         const int packetHeight = packet.encodedHeight > 0 ? packet.encodedHeight : currentHeight;
         if (segments.empty() ||
             (packetWidth > 0 && packetHeight > 0 && (packetWidth != currentWidth || packetHeight != currentHeight))) {
-            segments.push_back({});
+            if (!segments.empty()) segments.back().end = index;
             currentWidth = packetWidth;
             currentHeight = packetHeight;
+            segments.push_back({ index, packets.size(), currentWidth, currentHeight });
         }
-        segments.back().push_back(packet);
     }
+    if (!segments.empty()) segments.back().end = packets.size();
     return segments;
 }
 
@@ -491,10 +478,6 @@ std::vector<EncodedPacket> selectVideoWindowForClip(const std::vector<EncodedPac
         }
     }
     if (video.empty()) return {};
-
-    std::sort(video.begin(), video.end(), [](const EncodedPacket& a, const EncodedPacket& b) {
-        return a.pts100ns < b.pts100ns;
-    });
 
     const int64_t newestPts = video.back().pts100ns;
     const int64_t requestedStart = newestPts - (static_cast<int64_t>(durationSeconds) * 10'000'000LL);
@@ -553,6 +536,7 @@ Engine::~Engine() {
 }
 
 void Engine::gameDetectionLoop() {
+    std::size_t detectionPasses = 0;
     while (gameDetectionRunning_) {
         {
             HMONITOR activeMonitor = captureSession_ ? static_cast<HMONITOR>(captureSession_->activeMonitor()) : nullptr;
@@ -569,6 +553,9 @@ void Engine::gameDetectionLoop() {
         }
 
         if ((settings_.captureGameAudio || settings_.captureForegroundSystemAudio) && audioCaptureWorker_) {
+            const auto detectionStartedAt = std::chrono::steady_clock::now();
+            const auto processSnapshot = RunningProcessSnapshot::captureNameOnly();
+            std::size_t pathQueries = 0;
             std::vector<std::string> dynamicSources;
             std::vector<std::string> detectedGames;
             std::vector<std::string> foregroundSystemApps;
@@ -578,76 +565,59 @@ void Engine::gameDetectionLoop() {
                 DWORD fgPid = 0;
                 GetWindowThreadProcessId(foreground, &fgPid);
                 if (fgPid > 0) {
-                    HANDLE fgProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, fgPid);
-                    if (fgProcess) {
-                        wchar_t path[MAX_PATH] {};
-                        DWORD size = MAX_PATH;
-                        if (QueryFullProcessImageNameW(fgProcess, 0, path, &size) && size > 0) {
-                            std::string narrowPath = narrowWide(path);
-                            auto slashPos = narrowPath.find_last_of("\\/");
-                            std::string fgExeName = (slashPos != std::string::npos) ? narrowPath.substr(slashPos + 1) : narrowPath;
+                    ++pathQueries;
+                    const auto narrowPath = RunningProcessSnapshot::queryProcessPath(fgPid);
+                    if (!narrowPath.empty()) {
+                        auto slashPos = narrowPath.find_last_of("\\/");
+                        std::string fgExeName = (slashPos != std::string::npos) ? narrowPath.substr(slashPos + 1) : narrowPath;
 
-                            if (!isIgnoredForegroundProcess(fgExeName)) {
-                                const bool isGame = isKnownGameProcess(fgExeName, narrowPath, fgPid, foreground);
-                                if (settings_.captureGameAudio && isGame &&
-                                    !containsProcessName(settings_.appAudioProcesses, fgExeName) &&
-                                    !containsProcessName(dynamicSources, fgExeName)) {
-                                    dynamicSources.push_back("game:" + fgExeName);
-                                    detectedGames.push_back(fgExeName);
-                                } else if (settings_.captureForegroundSystemAudio && !isGame &&
-                                    !containsProcessName(settings_.appAudioProcesses, fgExeName)) {
-                                    foregroundSystemProcesses_.erase(
-                                        std::remove_if(
-                                            foregroundSystemProcesses_.begin(),
-                                            foregroundSystemProcesses_.end(),
-                                            [&](const std::string& name) {
-                                                return lowerAscii(captureProcessName(name)) == lowerAscii(fgExeName);
-                                            }),
-                                        foregroundSystemProcesses_.end());
-                                    foregroundSystemProcesses_.insert(foregroundSystemProcesses_.begin(), fgExeName);
-                                    if (foregroundSystemProcesses_.size() > 3) {
-                                        foregroundSystemProcesses_.resize(3);
-                                    }
-                                    foregroundSystemApps.push_back(fgExeName);
+                        if (!isIgnoredForegroundProcess(fgExeName)) {
+                            const bool isGame = isKnownGameProcess(fgExeName, narrowPath, fgPid, foreground);
+                            if (settings_.captureGameAudio && isGame &&
+                                !containsProcessName(settings_.appAudioProcesses, fgExeName) &&
+                                !containsProcessName(dynamicSources, fgExeName)) {
+                                dynamicSources.push_back("game:" + fgExeName);
+                                detectedGames.push_back(fgExeName);
+                            } else if (settings_.captureForegroundSystemAudio && !isGame &&
+                                !containsProcessName(settings_.appAudioProcesses, fgExeName)) {
+                                foregroundSystemProcesses_.erase(
+                                    std::remove_if(
+                                        foregroundSystemProcesses_.begin(),
+                                        foregroundSystemProcesses_.end(),
+                                        [&](const std::string& name) {
+                                            return lowerAscii(captureProcessName(name)) == lowerAscii(fgExeName);
+                                        }),
+                                    foregroundSystemProcesses_.end());
+                                foregroundSystemProcesses_.insert(foregroundSystemProcesses_.begin(), fgExeName);
+                                if (foregroundSystemProcesses_.size() > 3) {
+                                    foregroundSystemProcesses_.resize(3);
                                 }
+                                foregroundSystemApps.push_back(fgExeName);
                             }
                         }
-                        CloseHandle(fgProcess);
                     }
                 }
             }
             
             if (settings_.captureGameAudio) {
-                HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-                if (snapshot != INVALID_HANDLE_VALUE) {
-                    PROCESSENTRY32W entry {};
-                    entry.dwSize = sizeof(entry);
-                    if (Process32FirstW(snapshot, &entry)) {
-                        do {
-                            std::string exeName = narrowWide(entry.szExeFile);
-                            if (containsProcessName(settings_.appAudioProcesses, exeName) ||
-                                containsProcessName(dynamicSources, exeName)) {
-                                continue;
-                            }
-
-                            bool isGame = false;
-                            HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
-                            if (process) {
-                                wchar_t path[MAX_PATH] {};
-                                DWORD size = MAX_PATH;
-                                if (QueryFullProcessImageNameW(process, 0, path, &size) && size > 0) {
-                                    isGame = isKnownGameProcess(exeName, narrowWide(path), entry.th32ProcessID);
-                                }
-                                CloseHandle(process);
-                            }
-
-                            if (isGame) {
-                                dynamicSources.push_back("game:" + exeName);
-                                detectedGames.push_back(exeName);
-                            }
-                        } while (Process32NextW(snapshot, &entry));
+                for (const auto& entry : processSnapshot.entries()) {
+                    const auto& exeName = entry.exeName;
+                    if (containsProcessName(settings_.appAudioProcesses, exeName) ||
+                        containsProcessName(dynamicSources, exeName)) {
+                        continue;
                     }
-                    CloseHandle(snapshot);
+
+                    bool isGame = false;
+                    ++pathQueries;
+                    const auto processPath = RunningProcessSnapshot::queryProcessPath(entry.processId);
+                    if (!processPath.empty()) {
+                        isGame = isKnownGameProcess(exeName, processPath, entry.processId);
+                    }
+
+                    if (isGame) {
+                        dynamicSources.push_back("game:" + exeName);
+                        detectedGames.push_back(exeName);
+                    }
                 }
             }
 
@@ -659,7 +629,7 @@ void Engine::gameDetectionLoop() {
                         [&](const std::string& name) {
                             return isIgnoredForegroundProcess(name) ||
                                 containsProcessName(settings_.appAudioProcesses, name) ||
-                                !isProcessRunningByName(name);
+                                !processSnapshot.contains(name);
                         }),
                     foregroundSystemProcesses_.end());
 
@@ -691,6 +661,18 @@ void Engine::gameDetectionLoop() {
                 std::cerr << std::endl;
             }
             audioCaptureWorker_->configureAppSources(mergedSources);
+
+            ++detectionPasses;
+            const auto detectionMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - detectionStartedAt).count();
+            if (detectionMs >= 50 || detectionPasses % 30 == 0) {
+                std::cerr << "[perf] game_detection"
+                          << " ms=" << detectionMs
+                          << " processes=" << processSnapshot.size()
+                          << " pathQueries=" << pathQueries
+                          << " dynamicSources=" << dynamicSources.size()
+                          << std::endl;
+            }
         }
         
         std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -704,6 +686,8 @@ const Diagnostics& Engine::diagnostics() {
 
 const Diagnostics& Engine::configure(const EngineSettings& settings) {
     const auto previousMonitorId = settings_.monitorId;
+    const auto previousTargetWidth = settings_.targetWidth;
+    const auto previousTargetHeight = settings_.targetHeight;
     const auto previousCaptureGameAudio = settings_.captureGameAudio;
     const auto previousCaptureForegroundSystemAudio = settings_.captureForegroundSystemAudio;
     const auto previousMicVolume = settings_.micVolume;
@@ -725,6 +709,12 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     settings_.monitorId = settings.monitorId.empty() ? "primary" : settings.monitorId;
     settings_.targetWidth = std::max(0, settings.targetWidth);
     settings_.targetHeight = std::max(0, settings.targetHeight);
+    const bool videoOutputTargetChanged =
+        previousTargetWidth != settings_.targetWidth ||
+        previousTargetHeight != settings_.targetHeight;
+    if (videoOutputTargetChanged) {
+        videoPackets_.clear();
+    }
     if (settings_.targetWidth > 0 && settings_.targetHeight > 0) {
         pendingAutoVideoResolutionReset100ns_ = 0;
     }
@@ -763,6 +753,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
         if (captureSession_->running() && previousMonitorId != settings_.monitorId) {
             if (encoderWorker_) {
                 if (settings_.targetWidth <= 0 || settings_.targetHeight <= 0) {
+                    videoPackets_.clear();
                     encoderWorker_->resetAutoOutputResolution();
                 } else {
                     encoderWorker_->requireFreshFrame();
@@ -805,7 +796,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     diagnostics_.fps = settings_.fps;
     diagnostics_.bitrateMbps = settings_.bitrateMbps;
     diagnostics_.bufferDurationSeconds = settings_.clipLengthSeconds;
-    diagnostics_.encoderMode = "NVENC async P" + std::to_string(settings_.nvencPreset) + " (4 output buffers)";
+    diagnostics_.encoderMode = "NVENC P" + std::to_string(settings_.nvencPreset) + " (async with sync compatibility fallback)";
     diagnostics_.microphoneDevice = audioCaptureWorker_ ? audioCaptureWorker_->microphoneStatus() : microphoneDeviceName(settings_.micDeviceId);
     diagnostics_.clipTargetResolution = settings_.targetWidth > 0 && settings_.targetHeight > 0
         ? formatResolution(settings_.targetWidth, settings_.targetHeight)
@@ -818,7 +809,12 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     return diagnostics_;
 }
 
-std::vector<EncodedPacket> mixPcmPackets(const std::vector<EncodedPacket>& packets, const std::string& newSourceId, int64_t clipStart, int64_t clipEnd) {
+std::vector<EncodedPacket> mixPcmPackets(
+    const std::vector<EncodedPacket>& packets,
+    const std::string& newSourceId,
+    int64_t clipStart,
+    int64_t clipEnd,
+    std::vector<float>& mixScratch) {
     if (packets.empty()) return {};
     
     int sampleRate = 0;
@@ -833,7 +829,37 @@ std::vector<EncodedPacket> mixPcmPackets(const std::vector<EncodedPacket>& packe
     
     int64_t totalDuration = clipEnd - clipStart;
     int64_t totalSamples = (totalDuration * sampleRate) / 10'000'000;
-    std::vector<float> mixBuffer(totalSamples * channels, 0.0f);
+    bool hasAudio = false;
+    for (const auto& p : packets) {
+        if (p.sampleRate != sampleRate || p.channelCount != channels) continue;
+        const auto bytes = payloadBytes(p);
+        if (bytes.empty()) continue;
+
+        const int numSamples = static_cast<int>(bytes.size() / (channels * sizeof(int16_t)));
+        if (numSamples <= 0) continue;
+        const int64_t packetDuration = p.duration100ns > 0
+            ? p.duration100ns
+            : (static_cast<int64_t>(numSamples) * 10'000'000LL) / sampleRate;
+        if (p.pts100ns + packetDuration <= clipStart || p.pts100ns >= clipEnd) continue;
+
+        const auto* pcm = reinterpret_cast<const int16_t*>(bytes.data());
+        const std::size_t sampleCount = bytes.size() / sizeof(int16_t);
+        for (std::size_t i = 0; i < sampleCount; ++i) {
+            if (pcm[i] != 0) {
+                hasAudio = true;
+                break;
+            }
+        }
+        if (hasAudio) break;
+    }
+
+    if (!hasAudio) {
+        return {};
+    }
+
+    mixScratch.assign(
+        static_cast<std::size_t>(totalSamples) * static_cast<std::size_t>(channels),
+        0.0f);
     
     for (const auto& p : packets) {
         if (p.sampleRate != sampleRate || p.channelCount != channels) continue;
@@ -848,26 +874,27 @@ std::vector<EncodedPacket> mixPcmPackets(const std::vector<EncodedPacket>& packe
         for (int i = 0; i < numSamples; ++i) {
             for (int ch = 0; ch < channels; ++ch) {
                 int64_t mixIdx = (offsetSamples + i) * channels + ch;
-                if (mixIdx >= 0 && mixIdx < static_cast<int64_t>(mixBuffer.size())) {
-                    mixBuffer[mixIdx] += pcm[i * channels + ch];
+                if (mixIdx >= 0 && mixIdx < static_cast<int64_t>(mixScratch.size())) {
+                    mixScratch[static_cast<std::size_t>(mixIdx)] += pcm[i * channels + ch];
                 }
             }
         }
     }
-    bool hasAudio = false;
-    for (const auto& val : mixBuffer) {
+
+    bool mixedHasAudio = false;
+    for (const auto val : mixScratch) {
         if (std::abs(val) >= 1.0f) {
-            hasAudio = true;
+            mixedHasAudio = true;
             break;
         }
     }
-    
-    if (!hasAudio) {
+    if (!mixedHasAudio) {
         return {};
     }
     
     std::vector<EncodedPacket> mixed;
-    int framesPerPacket = sampleRate / 100;
+    int framesPerPacket = std::max(1, sampleRate / 100);
+    mixed.reserve(static_cast<std::size_t>((totalSamples + framesPerPacket - 1) / framesPerPacket));
     
     for (int64_t i = 0; i < totalSamples; i += framesPerPacket) {
         int frames = static_cast<int>(std::min<int64_t>(framesPerPacket, totalSamples - i));
@@ -886,7 +913,7 @@ std::vector<EncodedPacket> mixPcmPackets(const std::vector<EncodedPacket>& packe
         int16_t* outPcm = reinterpret_cast<int16_t*>(mutablePayload(mp).data());
         for (int j = 0; j < frames; ++j) {
             for (int ch = 0; ch < channels; ++ch) {
-                float val = mixBuffer[(i + j) * channels + ch];
+                float val = mixScratch[static_cast<std::size_t>((i + j) * channels + ch)];
                 outPcm[j * channels + ch] = static_cast<int16_t>(std::clamp(val, -32768.0f, 32767.0f));
             }
         }
@@ -966,7 +993,6 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         recommendedHeight = height;
     }
     const auto recommendedResolution = formatResolution(recommendedWidth, recommendedHeight);
-    std::vector<EncodedPacket> muxPackets = clipPackets;
     const int64_t clipStart = clipPackets.front().pts100ns;
     const int64_t clipEnd = clipPackets.back().pts100ns + std::max<int64_t>(clipPackets.back().duration100ns, 0);
     const auto audioSelectStartedAt = SaveTimingClock::now();
@@ -974,13 +1000,14 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     logEngineSaveTiming("audio_select", audioSelectStartedAt, "packets=" + std::to_string(capturedAudioPackets.size()));
 
     const auto audioGroupStartedAt = SaveTimingClock::now();
+    const auto processSnapshot = RunningProcessSnapshot::captureNameOnly();
     std::map<std::string, bool> processRunningCache;
     auto isCaptureProcessRunning = [&](const std::string& name) {
         const auto processName = captureProcessName(name);
         auto cached = processRunningCache.find(processName);
         if (cached != processRunningCache.end()) return cached->second;
 
-        const bool running = isProcessRunningByName(processName);
+        const bool running = processSnapshot.contains(processName);
         processRunningCache[processName] = running;
         return running;
     };
@@ -1016,14 +1043,16 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         audioGroupStartedAt,
         "tracks=" + std::to_string(audioByTrack.size()) +
             " packets=" + std::to_string(capturedAudioPackets.size()) +
-            " processChecks=" + std::to_string(processRunningCache.size()));
+            " processChecks=" + std::to_string(processRunningCache.size()) +
+            " processes=" + std::to_string(processSnapshot.size()));
     
     std::vector<EncodedPacket> normalizedAudioPackets;
+    std::vector<float> audioMixScratch;
     const auto audioMixStartedAt = SaveTimingClock::now();
     std::size_t mixedAudioPacketCount = 0;
     for (const auto& [trackId, packets] : audioByTrack) {
         const auto trackMixStartedAt = SaveTimingClock::now();
-        auto mixedTrack = mixPcmPackets(packets, trackId, clipStart, clipEnd);
+        auto mixedTrack = mixPcmPackets(packets, trackId, clipStart, clipEnd, audioMixScratch);
         logEngineSaveTiming(
             "audio_mix_track",
             trackMixStartedAt,
@@ -1039,7 +1068,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             " outputPackets=" + std::to_string(mixedAudioPacketCount));
 
     std::vector<EncodedPacket> audioPackets = normalizedAudioPackets;
-    auto videoSegments = splitVideoSegmentsByEncodedResolution(clipPackets);
+    auto videoSegments = splitVideoSegmentRangesByEncodedResolution(clipPackets);
     std::vector<std::string> segmentFiles;
     std::vector<std::string> segmentResolutions;
     std::string outputFilePath;
@@ -1047,13 +1076,17 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
 
     if (videoSegments.size() > 1) {
         for (const auto& segment : videoSegments) {
-            if (segment.empty()) continue;
-            std::vector<EncodedPacket> segmentMuxPackets = segment;
-            const int64_t segmentStart = segment.front().pts100ns;
-            const int64_t segmentEnd = segment.back().pts100ns + std::max<int64_t>(segment.back().duration100ns, 0);
+            if (segment.begin >= segment.end || segment.end > clipPackets.size()) continue;
+            std::vector<EncodedPacket> segmentMuxPackets(
+                clipPackets.begin() + static_cast<std::ptrdiff_t>(segment.begin),
+                clipPackets.begin() + static_cast<std::ptrdiff_t>(segment.end));
+            const auto& firstPacket = clipPackets[segment.begin];
+            const auto& lastPacket = clipPackets[segment.end - 1];
+            const int64_t segmentStart = firstPacket.pts100ns;
+            const int64_t segmentEnd = lastPacket.pts100ns + std::max<int64_t>(lastPacket.duration100ns, 0);
             for (const auto& [trackId, trackPackets] : audioByTrack) {
                 const auto segmentMixStartedAt = SaveTimingClock::now();
-                auto mixedTrack = mixPcmPackets(trackPackets, trackId, segmentStart, segmentEnd);
+                auto mixedTrack = mixPcmPackets(trackPackets, trackId, segmentStart, segmentEnd, audioMixScratch);
                 logEngineSaveTiming(
                     "audio_mix_segment_track",
                     segmentMixStartedAt,
@@ -1062,11 +1095,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                 segmentMuxPackets.insert(segmentMuxPackets.end(), mixedTrack.begin(), mixedTrack.end());
             }
 
-            auto [segmentWidth, segmentHeight] = encodedResolutionFromPackets(segment);
-            if (segmentWidth <= 0 || segmentHeight <= 0) {
-                segmentWidth = width;
-                segmentHeight = height;
-            }
+            const int segmentWidth = segment.width > 0 ? segment.width : width;
+            const int segmentHeight = segment.height > 0 ? segment.height : height;
             const auto muxStartedAt = SaveTimingClock::now();
             const auto segmentMux = muxH264ToMp4(
                 segmentMuxPackets,
@@ -1098,6 +1128,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         }
         outputFilePath = stitchedPathForSegments(segmentFiles.front());
     } else {
+        std::vector<EncodedPacket> muxPackets = clipPackets;
         muxPackets.insert(muxPackets.end(), audioPackets.begin(), audioPackets.end());
         const auto muxStartedAt = SaveTimingClock::now();
         const auto mux = muxH264ToMp4(
@@ -1289,6 +1320,11 @@ void Engine::refreshPacketCounts() {
     diagnostics_.encoderAcceptedFrames = encoderWorker_ ? encoderWorker_->framesAccepted() : 0;
     diagnostics_.encoderOutputPackets = encoderWorker_ ? encoderWorker_->framesEncoded() : 0;
     if (encoderWorker_) {
+        const auto encoderStatus = encoderWorker_->status();
+        if (!encoderStatus.empty()) {
+            const auto captureStatus = captureSession_ ? captureSession_->status() : std::string("Capture status unavailable.");
+            diagnostics_.status = "Capture: " + captureStatus + " Encoder: " + encoderStatus;
+        }
         const int sourceWidth = encoderWorker_->sourceWidth();
         const int sourceHeight = encoderWorker_->sourceHeight();
         const int outputWidth = encoderWorker_->outputWidth();

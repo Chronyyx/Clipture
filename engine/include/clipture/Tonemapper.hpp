@@ -25,6 +25,12 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> computeShader_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> cachedInputTexture_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> cachedInputSRV_;
+    D3D11_TEXTURE2D_DESC cachedInputDesc_ {};
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> cachedOutputTexture_;
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> cachedOutputUAV_;
+    D3D11_TEXTURE2D_DESC cachedOutputDesc_ {};
 };
 
 } // namespace clipture

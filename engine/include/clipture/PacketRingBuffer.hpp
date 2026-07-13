@@ -153,6 +153,11 @@ public:
         return { packets_.begin(), packets_.end() };
     }
 
+    void clear() {
+        std::lock_guard lock(mutex_);
+        packets_.clear();
+    }
+
     std::size_t size() const {
         std::lock_guard lock(mutex_);
         return packets_.size();
