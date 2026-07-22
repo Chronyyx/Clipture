@@ -13,6 +13,7 @@ namespace clipture {
 
 struct RunningProcessInfo {
     DWORD processId = 0;
+    DWORD parentProcessId = 0;
     std::string exeName;
     std::string lowerExeName;
 };
@@ -31,6 +32,7 @@ public:
                 auto exeName = narrow(entry.szExeFile);
                 snapshot.entries_.push_back({
                     entry.th32ProcessID,
+                    entry.th32ParentProcessID,
                     exeName,
                     lowerAscii(exeName)
                 });
@@ -84,6 +86,10 @@ public:
 
 private:
     static std::string captureProcessName(std::string sourceSpec) {
+        if (sourceSpec.rfind("app-pid:", 0) == 0) {
+            const auto nameStart = sourceSpec.find(':', 8);
+            return nameStart == std::string::npos ? std::string{} : sourceSpec.substr(nameStart + 1);
+        }
         if (sourceSpec.rfind("game:", 0) == 0) return sourceSpec.substr(5);
         if (sourceSpec.rfind("app:", 0) == 0) return sourceSpec.substr(4);
         return sourceSpec;

@@ -28,6 +28,11 @@
 namespace clipture {
 namespace {
 
+struct CaptureProcessSpec {
+    std::string processName;
+    DWORD processId = 0;
+};
+
 class ActivateCompletionHandler :
     public Microsoft::WRL::RuntimeClass<
         Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
@@ -349,15 +354,39 @@ ResolvedMicDevice resolveMicrophoneDevice(IMMDeviceEnumerator* enumerator, const
 }
 
 std::string captureProcessName(const std::string& sourceSpec) {
+    if (sourceSpec.rfind("app-pid:", 0) == 0) {
+        const auto nameStart = sourceSpec.find(':', 8);
+        return nameStart == std::string::npos ? std::string{} : sourceSpec.substr(nameStart + 1);
+    }
     if (sourceSpec.rfind("game:", 0) == 0) return sourceSpec.substr(5);
     if (sourceSpec.rfind("app:", 0) == 0) return sourceSpec.substr(4);
     return sourceSpec;
 }
 
 std::string sourceIdForProcessSpec(const std::string& sourceSpec) {
+    if (sourceSpec.rfind("app-pid:", 0) == 0) return "app:" + captureProcessName(sourceSpec);
     if (sourceSpec.rfind("game:", 0) == 0) return sourceSpec;
     if (sourceSpec.rfind("app:", 0) == 0) return sourceSpec;
     return "app:" + sourceSpec;
+}
+
+CaptureProcessSpec parseCaptureProcessSpec(const std::string& sourceSpec) {
+    if (sourceSpec.rfind("app-pid:", 0) == 0) {
+        const auto pidStart = std::string("app-pid:").size();
+        const auto pidEnd = sourceSpec.find(':', pidStart);
+        if (pidEnd != std::string::npos) {
+            try {
+                const auto parsed = std::stoul(sourceSpec.substr(pidStart, pidEnd - pidStart));
+                return {
+                    sourceSpec.substr(pidEnd + 1),
+                    static_cast<DWORD>(parsed)
+                };
+            } catch (...) {
+                return { captureProcessName(sourceSpec), 0 };
+            }
+        }
+    }
+    return { captureProcessName(sourceSpec), 0 };
 }
 
 DWORD findProcessIdByName(const std::string& processName) {
@@ -1259,15 +1288,27 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
 }
 
 void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processName, std::shared_ptr<std::atomic<bool>> stopRequested) {
-    const std::string captureName = captureProcessName(processName);
+    const auto captureSpec = parseCaptureProcessSpec(processName);
+    const std::string captureName = captureSpec.processName;
     const std::string sourceId = sourceIdForProcessSpec(processName);
     std::cerr << "[audio] Process loopback thread started for: " << captureName << " as " << sourceId << std::endl;
 
     // Retry finding the process a few times — the process may still be starting up
     // when the audio worker launches, or the snapshot may miss it briefly.
-    DWORD processId = 0;
+    DWORD processId = captureSpec.processId;
+    if (processId != 0) {
+        const auto snapshot = RunningProcessSnapshot::captureNameOnly();
+        const auto& entries = snapshot.entries();
+        const bool foundPid = std::any_of(entries.begin(), entries.end(), [&](const RunningProcessInfo& entry) {
+            return entry.processId == processId && _stricmp(entry.exeName.c_str(), captureName.c_str()) == 0;
+        });
+        if (!foundPid) {
+            std::cerr << "[audio] Helper PID " << processId << " is no longer running for " << captureName << std::endl;
+            return;
+        }
+    }
     constexpr int maxProcessLookupAttempts = 3;
-    for (int attempt = 0; attempt < maxProcessLookupAttempts && running_ && !stopRequested->load(); ++attempt) {
+    for (int attempt = 0; attempt < maxProcessLookupAttempts && processId == 0 && running_ && !stopRequested->load(); ++attempt) {
         processId = findProcessIdByName(captureName);
         if (processId != 0) break;
         std::cerr << "[audio] Process not found (attempt " << (attempt + 1) << "/" << maxProcessLookupAttempts << "): " << captureName << std::endl;

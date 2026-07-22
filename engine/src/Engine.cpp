@@ -5,6 +5,10 @@
 #include "clipture/ProcessSnapshot.hpp"
 
 #include <Windows.h>
+#include <audiopolicy.h>
+#include <endpointvolume.h>
+#include <mmdeviceapi.h>
+#include <wrl/client.h>
 
 #include <iostream>
 #include <algorithm>
@@ -97,6 +101,7 @@ void logEngineSaveTiming(const char* stage, SaveTimingClock::time_point startedA
 }
 
 std::string stripExtension(std::string value);
+std::string lowerAscii(std::string value);
 
 std::string displayAudioTrackName(const std::string& sourceId) {
     if (sourceId == "system-loopback-pcm") return "System audio";
@@ -113,6 +118,34 @@ std::string stripExtension(std::string value) {
     const auto dot = value.find_last_of('.');
     if (dot != std::string::npos) value = value.substr(0, dot);
     return value;
+}
+
+std::string stripKnownGameExecutableSuffix(std::string value) {
+    const auto lower = lowerAscii(value);
+    const std::vector<std::string> suffixes = {
+        "-wingdk-shipping",
+        "-win64-shipping",
+        "-win32-shipping",
+        "-windows-shipping",
+        "-shipping"
+    };
+    for (const auto& suffix : suffixes) {
+        if (lower.size() > suffix.size() && lower.compare(lower.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            value.resize(value.size() - suffix.size());
+            return value;
+        }
+    }
+    return value;
+}
+
+bool isLikelyGameExecutableName(const std::string& exeName) {
+    const auto lower = lowerAscii(std::filesystem::path(exeName).filename().string());
+    return lower.size() > 4 && (
+        lower.find("-wingdk-shipping.exe") != std::string::npos ||
+        lower.find("-win64-shipping.exe") != std::string::npos ||
+        lower.find("-win32-shipping.exe") != std::string::npos ||
+        lower.find("-windows-shipping.exe") != std::string::npos
+    );
 }
 
 std::string lowerAscii(std::string value) {
@@ -238,13 +271,51 @@ std::string friendlyProcessName(const std::string& processName) {
     if (lower == "leagueclientuxrender.exe" || lower == "league of legends.exe") return "League of Legends";
     if (lower == "deadbydaylight-win64-shipping.exe") return "Dead by Daylight";
     if (lower == "minecraft.windows.exe" || lower == "javaw.exe") return "Minecraft";
-    return stripExtension(processName);
+    return stripKnownGameExecutableSuffix(stripExtension(processName));
 }
 
 std::string captureProcessName(const std::string& sourceSpec) {
+    if (sourceSpec.rfind("app-pid:", 0) == 0) {
+        const auto nameStart = sourceSpec.find(':', 8);
+        return nameStart == std::string::npos ? std::string{} : sourceSpec.substr(nameStart + 1);
+    }
     if (sourceSpec.rfind("game:", 0) == 0) return sourceSpec.substr(5);
     if (sourceSpec.rfind("app:", 0) == 0) return sourceSpec.substr(4);
     return sourceSpec;
+}
+
+std::string sourceIdForProcessSpec(const std::string& sourceSpec) {
+    if (sourceSpec.rfind("app-pid:", 0) == 0) return "app:" + captureProcessName(sourceSpec);
+    if (sourceSpec.rfind("game:", 0) == 0 || sourceSpec.rfind("app:", 0) == 0) return sourceSpec;
+    return "app:" + sourceSpec;
+}
+
+bool isPidProcessSpec(const std::string& sourceSpec) {
+    return sourceSpec.rfind("app-pid:", 0) == 0;
+}
+
+DWORD processIdFromPidSourceSpec(const std::string& sourceSpec) {
+    if (!isPidProcessSpec(sourceSpec)) return 0;
+    const auto pidStart = std::string("app-pid:").size();
+    const auto pidEnd = sourceSpec.find(':', pidStart);
+    if (pidEnd == std::string::npos) return 0;
+    try {
+        return static_cast<DWORD>(std::stoul(sourceSpec.substr(pidStart, pidEnd - pidStart)));
+    } catch (...) {
+        return 0;
+    }
+}
+
+bool containsExactSourceSpec(const std::vector<std::string>& sourceSpecs, const std::string& sourceSpec) {
+    const auto wanted = lowerAscii(sourceSpec);
+    return std::any_of(sourceSpecs.begin(), sourceSpecs.end(), [&](const std::string& candidate) {
+        return lowerAscii(candidate) == wanted;
+    });
+}
+
+std::string appPidSourceSpec(DWORD processId, const std::string& exeName) {
+    if (processId == 0 || exeName.empty()) return {};
+    return "app-pid:" + std::to_string(processId) + ":" + exeName;
 }
 
 bool containsProcessName(const std::vector<std::string>& sourceSpecs, const std::string& processName) {
@@ -253,6 +324,90 @@ bool containsProcessName(const std::vector<std::string>& sourceSpecs, const std:
     return std::any_of(sourceSpecs.begin(), sourceSpecs.end(), [&](const std::string& sourceSpec) {
         return lowerAscii(captureProcessName(sourceSpec)) == wanted;
     });
+}
+
+const RunningProcessInfo* findProcessInfo(const RunningProcessSnapshot& snapshot, DWORD processId) {
+    if (processId == 0) return nullptr;
+    const auto& entries = snapshot.entries();
+    const auto found = std::find_if(entries.begin(), entries.end(), [&](const RunningProcessInfo& entry) {
+        return entry.processId == processId;
+    });
+    return found == entries.end() ? nullptr : &*found;
+}
+
+bool processHasAncestor(const RunningProcessSnapshot& snapshot, DWORD childProcessId, DWORD ancestorProcessId) {
+    if (childProcessId == 0 || ancestorProcessId == 0 || childProcessId == ancestorProcessId) return false;
+    DWORD current = childProcessId;
+    for (int depth = 0; depth < 24; ++depth) {
+        const auto* info = findProcessInfo(snapshot, current);
+        if (!info || info->parentProcessId == 0 || info->parentProcessId == current) return false;
+        if (info->parentProcessId == ancestorProcessId) return true;
+        current = info->parentProcessId;
+    }
+    return false;
+}
+
+std::vector<DWORD> activeAudioSessionProcessIds() {
+    std::vector<DWORD> processIds;
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool coInitialized = SUCCEEDED(hr);
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return processIds;
+
+    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
+    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (FAILED(hr) || !enumerator) {
+        if (coInitialized) CoUninitialize();
+        return processIds;
+    }
+
+    Microsoft::WRL::ComPtr<IMMDeviceCollection> devices;
+    hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &devices);
+    if (FAILED(hr) || !devices) {
+        if (coInitialized) CoUninitialize();
+        return processIds;
+    }
+
+    UINT deviceCount = 0;
+    devices->GetCount(&deviceCount);
+    std::set<DWORD> seen;
+    for (UINT deviceIndex = 0; deviceIndex < deviceCount; ++deviceIndex) {
+        Microsoft::WRL::ComPtr<IMMDevice> device;
+        if (FAILED(devices->Item(deviceIndex, &device)) || !device) continue;
+
+        Microsoft::WRL::ComPtr<IAudioSessionManager2> sessionManager;
+        if (FAILED(device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(sessionManager.GetAddressOf()))) || !sessionManager) {
+            continue;
+        }
+
+        Microsoft::WRL::ComPtr<IAudioSessionEnumerator> sessions;
+        if (FAILED(sessionManager->GetSessionEnumerator(&sessions)) || !sessions) continue;
+
+        int sessionCount = 0;
+        sessions->GetCount(&sessionCount);
+        for (int sessionIndex = 0; sessionIndex < sessionCount; ++sessionIndex) {
+            Microsoft::WRL::ComPtr<IAudioSessionControl> session;
+            if (FAILED(sessions->GetSession(sessionIndex, &session)) || !session) continue;
+
+            AudioSessionState state = AudioSessionStateInactive;
+            session->GetState(&state);
+            if (state != AudioSessionStateActive) {
+                Microsoft::WRL::ComPtr<IAudioMeterInformation> meter;
+                float peak = 0.0f;
+                if (FAILED(session.As(&meter)) || !meter || FAILED(meter->GetPeakValue(&peak)) || peak <= 0.0005f) {
+                    continue;
+                }
+            }
+
+            Microsoft::WRL::ComPtr<IAudioSessionControl2> session2;
+            if (FAILED(session.As(&session2)) || !session2) continue;
+            DWORD processId = 0;
+            if (FAILED(session2->GetProcessId(&processId)) || processId == 0) continue;
+            if (seen.insert(processId).second) processIds.push_back(processId);
+        }
+    }
+
+    if (coInitialized) CoUninitialize();
+    return processIds;
 }
 
 bool isIgnoredForegroundProcess(const std::string& exeName) {
@@ -319,7 +474,7 @@ bool isKnownGameProcess(const std::string& exeName, const std::string& processPa
         return true;
     }
     gameName = friendlyProcessName(exeName);
-    if (gameName != stripExtension(exeName)) {
+    if (gameName != stripExtension(exeName) || isLikelyGameExecutableName(exeName)) {
         std::lock_guard<std::mutex> lock(g_exeToGameNameMutex);
         g_exeToGameName[lowerAscii(exeName)] = gameName;
         return true;
@@ -559,6 +714,25 @@ void Engine::gameDetectionLoop() {
             std::vector<std::string> dynamicSources;
             std::vector<std::string> detectedGames;
             std::vector<std::string> foregroundSystemApps;
+            std::map<std::string, std::string> dynamicTrackAliases;
+            auto rememberForegroundSystemSource = [&](const std::string& sourceSpec) {
+                if (sourceSpec.empty()) return;
+                foregroundSystemProcesses_.erase(
+                    std::remove_if(
+                        foregroundSystemProcesses_.begin(),
+                        foregroundSystemProcesses_.end(),
+                        [&](const std::string& name) {
+                            if (isPidProcessSpec(sourceSpec) || isPidProcessSpec(name)) {
+                                return lowerAscii(name) == lowerAscii(sourceSpec);
+                            }
+                            return lowerAscii(captureProcessName(name)) == lowerAscii(captureProcessName(sourceSpec));
+                        }),
+                    foregroundSystemProcesses_.end());
+                foregroundSystemProcesses_.insert(foregroundSystemProcesses_.begin(), sourceSpec);
+                if (foregroundSystemProcesses_.size() > 6) {
+                    foregroundSystemProcesses_.resize(6);
+                }
+            };
             
             HWND foreground = GetForegroundWindow();
             if (foreground) {
@@ -578,21 +752,36 @@ void Engine::gameDetectionLoop() {
                                 !containsProcessName(dynamicSources, fgExeName)) {
                                 dynamicSources.push_back("game:" + fgExeName);
                                 detectedGames.push_back(fgExeName);
-                            } else if (settings_.captureForegroundSystemAudio && !isGame &&
+                            } else if ((settings_.captureForegroundSystemAudio || settings_.captureGameAudio) && !isGame &&
                                 !containsProcessName(settings_.appAudioProcesses, fgExeName)) {
-                                foregroundSystemProcesses_.erase(
-                                    std::remove_if(
-                                        foregroundSystemProcesses_.begin(),
-                                        foregroundSystemProcesses_.end(),
-                                        [&](const std::string& name) {
-                                            return lowerAscii(captureProcessName(name)) == lowerAscii(fgExeName);
-                                        }),
-                                    foregroundSystemProcesses_.end());
-                                foregroundSystemProcesses_.insert(foregroundSystemProcesses_.begin(), fgExeName);
-                                if (foregroundSystemProcesses_.size() > 3) {
-                                    foregroundSystemProcesses_.resize(3);
-                                }
+                                rememberForegroundSystemSource(fgExeName);
+                                dynamicTrackAliases[sourceIdForProcessSpec(fgExeName)] = "system-loopback-pcm";
                                 foregroundSystemApps.push_back(fgExeName);
+
+                                for (const auto audioProcessId : activeAudioSessionProcessIds()) {
+                                    if (audioProcessId == fgPid) continue;
+                                    const auto* audioProcess = findProcessInfo(processSnapshot, audioProcessId);
+                                    if (!audioProcess || audioProcess->exeName.empty()) continue;
+                                    if (isIgnoredForegroundProcess(audioProcess->exeName) ||
+                                        containsProcessName(settings_.appAudioProcesses, audioProcess->exeName)) {
+                                        continue;
+                                    }
+
+                                    const bool relatedByTree =
+                                        processHasAncestor(processSnapshot, audioProcessId, fgPid) ||
+                                        processHasAncestor(processSnapshot, fgPid, audioProcessId);
+                                    const bool relatedBySameExe = lowerAscii(audioProcess->exeName) == lowerAscii(fgExeName);
+                                    const bool alreadyCoveredByName = containsProcessName(dynamicSources, audioProcess->exeName);
+                                    if (alreadyCoveredByName && (!relatedBySameExe || relatedByTree)) continue;
+                                    const bool relatedToForeground = relatedByTree || relatedBySameExe;
+                                    if (!relatedToForeground) continue;
+
+                                    const auto helperSpec = appPidSourceSpec(audioProcessId, audioProcess->exeName);
+                                    if (helperSpec.empty()) continue;
+                                    rememberForegroundSystemSource(helperSpec);
+                                    dynamicTrackAliases[sourceIdForProcessSpec(helperSpec)] = "system-loopback-pcm";
+                                    foregroundSystemApps.push_back(audioProcess->exeName);
+                                }
                             }
                         }
                     }
@@ -621,24 +810,30 @@ void Engine::gameDetectionLoop() {
                 }
             }
 
-            if (settings_.captureForegroundSystemAudio) {
+            if (settings_.captureForegroundSystemAudio || settings_.captureGameAudio) {
                 foregroundSystemProcesses_.erase(
                     std::remove_if(
                         foregroundSystemProcesses_.begin(),
                         foregroundSystemProcesses_.end(),
                         [&](const std::string& name) {
-                            return isIgnoredForegroundProcess(name) ||
+                            const bool processStillRunning = isPidProcessSpec(name)
+                                ? findProcessInfo(processSnapshot, processIdFromPidSourceSpec(name)) != nullptr
+                                : processSnapshot.contains(name);
+                            return isIgnoredForegroundProcess(captureProcessName(name)) ||
                                 containsProcessName(settings_.appAudioProcesses, name) ||
-                                !processSnapshot.contains(name);
+                                !processStillRunning;
                         }),
                     foregroundSystemProcesses_.end());
 
-                if (foregroundSystemProcesses_.size() > 3) {
-                    foregroundSystemProcesses_.resize(3);
+                if (foregroundSystemProcesses_.size() > 6) {
+                    foregroundSystemProcesses_.resize(6);
                 }
 
                 for (const auto& processName : foregroundSystemProcesses_) {
-                    if (!containsProcessName(dynamicSources, processName)) {
+                    const bool alreadyAdded = isPidProcessSpec(processName)
+                        ? containsExactSourceSpec(dynamicSources, processName)
+                        : containsProcessName(dynamicSources, processName);
+                    if (!alreadyAdded) {
                         dynamicSources.push_back(processName);
                     }
                 }
@@ -646,9 +841,17 @@ void Engine::gameDetectionLoop() {
             
             std::vector<std::string> mergedSources = settings_.appAudioProcesses;
             for (const auto& sourceSpec : dynamicSources) {
-                if (!containsProcessName(mergedSources, sourceSpec)) {
+                const bool alreadyMerged = isPidProcessSpec(sourceSpec)
+                    ? containsExactSourceSpec(mergedSources, sourceSpec)
+                    : containsProcessName(mergedSources, sourceSpec);
+                if (!alreadyMerged) {
                     mergedSources.push_back(sourceSpec);
                 }
+            }
+            {
+                std::lock_guard<std::mutex> lock(appAudioSourcesMutex_);
+                activeAppAudioSources_ = mergedSources;
+                activeAppAudioTrackAliases_ = dynamicTrackAliases;
             }
             if (!detectedGames.empty()) {
                 std::cerr << "[engine] Detected games in loop:";
@@ -723,7 +926,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     settings_.includeMicrophoneAudio = settings.includeMicrophoneAudio;
     settings_.captureGameAudio = settings.captureGameAudio;
     settings_.captureForegroundSystemAudio = settings.captureForegroundSystemAudio;
-    if (!settings_.captureForegroundSystemAudio) {
+    if (!settings_.captureForegroundSystemAudio && !settings_.captureGameAudio) {
         foregroundSystemProcesses_.clear();
     }
     settings_.micVolume = settings.micVolume;
@@ -787,6 +990,11 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
         previousMicDeviceName != settings_.micDeviceName;
 
     if (audioCaptureWorker_ && appAudioChanged) {
+        {
+            std::lock_guard<std::mutex> lock(appAudioSourcesMutex_);
+            activeAppAudioSources_ = settings_.appAudioProcesses;
+            activeAppAudioTrackAliases_.clear();
+        }
         audioCaptureWorker_->configureAppSources(settings_.appAudioProcesses);
     }
     if (audioCaptureWorker_ && micSettingsChanged) {
@@ -1013,9 +1221,27 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     };
 
     std::set<std::string> runningAppSources;
-    for (const auto& app : settings_.appAudioProcesses) {
-        if (isCaptureProcessRunning(app)) {
-            runningAppSources.insert("app:" + app);
+    std::vector<std::string> appSourcesForSave;
+    std::map<std::string, std::string> appTrackAliases;
+    {
+        std::lock_guard<std::mutex> lock(appAudioSourcesMutex_);
+        appSourcesForSave = activeAppAudioSources_;
+        appTrackAliases = activeAppAudioTrackAliases_;
+    }
+    if (appSourcesForSave.empty()) {
+        appSourcesForSave = settings_.appAudioProcesses;
+    } else {
+        for (const auto& app : settings_.appAudioProcesses) {
+            if (!containsProcessName(appSourcesForSave, app)) {
+                appSourcesForSave.push_back(app);
+            }
+        }
+    }
+
+    for (const auto& app : appSourcesForSave) {
+        const auto sourceId = sourceIdForProcessSpec(app);
+        if (sourceId.rfind("app:", 0) == 0 && isCaptureProcessRunning(app)) {
+            runningAppSources.insert(sourceId);
         }
     }
 
@@ -1034,7 +1260,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             }
         } else if (packet.sourceId.rfind("app:", 0) == 0) {
             if (runningAppSources.find(packet.sourceId) != runningAppSources.end()) {
-                audioByTrack[packet.sourceId].push_back(packet);
+                const auto alias = appTrackAliases.find(packet.sourceId);
+                audioByTrack[alias == appTrackAliases.end() ? packet.sourceId : alias->second].push_back(packet);
             }
         }
     }

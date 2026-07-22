@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -79,6 +80,9 @@ private:
     std::unique_ptr<EncoderWorker> encoderWorker_;
     std::unique_ptr<AudioCaptureWorker> audioCaptureWorker_;
     std::vector<std::string> foregroundSystemProcesses_;
+    std::mutex appAudioSourcesMutex_;
+    std::vector<std::string> activeAppAudioSources_;
+    std::map<std::string, std::string> activeAppAudioTrackAliases_;
     int64_t pendingAutoVideoResolutionReset100ns_ = 0;
     
     std::atomic<bool> gameDetectionRunning_{false};

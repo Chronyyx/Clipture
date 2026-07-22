@@ -3,9 +3,9 @@ import type { OpenDialogOptions } from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { format } from "node:util";
-import { basename, dirname, extname, join, parse } from "node:path";
+import { basename, dirname, extname, join, parse, normalize } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, SaveClipResult, ClipSoundOption, UpdateState } from "../shared/types";
@@ -26,6 +26,8 @@ const defaultSettings: ClipSettings = {
   showNotification: true,
   notificationPosition: "top-right",
   saveFolder: "",
+  importedVideoDirectories: [],
+  importedVideoTitles: {},
   audioSources: [
     { id: "system", label: "System audio", kind: "system", enabled: true, omitIfSilent: true },
     {
@@ -118,6 +120,12 @@ function normalizeSettings(settings: ClipSettings): ClipSettings {
   const nvencPreset = [1, 2, 3, 4, 5].includes(Number(settings.nvencPreset)) ? Number(settings.nvencPreset) as ClipSettings["nvencPreset"] : defaultSettings.nvencPreset;
   const validResolutionPresets = new Set(["system", "144p", "360p", "720p", "1080p", "1440p", "4k"]);
   const resolutionPreset = validResolutionPresets.has(settings.resolutionPreset) ? settings.resolutionPreset : defaultSettings.resolutionPreset;
+  const importedVideoDirectories = Array.from(new Set((settings.importedVideoDirectories ?? [])
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => normalize(value.trim()))));
+  const importedVideoTitles = Object.fromEntries(Object.entries(settings.importedVideoTitles ?? {})
+    .filter(([filePath, title]) => typeof filePath === "string" && filePath.trim() && typeof title === "string" && title.trim())
+    .map(([filePath, title]) => [normalize(filePath.trim()), title.trim()]));
   return {
     ...defaultSettings,
     ...settings,
@@ -129,6 +137,8 @@ function normalizeSettings(settings: ClipSettings): ClipSettings {
     maxAutoBitrateMbps: clampNumber(settings.maxAutoBitrateMbps, defaultSettings.maxAutoBitrateMbps, 4, 120),
     resolutionPreset,
     monitorId: typeof settings.monitorId === "string" && settings.monitorId.trim() ? settings.monitorId : defaultSettings.monitorId,
+    importedVideoDirectories,
+    importedVideoTitles,
     audioSources
   };
 }
@@ -554,6 +564,14 @@ function soundsFolderPath(): string {
   return folder;
 }
 
+function cleanupAbandonedPreviewCache(): void {
+  try {
+    rmSync(appDataPath("preview-cache"), { recursive: true, force: true });
+  } catch {
+    // Best effort cleanup for the removed disk-backed preview experiment.
+  }
+}
+
 function safeSoundFileName(filePath: string): string {
   const parsed = parse(filePath);
   const base = (parsed.name || "sound")
@@ -622,74 +640,234 @@ function listClipSounds(): ClipSoundOption[] {
 }
 
 let previewServerPort = 0;
-const previewCache = new Map<string, Buffer>();
+const mixedAudioChunkSeconds = 8;
+
+function playbackPayloadUrl(pathname: string, payload: unknown): string {
+  const data = Buffer.from(JSON.stringify(payload)).toString("base64");
+  return `http://127.0.0.1:${previewServerPort}${pathname}?data=${encodeURIComponent(data)}`;
+}
+
+function parsePlaybackPayload<T>(encoded: string | null): T | undefined {
+  if (!encoded) return undefined;
+  try {
+    return JSON.parse(Buffer.from(encoded, "base64").toString("utf-8")) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function mediaHeaders(extra: Record<string, string | number> = {}): Record<string, string | number> {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "no-store",
+    "Content-Type": "video/mp4",
+    ...extra
+  };
+}
+
+function mediaContentType(filePath: string): string {
+  switch (extname(filePath).toLowerCase()) {
+    case ".webm": return "video/webm";
+    case ".mov": return "video/quicktime";
+    case ".mkv": return "video/x-matroska";
+    case ".avi": return "video/x-msvideo";
+    default: return "video/mp4";
+  }
+}
+
+function audioChunkHeaders(extra: Record<string, string | number> = {}): Record<string, string | number> {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store",
+    "Content-Type": "audio/wav",
+    ...extra
+  };
+}
+
+function sendMixedAudioChunk(
+  req: import("node:http").IncomingMessage,
+  res: import("node:http").ServerResponse,
+  filePath: string,
+  selectedAudioIndexes: number[],
+  startSeconds: number,
+  durationSeconds: number
+): void {
+  if (!existsSync(filePath)) {
+    res.writeHead(404).end();
+    return;
+  }
+
+  const audioIndexes = selectedAudioIndexes
+    .map((index) => Math.trunc(Number(index)))
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < 32);
+
+  const start = Math.max(0, Number.isFinite(startSeconds) ? startSeconds : 0);
+  const duration = Math.min(20, Math.max(0.25, Number.isFinite(durationSeconds) ? durationSeconds : mixedAudioChunkSeconds));
+
+  if (audioIndexes.length === 0) {
+    res.writeHead(400).end();
+    return;
+  }
+
+  if (req.method === "HEAD") {
+    res.writeHead(200, audioChunkHeaders()).end();
+    return;
+  }
+
+  const filterInputs = audioIndexes.map((index) => `[0:a:${index}]`).join("");
+  const filter = audioIndexes.length === 1
+    ? `${filterInputs}aresample=48000[aout]`
+    : `${filterInputs}amix=inputs=${audioIndexes.length}:duration=longest:dropout_transition=0,aresample=48000[aout]`;
+
+  const child = spawn(resolveFfmpegPath(), [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-ss",
+    start.toFixed(3),
+    "-t",
+    duration.toFixed(3),
+    "-i",
+    filePath,
+    "-filter_complex",
+    filter,
+    "-map",
+    "[aout]",
+    "-vn",
+    "-sn",
+    "-dn",
+    "-ac",
+    "2",
+    "-ar",
+    "48000",
+    "-f",
+    "wav",
+    "pipe:1"
+  ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+
+  const chunks: Buffer[] = [];
+  let stderr = "";
+  let settled = false;
+
+  child.stdout.on("data", (chunk: Buffer) => {
+    chunks.push(chunk);
+  });
+
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+
+  res.on("close", () => {
+    if (!settled) child.kill();
+  });
+
+  child.on("error", (error) => {
+    settled = true;
+    if (!res.headersSent) {
+      res.writeHead(500, audioChunkHeaders()).end(`ffmpeg unavailable: ${error.message}`);
+    } else {
+      res.end();
+    }
+  });
+
+  child.on("exit", (code) => {
+    settled = true;
+    if (code !== 0 || chunks.length === 0) {
+      const message = stderr.trim() || `ffmpeg exited with code ${code}`;
+      if (!res.headersSent) {
+        res.writeHead(500, audioChunkHeaders()).end(message);
+      } else {
+        res.end();
+      }
+      return;
+    }
+
+    const buffer = Buffer.concat(chunks);
+    res.writeHead(200, audioChunkHeaders({ "Content-Length": buffer.length }));
+    res.end(buffer);
+  });
+}
+
+function sendFileRange(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, filePath: string): void {
+  if (!existsSync(filePath)) {
+    res.writeHead(404).end();
+    return;
+  }
+
+  const { size } = statSync(filePath);
+  const headers = (extra: Record<string, string | number> = {}) => mediaHeaders({ "Content-Type": mediaContentType(filePath), ...extra });
+  const range = req.headers.range;
+  if (!range) {
+    if (req.method === "HEAD") {
+      res.writeHead(200, headers({ "Content-Length": size })).end();
+      return;
+    }
+    res.writeHead(200, headers({ "Content-Length": size }));
+    const stream = createReadStream(filePath);
+    res.on("close", () => stream.destroy());
+    stream.on("error", () => {
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    });
+    stream.pipe(res);
+    return;
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!match) {
+    res.writeHead(416, headers({ "Content-Range": `bytes */${size}` })).end();
+    return;
+  }
+
+  const suffixLength = !match[1] && match[2] ? Number(match[2]) : 0;
+  const requestedStart = suffixLength > 0 ? size - suffixLength : Number(match[1] || 0);
+  const requestedEnd = suffixLength > 0 ? size - 1 : Number(match[2] || size - 1);
+  const start = Math.min(Math.max(0, requestedStart), Math.max(0, size - 1));
+  const end = Math.min(Math.max(start, requestedEnd), Math.max(0, size - 1));
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= size) {
+    res.writeHead(416, headers({ "Content-Range": `bytes */${size}` })).end();
+    return;
+  }
+
+  if (req.method === "HEAD") {
+    res.writeHead(206, headers({
+      "Content-Range": `bytes ${start}-${end}/${size}`,
+      "Content-Length": end - start + 1
+    })).end();
+    return;
+  }
+
+  res.writeHead(206, headers({
+    "Content-Range": `bytes ${start}-${end}/${size}`,
+    "Content-Length": end - start + 1
+  }));
+  const stream = createReadStream(filePath, { start, end });
+  res.on("close", () => stream.destroy());
+  stream.on("error", () => {
+    if (!res.headersSent) res.writeHead(500);
+    res.end();
+  });
+  stream.pipe(res);
+}
 
 function setupPreviewServer() {
   const server = createServer((req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
-    if (url.pathname === "/preview") {
-      const payload = url.searchParams.get("data");
-      if (!payload) return res.writeHead(400).end();
-      
-      const sendBuffer = (buffer: Buffer) => {
-        if (req.headers.range) {
-          const parts = req.headers.range.replace(/bytes=/, "").split("-");
-          const start = parseInt(parts[0], 10);
-          const end = parts[1] ? parseInt(parts[1], 10) : buffer.length - 1;
-          const chunksize = (end - start) + 1;
-          res.writeHead(206, {
-            "Content-Range": `bytes ${start}-${end}/${buffer.length}`,
-            "Accept-Ranges": "bytes",
-            "Content-Length": chunksize,
-            "Content-Type": "video/mp4"
-          });
-          res.end(buffer.subarray(start, end + 1));
-        } else {
-          res.writeHead(200, {
-            "Content-Length": buffer.length,
-            "Content-Type": "video/mp4",
-            "Accept-Ranges": "bytes"
-          });
-          res.end(buffer);
-        }
-      };
+    if (url.pathname === "/clip") {
+      const payload = parsePlaybackPayload<{ filePath?: string }>(url.searchParams.get("data"));
+      if (!payload?.filePath) return res.writeHead(400).end();
+      sendFileRange(req, res, payload.filePath);
+      return;
+    }
 
-      if (previewCache.has(payload)) {
-        return sendBuffer(previewCache.get(payload)!);
-      }
-
-      try {
-        const { filePath, selectedAudioIndexes } = JSON.parse(Buffer.from(payload, "base64").toString("utf-8"));
-        
-        const filterInputs = selectedAudioIndexes.map((index: number) => `[0:a:${index}]`).join("");
-        const filter = `${filterInputs}amix=inputs=${selectedAudioIndexes.length}:duration=longest:dropout_transition=0[aout]`;
-        
-        const child = spawn(resolveFfmpegPath(), [
-          "-hide_banner", "-loglevel", "error",
-          "-i", filePath,
-          "-filter_complex", filter,
-          "-map", "0:v:0", "-map", "[aout]",
-          "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-          "-f", "mp4", "-movflags", "frag_keyframe+empty_moov",
-          "pipe:1"
-        ], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-        
-        const chunks: Buffer[] = [];
-        child.stdout.on("data", (c) => chunks.push(c));
-        
-        child.on("exit", (code) => {
-          if (code === 0) {
-            const buffer = Buffer.concat(chunks);
-            previewCache.clear();
-            previewCache.set(payload, buffer);
-            sendBuffer(buffer);
-          } else {
-            res.writeHead(500).end();
-          }
-        });
-      } catch (err) {
-        res.writeHead(500).end();
-      }
+    if (url.pathname === "/audio-chunk") {
+      const payload = parsePlaybackPayload<{ filePath?: string; selectedAudioIndexes?: number[] }>(url.searchParams.get("data"));
+      const start = Number(url.searchParams.get("start") ?? 0);
+      const duration = Number(url.searchParams.get("duration") ?? mixedAudioChunkSeconds);
+      if (!payload?.filePath || !Array.isArray(payload.selectedAudioIndexes)) return res.writeHead(400).end();
+      sendMixedAudioChunk(req, res, payload.filePath, payload.selectedAudioIndexes, start, duration);
+      return;
     } else {
       res.writeHead(404).end();
     }
@@ -793,7 +971,406 @@ function parseCsvLine(line: string): string[] {
   return values;
 }
 
-function listActiveProcesses(): Promise<ActiveProcess[]> {
+type ProcessIconEntry = {
+  name: string;
+  pid: number;
+  executablePath?: string;
+};
+
+type ClipIconCandidatePlan = {
+  gameCandidates: string[];
+  fallbackCandidates: string[];
+};
+
+let iconProcessSnapshot: { expiresAt: number; promise: Promise<ProcessIconEntry[]> } | undefined;
+const processIconDataUrls = new Map<string, string>();
+const knownGameIconAliases = new Map<string, string[]>([
+  ["counter-strike 2", ["cs2.exe"]],
+  ["roblox", ["robloxplayerbeta.exe"]],
+  ["fortnite", ["fortniteclient-win64-shipping.exe"]],
+  ["valorant", ["valorant-win64-shipping.exe"]],
+  ["league of legends", ["leagueclientuxrender.exe", "league of legends.exe"]],
+  ["dead by daylight", ["deadbydaylight-win64-shipping.exe"]],
+  ["minecraft", ["minecraft.windows.exe", "javaw.exe"]]
+]);
+let installedIconTargets: Array<{ name: string; root: string }> | undefined;
+
+function stripExecutableExtension(value: string): string {
+  return value.replace(/\.exe$/i, "");
+}
+
+function lowerPath(value: string): string {
+  return normalize(value).toLowerCase();
+}
+
+function readTextFileSafe(filePath: string): string {
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function extractManifestField(text: string, field: string): string {
+  const vdfPattern = new RegExp(`"${field}"\\s+"([^"]+)"`, "i");
+  const vdfMatch = text.match(vdfPattern);
+  if (vdfMatch?.[1]) return vdfMatch[1];
+  const jsonPattern = new RegExp(`"${field}"\\s*:\\s*"([^"]+)"`, "i");
+  const jsonMatch = text.match(jsonPattern);
+  return jsonMatch?.[1] ?? "";
+}
+
+function steamLibraryRoots(): string[] {
+  const programFilesX86 = process.env["ProgramFiles(x86)"];
+  const steamRoot = programFilesX86 ? join(programFilesX86, "Steam") : "C:\\Program Files (x86)\\Steam";
+  const roots = [steamRoot];
+  const libraryFile = join(steamRoot, "steamapps", "libraryfolders.vdf");
+  const text = readTextFileSafe(libraryFile);
+  const pathPattern = /"path"\s+"([^"]+)"/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pathPattern.exec(text))) {
+    roots.push(match[1].replace(/\\\\/g, "\\"));
+  }
+  return Array.from(new Set(roots.map(lowerPath))).map((root) => normalize(root));
+}
+
+function scanInstalledIconTargets(): Array<{ name: string; root: string }> {
+  if (installedIconTargets) return installedIconTargets;
+  const targets: Array<{ name: string; root: string }> = [];
+
+  for (const libraryRoot of steamLibraryRoots()) {
+    const steamApps = join(libraryRoot, "steamapps");
+    if (!existsSync(steamApps)) continue;
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(steamApps);
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      if (!entry.toLowerCase().startsWith("appmanifest_") || !entry.toLowerCase().endsWith(".acf")) continue;
+      const text = readTextFileSafe(join(steamApps, entry));
+      const name = extractManifestField(text, "name");
+      const installDir = extractManifestField(text, "installdir");
+      if (name && installDir) targets.push({ name, root: join(steamApps, "common", installDir) });
+    }
+  }
+
+  const programData = process.env.ProgramData || "C:\\ProgramData";
+  const epicManifests = join(programData, "Epic", "EpicGamesLauncher", "Data", "Manifests");
+  if (existsSync(epicManifests)) {
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(epicManifests);
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      if (!entry.toLowerCase().endsWith(".item")) continue;
+      const text = readTextFileSafe(join(epicManifests, entry));
+      const name = extractManifestField(text, "DisplayName");
+      const root = extractManifestField(text, "InstallLocation");
+      if (name && root) targets.push({ name, root });
+    }
+  }
+
+  installedIconTargets = targets;
+  return targets;
+}
+
+function friendlyProcessNameForIcon(processName: string): string {
+  const lower = basename(processName).toLowerCase();
+  if (lower === "robloxplayerbeta.exe") return "Roblox";
+  if (lower === "fortniteclient-win64-shipping.exe") return "Fortnite";
+  if (lower === "valorant-win64-shipping.exe") return "VALORANT";
+  if (lower === "cs2.exe") return "Counter-Strike 2";
+  if (lower === "leagueclientuxrender.exe" || lower === "league of legends.exe") return "League of Legends";
+  if (lower === "deadbydaylight-win64-shipping.exe") return "Dead by Daylight";
+  if (lower === "minecraft.windows.exe" || lower === "javaw.exe") return "Minecraft";
+  return stripExecutableExtension(basename(processName));
+}
+
+function isIgnoredIconCandidate(value: string): boolean {
+  return ["", "foreground app", "clipture", "system audio", "microphone", "mixed preview"].includes(value.toLowerCase());
+}
+
+function isKnownGameIconCandidate(value: string): boolean {
+  const lower = stripExecutableExtension(value.trim().toLowerCase());
+  if (!lower) return false;
+  if (knownGameIconAliases.has(lower)) return true;
+  for (const [gameName, aliases] of knownGameIconAliases) {
+    if (gameName === lower) return true;
+    if (aliases.some((alias) => stripExecutableExtension(alias.toLowerCase()) === lower)) return true;
+  }
+  return false;
+}
+
+function uniqueIconCandidates(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values
+    .map((value) => value.trim())
+    .filter((value) => {
+      const key = value.toLowerCase();
+      if (isIgnoredIconCandidate(value) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function clipIconCandidatePlan(clip: ClipRecord, preferredLabels: string[] = []): ClipIconCandidatePlan {
+  const hasPreferredLabels = preferredLabels.some((label) => label.trim().length > 0);
+  const preferredCandidates = uniqueIconCandidates(preferredLabels);
+  if (hasPreferredLabels) {
+    return {
+      gameCandidates: preferredCandidates.filter(isKnownGameIconCandidate),
+      fallbackCandidates: preferredCandidates
+    };
+  }
+
+  const trackCandidates = clip.audioTracks
+    .filter((track) => !["system-loopback-pcm", "microphone-pcm", "mixed-preview-pcm"].includes(track))
+    .map((track) => track.replace(/^(app|game):/i, ""));
+  const gameTrackCandidates = clip.audioTracks
+    .filter((track) => track.startsWith("game:"))
+    .map((track) => track.slice(5));
+  const values = [
+    clip.gameOrApp,
+    ...(clip.focusedApps ?? []),
+    ...trackCandidates
+  ];
+  const explicitGameCandidates = [
+    ...gameTrackCandidates,
+    ...(clip.isGame ? [clip.gameOrApp] : [])
+  ];
+  const knownGameCandidates = values.filter(isKnownGameIconCandidate);
+
+  const gameCandidates = uniqueIconCandidates([
+    ...explicitGameCandidates,
+    ...knownGameCandidates
+  ]);
+  const fallbackCandidates = uniqueIconCandidates([
+    ...gameCandidates,
+    ...values
+  ]);
+
+  return {
+    gameCandidates,
+    fallbackCandidates
+  };
+}
+
+function processIconSearchTokens(candidates: string[]): Set<string> {
+  const tokens = new Set<string>();
+  for (const candidate of candidates) {
+    const lower = candidate.toLowerCase();
+    const base = stripExecutableExtension(lower);
+    tokens.add(lower);
+    tokens.add(base);
+    if (!lower.endsWith(".exe")) tokens.add(`${lower}.exe`);
+    for (const alias of knownGameIconAliases.get(base) ?? []) {
+      tokens.add(alias);
+      tokens.add(stripExecutableExtension(alias));
+    }
+  }
+  return tokens;
+}
+
+function candidateAliasNames(candidates: string[]): string[] {
+  const aliases = new Set<string>();
+  for (const candidate of candidates) {
+    const lower = candidate.toLowerCase();
+    const base = stripExecutableExtension(lower);
+    aliases.add(lower);
+    aliases.add(base);
+    if (!lower.endsWith(".exe")) aliases.add(`${lower}.exe`);
+    for (const alias of knownGameIconAliases.get(base) ?? []) {
+      aliases.add(alias.toLowerCase());
+      aliases.add(stripExecutableExtension(alias.toLowerCase()));
+    }
+  }
+  return [...aliases].filter(Boolean);
+}
+
+function findExecutableInDirectory(root: string, aliases: string[]): string {
+  const wanted = new Set(aliases.map((alias) => alias.toLowerCase()).flatMap((alias) => [alias, `${stripExecutableExtension(alias)}.exe`]));
+  const queue = [root];
+  let scanned = 0;
+  const maxEntries = 2500;
+  while (queue.length > 0 && scanned < maxEntries) {
+    const current = queue.shift()!;
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(current);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (++scanned > maxEntries) break;
+      const fullPath = join(current, entry);
+      let stats;
+      try {
+        stats = statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (stats.isDirectory()) {
+        const lower = entry.toLowerCase();
+        if (!["bin", "binaries", "game", "win64", "windows", "retail", "csgo"].includes(lower) && current !== root) continue;
+        queue.push(fullPath);
+      } else if (entry.toLowerCase().endsWith(".exe") && wanted.has(entry.toLowerCase())) {
+        return fullPath;
+      }
+    }
+  }
+  return "";
+}
+
+function parseProcessIconSnapshot(stdout: string): ProcessIconEntry[] {
+  const text = stdout.trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    return rows
+      .map((row) => ({
+        name: typeof row?.Name === "string" ? row.Name : "",
+        pid: Number(row?.ProcessId),
+        executablePath: typeof row?.ExecutablePath === "string" ? row.ExecutablePath : undefined
+      }))
+      .filter((row) => row.name && Number.isFinite(row.pid));
+  } catch {
+    return [];
+  }
+}
+
+function listProcessesForIcons(): Promise<ProcessIconEntry[]> {
+  const now = Date.now();
+  if (iconProcessSnapshot && iconProcessSnapshot.expiresAt > now) return iconProcessSnapshot.promise;
+
+  const command = "Get-CimInstance Win32_Process | Select-Object Name,ProcessId,ExecutablePath | ConvertTo-Json -Compress";
+  const promise = new Promise<ProcessIconEntry[]>((resolve) => {
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command], { windowsHide: true });
+    let stdout = "";
+    let settled = false;
+    const finish = (entries: ProcessIconEntry[]) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(entries);
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish([]);
+    }, 6000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.on("error", () => finish([]));
+    child.on("exit", () => finish(parseProcessIconSnapshot(stdout)));
+  });
+
+  iconProcessSnapshot = { expiresAt: now + 10_000, promise };
+  return promise;
+}
+
+function findIconProcess(candidates: string[], processes: ProcessIconEntry[]): ProcessIconEntry | undefined {
+  const tokens = processIconSearchTokens(candidates);
+  for (const candidate of candidates) {
+    const candidateTokens = processIconSearchTokens([candidate]);
+    const match = processes.find((process) => {
+      const name = basename(process.name).toLowerCase();
+      const base = stripExecutableExtension(name);
+      const friendly = friendlyProcessNameForIcon(name).toLowerCase();
+      return candidateTokens.has(name) || candidateTokens.has(base) || candidateTokens.has(friendly);
+    });
+    if (match) return match;
+  }
+  return processes.find((process) => {
+    const name = basename(process.name).toLowerCase();
+    const base = stripExecutableExtension(name);
+    const friendly = friendlyProcessNameForIcon(name).toLowerCase();
+    return tokens.has(name) || tokens.has(base) || tokens.has(friendly);
+  });
+}
+
+function findInstalledExecutableForIcon(candidates: string[]): string {
+  if (candidates.length === 0) return "";
+  const aliases = candidateAliasNames(candidates);
+  const candidateNames = new Set(aliases.map((alias) => stripExecutableExtension(alias).toLowerCase()));
+  for (const target of scanInstalledIconTargets()) {
+    const targetName = stripExecutableExtension(target.name).toLowerCase();
+    const matchingGameName = candidateNames.has(targetName) || aliases.some((alias) => stripExecutableExtension(alias).toLowerCase() === targetName);
+    if (!matchingGameName || !existsSync(target.root)) continue;
+    const executablePath = findExecutableInDirectory(target.root, aliases);
+    if (executablePath) return executablePath;
+  }
+  return "";
+}
+
+async function clipIconUrl(clip: ClipRecord, preferredLabels: string[] = []): Promise<string> {
+  const candidatePlan = clipIconCandidatePlan(clip, preferredLabels);
+  const processes = await listProcessesForIcons();
+  const gameProcess = findIconProcess(candidatePlan.gameCandidates, processes);
+  const process = gameProcess ?? (
+    candidatePlan.gameCandidates.length > 0
+      ? undefined
+      : findIconProcess(candidatePlan.fallbackCandidates, processes)
+  );
+  const executablePath =
+    process?.executablePath ||
+    findInstalledExecutableForIcon(candidatePlan.gameCandidates) ||
+    findInstalledExecutableForIcon(candidatePlan.fallbackCandidates);
+  return executableIconDataUrl(executablePath, 20);
+}
+
+async function executableIconDataUrl(executablePath: string | undefined, size: number): Promise<string> {
+  if (!executablePath || !existsSync(executablePath)) return "";
+
+  const cacheKey = `${executablePath.toLowerCase()}|${size}`;
+  const cached = processIconDataUrls.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const iconSize: "small" | "normal" = size <= 20 ? "small" : "normal";
+    const icon = await app.getFileIcon(executablePath, { size: iconSize });
+    if (icon.isEmpty()) return "";
+    const dataUrl = icon.resize({ width: size, height: size }).toDataURL();
+    processIconDataUrls.set(cacheKey, dataUrl);
+    return dataUrl;
+  } catch {
+    return "";
+  }
+}
+
+async function processIconUrl(processName: string, executablePath?: string): Promise<string> {
+  const pathIcon = await executableIconDataUrl(executablePath, 36);
+  if (pathIcon) return pathIcon;
+
+  const candidates = uniqueIconCandidates([processName]);
+  if (candidates.length === 0) return "";
+  const process = findIconProcess(candidates, await listProcessesForIcons());
+  const resolvedPath = process?.executablePath || findInstalledExecutableForIcon(candidates);
+  return executableIconDataUrl(resolvedPath, 36);
+}
+
+async function listActiveProcesses(): Promise<ActiveProcess[]> {
+  const iconEntries = await listProcessesForIcons();
+  if (iconEntries.length > 0) {
+    const byName = new Map<string, ActiveProcess>();
+    for (const process of iconEntries) {
+      const key = process.name.toLowerCase();
+      const existing = byName.get(key);
+      if (!existing || (!existing.executablePath && process.executablePath)) {
+        byName.set(key, {
+          name: process.name,
+          pid: process.pid,
+          executablePath: process.executablePath
+        });
+      }
+    }
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   return new Promise((resolve) => {
     const child = spawn("tasklist.exe", ["/fo", "csv", "/nh"], { windowsHide: true });
     let stdout = "";
@@ -1182,7 +1759,7 @@ async function stitchSegmentedClip(
   return { ok: true, message: usedMode === "cpu" ? "Stitched segmented video." : `Stitched segmented video with GPU ${usedMode} scaling.` };
 }
 
-async function clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise<{ url: string; mixed: boolean; message: string }> {
+async function clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise<{ url: string; mixed: boolean; message: string; audioChunkUrl?: string; audioChunkSeconds?: number }> {
   if (!existsSync(filePath)) return { url: "", mixed: false, message: "Clip file was not found." };
 
   const selectedAudioIndexes = audioTracks
@@ -1191,13 +1768,24 @@ async function clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise
     .map(({ index }) => index);
 
   if (selectedAudioIndexes.length <= 1) {
-    return { url: pathToFileURL(filePath).toString(), mixed: false, message: "Playing original clip audio track." };
+    return {
+      url: playbackPayloadUrl("/clip", { filePath }),
+      mixed: false,
+      message: "Playing original clip with range buffering."
+    };
   }
 
-  const payload = Buffer.from(JSON.stringify({ filePath, selectedAudioIndexes })).toString("base64");
-  const url = `http://127.0.0.1:${previewServerPort}/preview?data=${encodeURIComponent(payload)}`;
+  return {
+    url: playbackPayloadUrl("/clip", { filePath }),
+    mixed: true,
+    message: "Streaming video with rolling mixed audio buffer.",
+    audioChunkUrl: playbackPayloadUrl("/audio-chunk", { filePath, selectedAudioIndexes }),
+    audioChunkSeconds: mixedAudioChunkSeconds
+  };
+}
 
-  return { url, mixed: true, message: "Streaming live mixed preview from memory." };
+function releasePlaybackCache(): boolean {
+  return false;
 }
 
 async function clipThumbnailUrl(filePath: string): Promise<string> {
@@ -1265,20 +1853,192 @@ function registerHotkey(settings: ClipSettings): string | null {
   return `Hotkey failed to register: ${settings.hotkey}`;
 }
 
+const importedVideoExtensions = new Set([".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi"]);
+
+function normalizedPathKey(filePath: string): string {
+  return normalize(filePath).toLowerCase();
+}
+
+function importedClipId(filePath: string): string {
+  return `imported:${createHash("sha1").update(normalizedPathKey(filePath)).digest("hex")}`;
+}
+
+function clipFolderName(filePath: string, settings = readSettings()): string {
+  const parent = basename(dirname(filePath));
+  const saveFolderName = basename(normalize(settings.saveFolder || ""));
+  if (!parent || parent.toLowerCase() === saveFolderName.toLowerCase()) return "Clips";
+  return parent;
+}
+
+function enrichSavedClip(clip: ClipRecord, settings = readSettings()): ClipRecord {
+  return {
+    ...clip,
+    librarySource: "clip",
+    folderName: clip.folderName || clipFolderName(clip.filePath, settings)
+  };
+}
+
+function scanImportedVideoFiles(root: string): string[] {
+  const files: string[] = [];
+  const queue = [root];
+  let scanned = 0;
+  const maxEntries = 6000;
+
+  while (queue.length > 0 && scanned < maxEntries) {
+    const current = queue.shift()!;
+    let entries;
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (++scanned > maxEntries) break;
+      const fullPath = join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (!entry.name.startsWith(".")) queue.push(fullPath);
+      } else if (entry.isFile() && importedVideoExtensions.has(extname(entry.name).toLowerCase())) {
+        files.push(fullPath);
+      }
+    }
+  }
+
+  return files;
+}
+
+function readImportedVideoClips(settings = readSettings()): ClipRecord[] {
+  const titleOverrides = new Map(Object.entries(settings.importedVideoTitles ?? {}).map(([filePath, title]) => [normalizedPathKey(filePath), title]));
+  const clips: ClipRecord[] = [];
+
+  for (const root of settings.importedVideoDirectories ?? []) {
+    const normalizedRoot = normalize(root);
+    if (!existsSync(normalizedRoot)) continue;
+    const folderName = basename(normalizedRoot) || "Imported videos";
+    for (const filePath of scanImportedVideoFiles(normalizedRoot)) {
+      let stats;
+      try {
+        stats = statSync(filePath);
+      } catch {
+        continue;
+      }
+      const parsed = parse(filePath);
+      clips.push({
+        id: importedClipId(filePath),
+        title: titleOverrides.get(normalizedPathKey(filePath)) || parsed.name || "Imported video",
+        gameOrApp: folderName,
+        librarySource: "imported",
+        folderName,
+        importedRoot: normalizedRoot,
+        createdAt: new Date(stats.mtimeMs).toISOString(),
+        durationSeconds: 0,
+        filePath,
+        resolution: "Imported",
+        fps: 0,
+        encoder: "Imported video",
+        audioTracks: ["Imported audio"]
+      });
+    }
+  }
+
+  return clips.sort((a, b) => Number(new Date(b.createdAt)) - Number(new Date(a.createdAt)));
+}
+
 function readClips(): ClipRecord[] {
   const path = clipsPath();
   if (!existsSync(path)) return [];
+  const settings = readSettings();
   const clips = JSON.parse(readFileSync(path, "utf8")) as ClipRecord[];
   const existingClips = clips.filter((clip) => existsSync(clip.filePath));
   if (existingClips.length !== clips.length) {
     writeClips(existingClips);
     mainWindow?.webContents.send("library:changed");
   }
-  return existingClips;
+  return existingClips.map((clip) => enrichSavedClip(clip, settings));
+}
+
+function listLibraryClips(): ClipRecord[] {
+  const settings = readSettings();
+  return [
+    ...readClips(),
+    ...readImportedVideoClips(settings)
+  ];
 }
 
 function writeClips(clips: ClipRecord[]): void {
-  writeFileSync(clipsPath(), JSON.stringify(clips, null, 2));
+  writeFileSync(clipsPath(), JSON.stringify(clips.filter((clip) => clip.librarySource !== "imported"), null, 2));
+}
+
+function deleteClips(ids: string[]): boolean {
+  const idSet = new Set(ids);
+  if (idSet.size === 0) return false;
+  const importedIds = [...idSet].filter((id) => id.startsWith("imported:"));
+  let removedImported = false;
+  if (importedIds.length > 0) {
+    const settings = readSettings();
+    const importedClips = readImportedVideoClips(settings);
+    const titleOverrides = { ...(settings.importedVideoTitles ?? {}) };
+    for (const clip of importedClips) {
+      if (!idSet.has(clip.id)) continue;
+      const normalizedFilePath = normalize(clip.filePath);
+      try {
+        if (existsSync(clip.filePath)) unlinkSync(clip.filePath);
+        delete titleOverrides[normalizedFilePath];
+        removedImported = true;
+      } catch (error) {
+        console.error("Failed to delete imported video file:", error);
+      }
+    }
+    if (removedImported) {
+      saveSettings({ ...settings, importedVideoTitles: titleOverrides });
+    }
+  }
+
+  const clips = readClips();
+  const keptClips: ClipRecord[] = [];
+  let deleted = false;
+
+  for (const clip of clips) {
+    if (!idSet.has(clip.id)) {
+      keptClips.push(clip);
+      continue;
+    }
+
+    deleted = true;
+    const files = [clip.filePath, ...(clip.segmentFiles ?? [])];
+    for (const file of files) {
+      try {
+        if (existsSync(file)) unlinkSync(file);
+      } catch (error) {
+        console.error("Failed to delete clip file:", error);
+      }
+    }
+  }
+
+  if (deleted) writeClips(keptClips);
+  if (deleted || removedImported) mainWindow?.webContents.send("library:changed");
+  return deleted || removedImported;
+}
+
+async function importVideoFolders(): Promise<boolean> {
+  const settings = readSettings();
+  const options: OpenDialogOptions = {
+    title: "Import video folders",
+    defaultPath: settings.saveFolder || app.getPath("videos"),
+    properties: ["openDirectory", "multiSelections"]
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || result.filePaths.length === 0) return false;
+
+  const directories = Array.from(new Set([
+    ...(settings.importedVideoDirectories ?? []),
+    ...result.filePaths
+  ].map((value) => normalize(value))));
+  saveSettings({ ...settings, importedVideoDirectories: directories });
+  mainWindow?.webContents.send("library:changed");
+  return true;
 }
 
 function triggerSaveClipFromBackground(): void {
@@ -1588,6 +2348,7 @@ app.on("second-instance", (_event, commandLine) => {
 });
 
 app.whenReady().then(async () => {
+  cleanupAbandonedPreviewCache();
   setupPreviewServer();
   ensureBundledClipSounds();
   saveSettings(readSettings());
@@ -1614,16 +2375,54 @@ ipcMain.handle("engine:saveClip", async (_event, durationSeconds: number) => {
 });
 ipcMain.handle("settings:get", () => readSettings());
 ipcMain.handle("settings:save", (_event, settings: ClipSettings) => saveSettings(settings));
-ipcMain.handle("library:list", () => readClips());
+ipcMain.handle("library:list", () => listLibraryClips());
+ipcMain.handle("library:delete", (_event, ids: string[]) => deleteClips(Array.isArray(ids) ? ids : []));
+ipcMain.handle("library:importVideoFolders", () => importVideoFolders());
 ipcMain.handle("library:rename", (_event, id: string, newTitle: string) => {
+  const trimmedTitle = typeof newTitle === "string" ? newTitle.trim() : "";
+  if (!trimmedTitle) return false;
+  if (id.startsWith("imported:")) {
+    const settings = readSettings();
+    const importedClip = readImportedVideoClips(settings).find((clip) => clip.id === id);
+    if (!importedClip || !existsSync(importedClip.filePath)) return false;
+    const safeTitle = trimmedTitle.replace(/[\\/:*?"<>|]/g, "_").trim() || "video";
+    const dir = dirname(importedClip.filePath);
+    const ext = extname(importedClip.filePath) || ".mp4";
+    let newFilePath = join(dir, `${safeTitle}${ext}`);
+    let counter = 1;
+    while (existsSync(newFilePath) && normalizedPathKey(newFilePath) !== normalizedPathKey(importedClip.filePath)) {
+      newFilePath = join(dir, `${safeTitle}_${counter}${ext}`);
+      counter++;
+    }
+
+    try {
+      if (normalizedPathKey(newFilePath) !== normalizedPathKey(importedClip.filePath)) {
+        renameSync(importedClip.filePath, newFilePath);
+      }
+    } catch (error) {
+      console.error("Failed to rename imported video file:", error);
+      return false;
+    }
+
+    const titleOverrides = { ...(settings.importedVideoTitles ?? {}) };
+    delete titleOverrides[normalize(importedClip.filePath)];
+    titleOverrides[normalize(newFilePath)] = trimmedTitle;
+    saveSettings({
+      ...settings,
+      importedVideoTitles: titleOverrides
+    });
+    mainWindow?.webContents.send("library:changed");
+    return true;
+  }
+
   const clips = readClips();
   const clip = clips.find((c) => c.id === id);
   if (clip) {
-    clip.title = newTitle;
+    clip.title = trimmedTitle;
     
     // Rename file on disk
     if (existsSync(clip.filePath)) {
-      const safeTitle = newTitle.replace(/[\\/:*?"<>|]/g, "_").trim() || "clip";
+      const safeTitle = trimmedTitle.replace(/[\\/:*?"<>|]/g, "_").trim() || "clip";
       const dir = dirname(clip.filePath);
       const ext = clip.filePath.substring(clip.filePath.lastIndexOf("."));
       let newFilePath = join(dir, `${safeTitle}${ext}`);
@@ -1651,8 +2450,10 @@ ipcMain.handle("library:rename", (_event, id: string, newTitle: string) => {
   return false;
 });
 ipcMain.handle("library:clipUrl", (_event, filePath: string) => (existsSync(filePath) ? pathToFileURL(filePath).toString() : ""));
+ipcMain.handle("library:clipIconUrl", (_event, clip: ClipRecord, preferredLabels?: string[]) => clipIconUrl(clip, preferredLabels ?? []));
 ipcMain.handle("library:clipThumbnailUrl", (_event, filePath: string) => clipThumbnailUrl(filePath));
 ipcMain.handle("library:clipPlaybackUrl", (_event, filePath: string, audioTracks: string[]) => clipPlaybackUrl(filePath, audioTracks));
+ipcMain.handle("library:releasePlaybackCache", () => releasePlaybackCache());
 ipcMain.handle("updates:getState", () => updateState);
 ipcMain.handle("updates:check", () => performUpdateCheck());
 ipcMain.handle("updates:download", () => {
@@ -1661,6 +2462,7 @@ ipcMain.handle("updates:download", () => {
 });
 ipcMain.handle("updates:install", () => installDownloadedUpdate());
 ipcMain.handle("processes:list", () => listActiveProcesses());
+ipcMain.handle("processes:iconUrl", (_event, processName: string, executablePath?: string) => processIconUrl(processName, executablePath));
 ipcMain.handle("audio:listInputDevices", () => engine.listAudioInputDevices());
 ipcMain.handle("displays:list", () => engine.listDisplayDevices());
 ipcMain.handle("sounds:list", () => listClipSounds());

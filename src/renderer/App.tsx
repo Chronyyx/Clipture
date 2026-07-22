@@ -1,5 +1,5 @@
-import { Activity, ChevronDown, Clock, Download, Edit3, FolderOpen, Library, Maximize2, Pause, Play, Plus, RefreshCw, Save, SlidersHorizontal, Volume2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Activity, Check, ChevronDown, Clapperboard, Clock, Download, Edit3, FolderOpen, Gamepad2, Library, Maximize2, Mic, Pause, Play, Plus, RefreshCw, Save, Search, SlidersHorizontal, Trash2, Upload, Volume2, X } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 // @ts-ignore
 import logoUrl from "../../assets/svgviewer-output.svg";
 import type { KeyboardEvent } from "react";
@@ -331,7 +331,6 @@ export function App() {
   const [settings, setSettings] = useState<ClipSettings | undefined>();
   const [clips, setClips] = useState<ClipRecord[]>([]);
   const [query, setQuery] = useState("");
-  const [durationFilter, setDurationFilter] = useState("all");
   const [notice, setNotice] = useState("");
   const [selectedClip, setSelectedClip] = useState<ClipRecord | undefined>();
   const [clipSounds, setClipSounds] = useState<ClipSoundOption[]>([]);
@@ -374,26 +373,6 @@ export function App() {
     };
   }, []);
 
-  const filteredClips = useMemo(() => {
-    return clips.filter((clip) => {
-      const searchSource = (() => {
-        if (clip.focusedApps && clip.focusedApps.length > 0) return clip.focusedApps.join(" ");
-        const bgApps = new Set(settings?.audioSources.filter(s => s.kind === "app" && s.processName).map(s => `app:${s.processName}`) || []);
-        const activeTracks = clip.audioTracks
-          .filter(t => t !== "system-loopback-pcm" && t !== "microphone-pcm" && t !== "mixed-preview-pcm" && !bgApps.has(t))
-          .map(t => t.startsWith("app:") ? t.substring(4) : t);
-        return Array.from(new Set([clip.gameOrApp, ...activeTracks].filter(Boolean))).join(" ");
-      })();
-      const matchesQuery = `${clip.title} ${searchSource}`.toLowerCase().includes(query.toLowerCase());
-      const matchesDuration =
-        durationFilter === "all" ||
-        (durationFilter === "short" && clip.durationSeconds <= 30) ||
-        (durationFilter === "medium" && clip.durationSeconds > 30 && clip.durationSeconds <= 120) ||
-        (durationFilter === "long" && clip.durationSeconds > 120);
-      return matchesQuery && matchesDuration;
-    });
-  }, [clips, durationFilter, query]);
-
   async function saveClip() {
     if (isSavingClip) return;
     const length = settings?.clipLengthSeconds ?? 30;
@@ -406,6 +385,14 @@ export function App() {
       setNotice(error instanceof Error ? error.message : "Could not save clip.");
     } finally {
       setIsSavingClip(false);
+    }
+  }
+
+  async function importVideos() {
+    const imported = await window.clipture.importVideoFolders();
+    if (imported) {
+      setNotice("Imported video folder added");
+      await refresh();
     }
   }
 
@@ -466,27 +453,31 @@ export function App() {
       </aside>
 
       <main className="workspace">
-        <header className="topbar">
-          <div>
-            <h1>{activeTab === "library" ? "Clip Library" : activeTab === "settings" ? "Settings" : "Diagnostics"}</h1>
-            {activeTab === "diagnostics" && <p>{diagnostics.status}</p>}
-          </div>
-          <button className="primary" onClick={saveClip} disabled={isSavingClip}>
-            <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${settings?.clipLengthSeconds ?? 30}s`}
-          </button>
-        </header>
+        {activeTab !== "library" && (
+          <header className="topbar">
+            <div>
+              <h1>{activeTab === "settings" ? "Settings" : "Diagnostics"}</h1>
+              {activeTab === "diagnostics" && <p>{diagnostics.status}</p>}
+            </div>
+            <button className="primary" onClick={saveClip} disabled={isSavingClip}>
+              <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${settings?.clipLengthSeconds ?? 30}s`}
+            </button>
+          </header>
+        )}
 
         {notice && <div className="notice">{notice}</div>}
         {activeTab === "library" && (
           <LibraryView
-            clips={filteredClips}
+            clips={clips}
             query={query}
             setQuery={setQuery}
-            durationFilter={durationFilter}
-            setDurationFilter={setDurationFilter}
             selectedClip={selectedClip}
             setSelectedClip={setSelectedClip}
             settings={settings}
+            onSaveClip={saveClip}
+            onImportVideos={importVideos}
+            isSavingClip={isSavingClip}
+            clipLengthSeconds={settings?.clipLengthSeconds ?? 30}
           />
         )}
         {activeTab === "settings" && settings && (
@@ -515,72 +506,343 @@ function LibraryView({
   clips,
   query,
   setQuery,
-  durationFilter,
-  setDurationFilter,
   selectedClip,
   setSelectedClip,
-  settings
+  settings,
+  onSaveClip,
+  onImportVideos,
+  isSavingClip,
+  clipLengthSeconds
 }: {
   clips: ClipRecord[];
   query: string;
   setQuery: (value: string) => void;
-  durationFilter: string;
-  setDurationFilter: (value: string) => void;
   selectedClip: ClipRecord | undefined;
   setSelectedClip: (clip: ClipRecord | undefined) => void;
   settings?: ClipSettings;
+  onSaveClip: () => void;
+  onImportVideos: () => Promise<void>;
+  isSavingClip: boolean;
+  clipLengthSeconds: number;
 }) {
-  function formatClipTime(value: string) {
-    const numeric = /^\d+$/.test(value) ? Number(value) : Number.NaN;
-    const date = Number.isFinite(numeric)
-      ? new Date(value.length <= 10 ? numeric * 1000 : numeric)
-      : new Date(value);
-    return Number.isNaN(date.getTime()) ? "Unknown time" : date.toLocaleString();
-  }
+  const [libraryTab, setLibraryTab] = useState<"clips" | "imported">("clips");
+  const [folderFilter, setFolderFilter] = useState("");
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
 
-  const filters = [
-    ["all", "All"],
-    ["short", "30s or less"],
-    ["medium", "31s to 2m"],
-    ["long", "Over 2m"]
-  ] as const;
+  const savedClips = useMemo(() => clips.filter((clip) => clip.librarySource !== "imported"), [clips]);
+  const importedClips = useMemo(() => clips.filter((clip) => clip.librarySource === "imported"), [clips]);
+  const tabClips = libraryTab === "clips" ? savedClips : importedClips;
+  const folderFilters = useMemo(() => {
+    const seen = new Set<string>();
+    return tabClips
+      .map((clip) => clip.folderName || clip.gameOrApp || "Clips")
+      .filter((folder) => {
+        const key = folder.toLowerCase();
+        if (!folder || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => a.localeCompare(b));
+  }, [tabClips]);
+
+  useEffect(() => {
+    if (folderFilter && !folderFilters.includes(folderFilter)) setFolderFilter("");
+  }, [folderFilter, folderFilters]);
+
+  useEffect(() => {
+    cancelSelection();
+    if (selectedClip) {
+      const selectedIsImported = selectedClip.librarySource === "imported";
+      if ((libraryTab === "imported") !== selectedIsImported) setSelectedClip(undefined);
+    }
+  }, [libraryTab]);
+
+  const filteredClips = useMemo(() => {
+    const trimmedQuery = query.trim().toLowerCase();
+    return tabClips.filter((clip) => {
+      const sourceLabels = clipSourceLabels(clip, settings);
+      const folder = clip.folderName || clip.gameOrApp || "";
+      const matchesFolder = !folderFilter || folder === folderFilter;
+      const haystack = [
+        clip.title,
+        clip.gameOrApp,
+        folder,
+        clip.encoder,
+        ...sourceLabels,
+        ...clip.audioTracks
+      ].join(" ").toLowerCase();
+      return matchesFolder && (!trimmedQuery || haystack.includes(trimmedQuery));
+    });
+  }, [folderFilter, query, settings, tabClips]);
+
+  const selectedCount = selectedClipIds.size;
+
+  const toggleClipSelection = (clipId: string) => {
+    setSelectedClipIds((current) => {
+      const next = new Set(current);
+      if (next.has(clipId)) next.delete(clipId);
+      else next.add(clipId);
+      return next;
+    });
+  };
+
+  const cancelSelection = () => {
+    setSelectionMode(false);
+    setSelectedClipIds(new Set());
+  };
+
+  const deleteSelectedClips = async () => {
+    const ids = [...selectedClipIds];
+    if (ids.length === 0) return;
+    const deleted = await window.clipture.deleteClips(ids);
+    if (deleted) {
+      if (selectedClip && selectedClipIds.has(selectedClip.id)) setSelectedClip(undefined);
+      cancelSelection();
+    }
+  };
+
+  const handleImportVideos = async () => {
+    await onImportVideos();
+    setLibraryTab("imported");
+  };
+
+  const emptyTitle = libraryTab === "clips" ? "No clips yet" : "No imported videos yet";
+  const emptyCopy = libraryTab === "clips"
+    ? "Your saved clips will appear here."
+    : "Choose a folder and Clipture will read videos from it without copying them.";
+  const emptyDetail = libraryTab === "clips"
+    ? "Use the in-game overlay to create clips while you play."
+    : "Imported videos stay in their original folders.";
 
   return (
     <div className="library-layout">
-      {selectedClip && <ClipPlayer clip={selectedClip} onClose={() => setSelectedClip(undefined)} settings={settings} />}
       <section className="browse-surface">
-        <div className="browse-toolbar">
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by game, app, track, or title" />
-        </div>
-        <div className="chip-row">
-          {filters.map(([value, label]) => (
-            <button className={durationFilter === value ? "chip active" : "chip"} key={value} onClick={() => setDurationFilter(value)}>
-              {label}
+        <div className="library-top">
+          <div className="library-hero">
+            <div className="library-title">
+              <Clapperboard size={28} />
+              <h1>Clip Library</h1>
+            </div>
+            <button className="primary library-save-button" onClick={onSaveClip} disabled={isSavingClip}>
+              <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${clipLengthSeconds}s`}
             </button>
-          ))}
+          </div>
+
+          <div className="library-tabs" role="tablist" aria-label="Library sections">
+            <button
+              className={libraryTab === "clips" ? "library-tab active" : "library-tab"}
+              type="button"
+              onClick={() => setLibraryTab("clips")}
+            >
+              Clips
+            </button>
+            <button
+              className={libraryTab === "imported" ? "library-tab active" : "library-tab"}
+              type="button"
+              onClick={() => setLibraryTab("imported")}
+            >
+              Imported Videos
+            </button>
+          </div>
+
+          <label className="library-search">
+            <Search size={22} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by game, app, track, or title" />
+          </label>
+
+          <div className="library-actions-row">
+            <div className="chip-row">
+              {folderFilters.map((folder) => (
+                <button
+                  className={folderFilter === folder ? "chip active" : "chip"}
+                  key={folder}
+                  onClick={() => setFolderFilter(folderFilter === folder ? "" : folder)}
+                  type="button"
+                >
+                  {folder}
+                </button>
+              ))}
+            </div>
+            {selectionMode ? (
+              <div className="selection-bar">
+                <strong>{selectedCount} selected</strong>
+                <span className="selection-divider" />
+                <button className="secondary-button" type="button" onClick={cancelSelection}>Cancel</button>
+                <button className="danger-button" type="button" onClick={() => void deleteSelectedClips()} disabled={selectedCount === 0}>
+                  <Trash2 size={18} /> Delete
+                </button>
+              </div>
+            ) : (
+              <div className="library-inline-actions">
+                <button className="secondary-button import-videos-button" type="button" onClick={() => void handleImportVideos()}>
+                  <Upload size={18} /> Import videos
+                </button>
+                <button className="secondary-button select-clips-button" type="button" onClick={() => setSelectionMode(true)}>
+                  <span className="select-clips-empty-box" aria-hidden="true" />
+                  Select clips
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-        {clips.length === 0 && <div className="empty">No clips saved yet.</div>}
-        <div className="clip-grid">
-          {clips.map((clip) => (
-            <ClipCard
-              clip={clip}
-              isActive={selectedClip?.id === clip.id}
-              key={clip.id}
-              onPlay={() => setSelectedClip(clip)}
-            />
-          ))}
-        </div>
+
+        {selectedClip && <ClipPlayer clip={selectedClip} onClose={() => setSelectedClip(undefined)} settings={settings} />}
+
+        {filteredClips.length === 0 ? (
+          <LibraryEmptyState
+            title={emptyTitle}
+            copy={emptyCopy}
+            detail={emptyDetail}
+            actionLabel={libraryTab === "clips" ? "Save your first clip" : "Import videos"}
+            onAction={libraryTab === "clips" ? onSaveClip : handleImportVideos}
+          />
+        ) : (
+          <div className="clip-grid">
+            {filteredClips.map((clip) => (
+              <ClipCard
+                clip={clip}
+                isActive={selectedClip?.id === clip.id}
+                isSelected={selectedClipIds.has(clip.id)}
+                key={clip.id}
+                onPlay={() => setSelectedClip(clip)}
+                onToggleSelected={() => toggleClipSelection(clip.id)}
+                selectionMode={selectionMode}
+                settings={settings}
+              />
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );
 }
 
-function ClipCard({ clip, isActive, onPlay }: { clip: ClipRecord; isActive: boolean; onPlay: () => void }) {
+function LibraryEmptyState({
+  title,
+  copy,
+  detail,
+  actionLabel,
+  onAction
+}: {
+  title: string;
+  copy: string;
+  detail: string;
+  actionLabel: string;
+  onAction: () => void | Promise<void>;
+}) {
+  return (
+    <div className="library-empty-state">
+      <div className="library-empty-art" aria-hidden="true">
+        <Clapperboard size={74} />
+      </div>
+      <h2>{title}</h2>
+      <p>{copy}</p>
+      <p>{detail}</p>
+      <button className="secondary-button library-empty-action" type="button" onClick={() => void onAction()}>
+        <Clapperboard size={20} /> {actionLabel}
+      </button>
+    </div>
+  );
+}
+
+function uniqueLabels(labels: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  return labels
+    .map((label) => (label ?? "").trim())
+    .filter((label) => {
+      const key = label.toLowerCase();
+      if (!label || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function clipSourceLabels(clip: ClipRecord, settings?: ClipSettings): string[] {
+  if (clip.focusedApps && clip.focusedApps.length > 0) {
+    return uniqueLabels(clip.focusedApps);
+  }
+
+  const bgApps = new Set(
+    settings?.audioSources
+      .filter((source) => source.kind === "app" && source.processName)
+      .flatMap((source) => [`app:${source.processName}`, source.processName!.replace(/\.exe$/i, "")]) || []
+  );
+  const activeTracks = clip.audioTracks
+    .filter((track) =>
+      track !== "system-loopback-pcm" &&
+      track !== "System audio" &&
+      track !== "microphone-pcm" &&
+      track !== "Microphone" &&
+      track !== "mixed-preview-pcm" &&
+      !bgApps.has(track)
+    )
+    .map((track) =>
+      track.startsWith("app:")
+        ? track.substring(4).replace(/\.exe$/i, "")
+        : track.startsWith("game:")
+          ? track.substring(5).replace(/\.exe$/i, "")
+          : track
+    );
+
+  return uniqueLabels([
+    clip.gameOrApp !== "Foreground app" ? clip.gameOrApp : null,
+    ...activeTracks
+  ]);
+}
+
+function useClipIconUrl(clip: ClipRecord, preferredLabels: string[]): string {
+  const [iconUrl, setIconUrl] = useState("");
+  const focusedAppsKey = (clip.focusedApps ?? []).join("|");
+  const audioTracksKey = clip.audioTracks.join("|");
+  const preferredLabelsKey = preferredLabels.join("|");
+
+  useEffect(() => {
+    let active = true;
+    if (preferredLabels.some((label) => label.trim().toLowerCase() === "clipture")) {
+      setIconUrl(logoUrl);
+      return () => {
+        active = false;
+      };
+    }
+    setIconUrl("");
+    window.clipture.clipIconUrl(clip, preferredLabels).then((url) => {
+      if (active) setIconUrl(url || "");
+    }).catch(() => {
+      if (active) setIconUrl("");
+    });
+    return () => {
+      active = false;
+    };
+  }, [clip.id, clip.gameOrApp, focusedAppsKey, audioTracksKey, preferredLabelsKey]);
+
+  return iconUrl;
+}
+
+function ClipCard({
+  clip,
+  isActive,
+  isSelected,
+  onPlay,
+  onToggleSelected,
+  selectionMode,
+  settings
+}: {
+  clip: ClipRecord;
+  isActive: boolean;
+  isSelected: boolean;
+  onPlay: () => void;
+  onToggleSelected: () => void;
+  selectionMode: boolean;
+  settings?: ClipSettings;
+}) {
   const createdAt = parseClipDate(clip.createdAt);
   const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
   const [thumbnailUrl, setThumbnailUrl] = useState<string>("");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState(displayTitle);
+  const sourceLabels = useMemo(() => clipSourceLabels(clip, settings), [clip, settings]);
+  const iconUrl = useClipIconUrl(clip, sourceLabels);
 
   useEffect(() => {
     let active = true;
@@ -614,13 +876,20 @@ function ClipCard({ clip, isActive, onPlay }: { clip: ClipRecord; isActive: bool
   }, [editTitle, isEditingTitle, clip.title]);
 
   return (
-    <article className={isActive ? "clip-card active" : "clip-card"}>
-      <button className="thumbnail-button" onClick={onPlay}>
+    <article className={[isActive ? "clip-card active" : "clip-card", isSelected ? "selected" : "", selectionMode ? "selectable" : ""].filter(Boolean).join(" ")}>
+      <button className="thumbnail-button" onClick={selectionMode ? onToggleSelected : onPlay}>
+        {selectionMode && (
+          <span className={isSelected ? "clip-select-box checked" : "clip-select-box"}>
+            {isSelected && <Check size={18} />}
+          </span>
+        )}
         {thumbnailUrl ? <img src={thumbnailUrl} alt="" /> : <div className="thumbnail-fallback">{clip.encoder}</div>}
-        <span className="duration-badge">{formatDuration(clip.durationSeconds)}</span>
-        <span className="play-badge">
-          <Play size={18} />
-        </span>
+        {clip.durationSeconds > 0 && <span className="duration-badge">{formatDuration(clip.durationSeconds)}</span>}
+        {!selectionMode && (
+          <span className="play-badge">
+            <Play size={18} />
+          </span>
+        )}
       </button>
       <div className="clip-info">
         <div className="clip-title-container">
@@ -643,6 +912,7 @@ function ClipCard({ clip, isActive, onPlay }: { clip: ClipRecord; isActive: bool
             />
           ) : (
             <div className="clip-title-display" onDoubleClick={() => setIsEditingTitle(true)}>
+              {iconUrl && <img className="clip-app-icon" src={iconUrl} alt="" />}
               <span className="clip-name" title="Double click to rename">{displayTitle}</span>
               <button className="icon-button edit-title-button" title="Rename clip" onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}>
                 <Edit3 size={15} />
@@ -650,12 +920,11 @@ function ClipCard({ clip, isActive, onPlay }: { clip: ClipRecord; isActive: bool
             </div>
           )}
         </div>
-        <span>{formatClipDate(createdAt)}</span>
-        <span>{formatClipTime(createdAt)}</span>
+        <span className="clip-timestamp">{formatClipDate(createdAt)} <span>{formatClipTime(createdAt)}</span></span>
         <div className="clip-card-footer">
-          <span><Clock size={14} /> {clip.fps} FPS</span>
+          <span><Clock size={14} /> {clip.fps > 0 ? `${clip.fps} FPS` : "Imported"}</span>
           <span>{clip.audioTracks.length} audio</span>
-          <button className="icon-button" title="Reveal clip" onClick={() => window.clipture.revealClip(clip.filePath)}>
+          <button className="icon-button" title="Reveal clip" onClick={(event) => { event.stopPropagation(); window.clipture.revealClip(clip.filePath); }}>
             <FolderOpen size={16} />
           </button>
         </div>
@@ -710,6 +979,12 @@ function formatDuration(seconds: number) {
   return minutes > 0 ? `${minutes}:${String(remainder).padStart(2, "0")}` : `0:${String(remainder).padStart(2, "0")}`;
 }
 
+type MixedAudioChunk = {
+  start: number;
+  buffer: AudioBuffer;
+  lastUsedAt: number;
+};
+
 function acceleratorFromKeyboardEvent(event: KeyboardEvent) {
   const ignoredKeys = new Set(["Control", "Shift", "Alt", "Meta", "OS"]);
   if (ignoredKeys.has(event.key)) return "";
@@ -741,6 +1016,9 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const holdTimeoutRef = useRef<number | null>(null);
   const [src, setSrc] = useState("");
   const [message, setMessage] = useState("Preparing playback");
+  const [mixedPlayback, setMixedPlayback] = useState(false);
+  const [mixedAudioChunkUrl, setMixedAudioChunkUrl] = useState("");
+  const [mixedAudioChunkSeconds, setMixedAudioChunkSeconds] = useState(8);
   const [playing, setPlaying] = useState(false);
   const [holdingFast, setHoldingFast] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -748,11 +1026,17 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(clip.durationSeconds);
   const [volume, setVolume] = useState(1);
+  const sourceLabels = useMemo(() => clipSourceLabels(clip, settings), [clip, settings]);
+  const sourceText = sourceLabels.length > 0 ? sourceLabels.join(", ") : clip.gameOrApp;
+  const iconUrl = useClipIconUrl(clip, sourceLabels);
 
   useEffect(() => {
     let active = true;
     setSrc("");
     setMessage("Preparing playback");
+    setMixedPlayback(false);
+    setMixedAudioChunkUrl("");
+    setMixedAudioChunkSeconds(8);
     setPlaying(false);
     setHoldingFast(false);
     setCurrentTime(0);
@@ -761,28 +1045,206 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
       if (!active) return;
       setSrc(result.url);
       setMessage(result.message);
+      setMixedPlayback(result.mixed && Boolean(result.audioChunkUrl));
+      setMixedAudioChunkUrl(result.audioChunkUrl || "");
+      setMixedAudioChunkSeconds(result.audioChunkSeconds || 8);
     });
     return () => {
       active = false;
+      void window.clipture.releasePlaybackCache();
     };
   }, [clip.audioTracks, clip.filePath]);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const connectedVideoRef = useRef<HTMLVideoElement | null>(null);
+  const mixedChunkCacheRef = useRef<Map<number, MixedAudioChunk>>(new Map());
+  const mixedChunkRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
+  const mixedScheduledChunksRef = useRef<Map<number, AudioBufferSourceNode[]>>(new Map());
+  const mixedTimerRef = useRef<number | null>(null);
+  const mixedGenerationRef = useRef(0);
+
+  const ensureAudioContext = () => {
+    if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      audioCtxRef.current = new AudioContextCtor();
+      gainNodeRef.current = null;
+      connectedVideoRef.current = null;
+    }
+    if (!gainNodeRef.current || gainNodeRef.current.context !== audioCtxRef.current) {
+      gainNodeRef.current = audioCtxRef.current.createGain();
+      gainNodeRef.current.connect(audioCtxRef.current.destination);
+    }
+    return audioCtxRef.current;
+  };
+
+  const stopMixedAudio = () => {
+    for (const nodes of mixedScheduledChunksRef.current.values()) {
+      for (const node of nodes) {
+        try {
+          node.stop();
+        } catch {
+          // Already stopped.
+        }
+        try {
+          node.disconnect();
+        } catch {
+          // Already disconnected.
+        }
+      }
+    }
+    mixedScheduledChunksRef.current.clear();
+  };
+
+  const clearMixedAudio = () => {
+    mixedGenerationRef.current += 1;
+    stopMixedAudio();
+    mixedChunkCacheRef.current.clear();
+    mixedChunkRequestsRef.current.clear();
+  };
+
+  const mixedChunkUrl = (chunkIndex: number) => {
+    const chunkSeconds = Math.max(1, mixedAudioChunkSeconds || 8);
+    const start = Math.max(0, chunkIndex * chunkSeconds);
+    const remaining = duration > 0 ? Math.max(0.25, duration - start) : chunkSeconds;
+    const chunkDuration = Math.min(chunkSeconds, remaining);
+    const separator = mixedAudioChunkUrl.includes("?") ? "&" : "?";
+    return `${mixedAudioChunkUrl}${separator}start=${encodeURIComponent(start.toFixed(3))}&duration=${encodeURIComponent(chunkDuration.toFixed(3))}`;
+  };
+
+  const loadMixedChunk = (chunkIndex: number, generation: number) => {
+    if (!mixedPlayback || !mixedAudioChunkUrl) return Promise.resolve();
+    if (mixedChunkCacheRef.current.has(chunkIndex)) return Promise.resolve();
+    const pending = mixedChunkRequestsRef.current.get(chunkIndex);
+    if (pending) return pending;
+
+    const chunkSeconds = Math.max(1, mixedAudioChunkSeconds || 8);
+    const chunkStart = chunkIndex * chunkSeconds;
+    if (duration > 0 && chunkStart > duration + 0.25) return Promise.resolve();
+
+    const request = fetch(mixedChunkUrl(chunkIndex))
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`audio chunk ${response.status}`);
+        const arrayBuffer = await response.arrayBuffer();
+        if (generation !== mixedGenerationRef.current || arrayBuffer.byteLength === 0) return;
+        const ctx = ensureAudioContext();
+        const buffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
+        if (generation !== mixedGenerationRef.current) return;
+        mixedChunkCacheRef.current.set(chunkIndex, {
+          start: chunkStart,
+          buffer,
+          lastUsedAt: performance.now()
+        });
+      })
+      .catch((error) => {
+        console.warn("Mixed audio chunk failed:", error);
+      })
+      .finally(() => {
+        mixedChunkRequestsRef.current.delete(chunkIndex);
+      });
+
+    mixedChunkRequestsRef.current.set(chunkIndex, request);
+    return request;
+  };
+
+  const cleanupMixedChunks = (time: number) => {
+    const chunkSeconds = Math.max(1, mixedAudioChunkSeconds || 8);
+    for (const [chunkIndex, chunk] of mixedChunkCacheRef.current.entries()) {
+      const chunkEnd = chunk.start + chunk.buffer.duration;
+      if (chunkEnd < time - 10 || chunk.start > time + 24) {
+        mixedChunkCacheRef.current.delete(chunkIndex);
+      }
+    }
+
+    for (const [chunkIndex] of mixedScheduledChunksRef.current.entries()) {
+      const chunkEnd = (chunkIndex + 1) * chunkSeconds;
+      if (chunkEnd < time - 1) {
+        mixedScheduledChunksRef.current.delete(chunkIndex);
+      }
+    }
+  };
+
+  const scheduleMixedChunk = (chunkIndex: number, generation: number) => {
+    if (generation !== mixedGenerationRef.current || mixedScheduledChunksRef.current.has(chunkIndex)) return;
+    const video = videoRef.current;
+    const chunk = mixedChunkCacheRef.current.get(chunkIndex);
+    if (!video || !chunk || video.paused || video.ended) return;
+
+    const ctx = ensureAudioContext();
+    const gain = gainNodeRef.current;
+    if (!gain) return;
+
+    const playbackRate = Math.max(0.1, Math.abs(video.playbackRate || 1));
+    const videoTime = video.currentTime;
+    const chunkEnd = chunk.start + chunk.buffer.duration;
+    if (videoTime >= chunkEnd - 0.05) return;
+
+    const offset = Math.max(0, Math.min(chunk.buffer.duration - 0.05, videoTime - chunk.start));
+    const secondsUntilChunk = Math.max(0, (chunk.start - videoTime) / playbackRate);
+    const source = ctx.createBufferSource();
+    source.buffer = chunk.buffer;
+    source.playbackRate.value = playbackRate;
+    source.connect(gain);
+    source.onended = () => {
+      mixedScheduledChunksRef.current.delete(chunkIndex);
+    };
+
+    mixedScheduledChunksRef.current.set(chunkIndex, [source]);
+    chunk.lastUsedAt = performance.now();
+    try {
+      source.start(ctx.currentTime + secondsUntilChunk + 0.035, offset);
+    } catch (error) {
+      mixedScheduledChunksRef.current.delete(chunkIndex);
+      console.warn("Mixed audio schedule failed:", error);
+    }
+  };
+
+  const ensureMixedBuffered = () => {
+    if (!mixedPlayback || !mixedAudioChunkUrl) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    const chunkSeconds = Math.max(1, mixedAudioChunkSeconds || 8);
+    const time = Math.max(0, video.currentTime);
+    const generation = mixedGenerationRef.current;
+    const firstChunk = Math.max(0, Math.floor(Math.max(0, time - 0.25) / chunkSeconds));
+    const lastChunk = Math.max(firstChunk, Math.floor((time + 16) / chunkSeconds));
+
+    for (let chunkIndex = firstChunk; chunkIndex <= lastChunk; chunkIndex += 1) {
+      void loadMixedChunk(chunkIndex, generation).then(() => scheduleMixedChunk(chunkIndex, generation));
+      scheduleMixedChunk(chunkIndex, generation);
+    }
+
+    cleanupMixedChunks(time);
+  };
+
+  const restartMixedAudio = async () => {
+    if (!mixedPlayback || !mixedAudioChunkUrl) return;
+    stopMixedAudio();
+    const ctx = ensureAudioContext();
+    try {
+      await ctx.resume();
+    } catch (error) {
+      console.warn("Mixed audio resume failed:", error);
+    }
+    ensureMixedBuffered();
+  };
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
+    if (mixedPlayback) {
+      video.muted = true;
+      video.volume = 0;
+      if (gainNodeRef.current) gainNodeRef.current.gain.value = volume;
+      return;
+    }
+
     if (video !== connectedVideoRef.current) {
       try {
-        if (!audioCtxRef.current) {
-          audioCtxRef.current = new window.AudioContext();
-          gainNodeRef.current = audioCtxRef.current.createGain();
-          gainNodeRef.current.connect(audioCtxRef.current.destination);
-        }
-        const source = audioCtxRef.current.createMediaElementSource(video);
+        const ctx = ensureAudioContext();
+        const source = ctx.createMediaElementSource(video);
         source.connect(gainNodeRef.current!);
         connectedVideoRef.current = video;
       } catch (e) {
@@ -790,11 +1252,35 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
       }
     }
 
+    video.muted = false;
     video.volume = Math.min(1, volume);
     if (gainNodeRef.current) {
       gainNodeRef.current.gain.value = volume > 1 ? volume : 1;
     }
-  }, [volume, src]);
+  }, [volume, src, mixedPlayback]);
+
+  useEffect(() => {
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = mixedPlayback ? volume : volume > 1 ? volume : 1;
+    }
+  }, [mixedPlayback, volume]);
+
+  useEffect(() => {
+    clearMixedAudio();
+    if (!mixedPlayback || !mixedAudioChunkUrl || !src) return;
+
+    const tick = () => ensureMixedBuffered();
+    tick();
+    mixedTimerRef.current = window.setInterval(tick, 500);
+
+    return () => {
+      if (mixedTimerRef.current) {
+        window.clearInterval(mixedTimerRef.current);
+        mixedTimerRef.current = null;
+      }
+      clearMixedAudio();
+    };
+  }, [mixedPlayback, mixedAudioChunkUrl, mixedAudioChunkSeconds, src]);
 
   const togglePlayback = () => {
     const video = videoRef.current;
@@ -834,6 +1320,10 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   useEffect(() => {
     return () => {
       if (controlsTimeoutRef.current) window.clearTimeout(controlsTimeoutRef.current);
+      clearMixedAudio();
+      if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+        audioCtxRef.current.close().catch(console.error);
+      }
     };
   }, []);
 
@@ -861,6 +1351,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const seekToPercent = (percent: number) => {
     const video = videoRef.current;
     if (!video || !Number.isFinite(video.duration)) return;
+    if (mixedPlayback) stopMixedAudio();
     video.currentTime = (Math.min(100, Math.max(0, percent)) / 100) * video.duration;
   };
 
@@ -873,19 +1364,12 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     <section className="player panel">
       <div className="player-header">
         <div>
-          <strong>{clip.title}</strong>
+          <strong className="player-title">
+            {iconUrl && <img className="clip-app-icon" src={iconUrl} alt="" />}
+            <span>{clip.title}</span>
+          </strong>
           <span>
-            {(() => {
-              if (clip.focusedApps && clip.focusedApps.length > 0) return clip.focusedApps.join(", ");
-              
-              const bgApps = new Set(settings?.audioSources.filter(s => s.kind === "app" && s.processName).flatMap(s => [`app:${s.processName}`, s.processName!.replace(/\.exe$/i, "")]) || []);
-              const activeTracks = clip.audioTracks
-                .filter(t => t !== "system-loopback-pcm" && t !== "System audio" && t !== "microphone-pcm" && t !== "Microphone" && t !== "mixed-preview-pcm" && !bgApps.has(t))
-                .map(t => t.startsWith("app:") ? t.substring(4).replace(/\.exe$/i, "") : t.startsWith("game:") ? t.substring(5).replace(/\.exe$/i, "") : t);
-                
-              const merged = Array.from(new Set([clip.gameOrApp !== "Foreground app" ? clip.gameOrApp : null, ...activeTracks].filter(Boolean)));
-              return merged.length > 0 ? merged.join(", ") : clip.gameOrApp;
-            })()}
+            {sourceText}
           </span>
         </div>
         <button className="icon-button" title="Close player" onClick={onClose}>
@@ -917,21 +1401,46 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
             key={src}
             src={src}
             autoPlay
+            crossOrigin="anonymous"
+            muted={mixedPlayback}
             preload="metadata"
             onClick={() => {
               if (Date.now() - fastHoldStartedAtRef.current > 180) return;
               togglePlayback();
             }}
             onDoubleClick={toggleFullscreen}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
+            onPlay={() => {
+              setPlaying(true);
+              if (mixedPlayback) void restartMixedAudio();
+            }}
+            onPause={() => {
+              setPlaying(false);
+              if (mixedPlayback) stopMixedAudio();
+            }}
             onLoadedMetadata={(event) => {
               const nextDuration = event.currentTarget.duration;
               if (Number.isFinite(nextDuration)) setDuration(nextDuration);
+              if (mixedPlayback) ensureMixedBuffered();
             }}
-            onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+            onTimeUpdate={(event) => {
+              setCurrentTime(event.currentTarget.currentTime);
+              if (mixedPlayback) ensureMixedBuffered();
+            }}
+            onSeeking={() => {
+              if (mixedPlayback) stopMixedAudio();
+            }}
+            onSeeked={(event) => {
+              setCurrentTime(event.currentTarget.currentTime);
+              if (!mixedPlayback) return;
+              ensureMixedBuffered();
+              if (!event.currentTarget.paused) void restartMixedAudio();
+            }}
+            onRateChange={(event) => {
+              if (mixedPlayback && !event.currentTarget.paused) void restartMixedAudio();
+            }}
             onEnded={() => {
               setPlaying(false);
+              if (mixedPlayback) stopMixedAudio();
               endFastHold();
             }}
           />
@@ -1187,6 +1696,7 @@ function AppAudioModal({
                     onSave({
                       label: p.name || "App audio",
                       processName: p.name,
+                      executablePath: p.executablePath,
                       enabled: true
                     });
                   }}
@@ -1198,6 +1708,38 @@ function AppAudioModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function AppAudioSourceIcon({ source, fallback }: { source: AudioSourceRule; fallback: string }) {
+  const [iconUrl, setIconUrl] = useState("");
+  const processName = source.processName || "";
+  const executablePath = source.executablePath || "";
+
+  useEffect(() => {
+    let active = true;
+    setIconUrl("");
+    if (!processName) {
+      return () => {
+        active = false;
+      };
+    }
+
+    window.clipture.processIconUrl(processName, executablePath).then((url) => {
+      if (active) setIconUrl(url || "");
+    }).catch(() => {
+      if (active) setIconUrl("");
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [processName, executablePath]);
+
+  return (
+    <span className={iconUrl ? "audio-source-icon audio-app-icon has-image" : "audio-source-icon audio-app-icon"} aria-hidden="true">
+      {iconUrl ? <img className="audio-app-icon-image" src={iconUrl} alt="" /> : fallback}
+    </span>
   );
 }
 
@@ -1441,6 +1983,8 @@ function SettingsView({
   onRevealSounds: () => void;
 }) {
   const audioSources = settings.audioSources || [];
+  const builtInAudioSources = audioSources.filter((source) => source.kind !== "app");
+  const appAudioSources = audioSources.filter((source) => source.kind === "app");
   const [recordingHotkey, setRecordingHotkey] = useState(false);
   const [activeProcesses, setActiveProcesses] = useState<ActiveProcess[]>([]);
   const [inputDevices, setInputDevices] = useState<AudioInputDevice[]>([]);
@@ -1449,12 +1993,18 @@ function SettingsView({
   const [configuringAppAudio, setConfiguringAppAudio] = useState<string | null>(null);
   const [configuringMicAudio, setConfiguringMicAudio] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<"general" | "video" | "audio">("general");
+  const [editingClipLength, setEditingClipLength] = useState(false);
+  const [clipLengthDraft, setClipLengthDraft] = useState(() => String(settings.clipLengthSeconds));
 
   useEffect(() => {
     void window.clipture.listActiveProcesses().then(setActiveProcesses);
     void window.clipture.listAudioInputDevices().then(setInputDevices);
     void window.clipture.listDisplayDevices().then(setDisplayDevices);
   }, []);
+
+  useEffect(() => {
+    if (!editingClipLength) setClipLengthDraft(String(settings.clipLengthSeconds));
+  }, [editingClipLength, settings.clipLengthSeconds]);
 
   const addSource = () => {
     const id = `app-${Date.now()}`;
@@ -1470,6 +2020,17 @@ function SettingsView({
         }
       ]
     });
+    void window.clipture.listActiveProcesses().then(setActiveProcesses);
+    setConfiguringAppAudio(id);
+  };
+
+  const removeSource = (sourceId: string) => {
+    const source = settings.audioSources.find((candidate) => candidate.id === sourceId);
+    if (!source || source.kind !== "app") return;
+    if (configuringAppAudio === sourceId) setConfiguringAppAudio(null);
+    void onChange({
+      audioSources: settings.audioSources.filter((candidate) => candidate.id !== sourceId)
+    });
   };
 
   const otherAppProcesses = new Set(
@@ -1484,6 +2045,61 @@ function SettingsView({
         candidate.id === sourceId ? { ...candidate, ...patch } : candidate
       )
     });
+  };
+
+  const setAudioSourceEnabled = (sourceId: string, enabled: boolean) => {
+    updateAudioSource(sourceId, { enabled });
+  };
+
+  const audioSourceIcon = (source: AudioSourceRule) => {
+    switch (source.kind) {
+      case "system":
+        return <Volume2 size={20} />;
+      case "microphone":
+        return <Mic size={20} />;
+      case "game":
+        return <Gamepad2 size={20} />;
+      default:
+        return <Volume2 size={20} />;
+    }
+  };
+
+  const audioSourceDescription = (source: AudioSourceRule) => {
+    switch (source.kind) {
+      case "system":
+        return source.captureAllSystem === false ? "Record selected apps into the system mix" : "Record all system sounds";
+      case "microphone":
+        return source.micDeviceName ? `Record from ${source.micDeviceName}` : "Record from your microphone";
+      case "game":
+        return "Record audio from the active game or app";
+      default:
+        return source.enabled ? "Recorded when enabled" : "Currently disabled";
+    }
+  };
+
+  const appSourceName = (source: AudioSourceRule) => source.processName || source.label || "Select process";
+
+  const appSourceInitial = (source: AudioSourceRule) => {
+    const name = appSourceName(source).replace(/\.exe$/i, "").trim();
+    return name ? name[0]!.toUpperCase() : "A";
+  };
+
+  const commitClipLengthDraft = () => {
+    const trimmed = clipLengthDraft.trim();
+    if (!trimmed) {
+      setClipLengthDraft(String(settings.clipLengthSeconds));
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      setClipLengthDraft(String(settings.clipLengthSeconds));
+      return;
+    }
+    const nextLength = Math.min(600, Math.max(5, Math.round(parsed)));
+    setClipLengthDraft(String(nextLength));
+    if (nextLength !== settings.clipLengthSeconds) {
+      onChange({ clipLengthSeconds: nextLength });
+    }
   };
 
   useEffect(() => {
@@ -1622,11 +2238,27 @@ function SettingsView({
       <label>
         Clip length
         <input
-          type="number"
-          min={5}
-          max={600}
-          value={settings.clipLengthSeconds}
-          onChange={(event) => onChange({ clipLengthSeconds: Number(event.target.value) })}
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          value={clipLengthDraft}
+          onFocus={() => setEditingClipLength(true)}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            if (/^\d*$/.test(nextValue)) setClipLengthDraft(nextValue);
+          }}
+          onBlur={() => {
+            setEditingClipLength(false);
+            commitClipLengthDraft();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            } else if (event.key === "Escape") {
+              setClipLengthDraft(String(settings.clipLengthSeconds));
+              event.currentTarget.blur();
+            }
+          }}
         />
       </label>
       <label>
@@ -1695,112 +2327,164 @@ function SettingsView({
 
         {activeCategory === 'audio' && (
           <div className="settings-group single-column">
-      <div className="source-list">
-        <div className="source-list-header">
-          <h2>Audio sources</h2>
-          <button className="add-source" title="Add audio source" onClick={addSource}>
-            <Plus size={16} />
-          </button>
-        </div>
-        {audioSources.map((source) => (
-          <div className="source" key={source.id}>
-            <label className="source-toggle" title={source.enabled ? "Disable this track" : "Enable this track"}>
-              <input
-                className="toggle-switch"
-                type="checkbox"
-                checked={source.enabled}
-                onChange={(event) =>
-                  onChange({
-                    audioSources: settings.audioSources.map((candidate) =>
-                      candidate.id === source.id ? { ...candidate, enabled: event.target.checked } : candidate
-                    )
-                  })
-                }
-              />
-              <strong>{source.label}</strong>
-            </label>
-            {source.kind === "system" ? (
-              <div className="process-button-container">
-                <button 
-                  className="secondary-button" 
-                  onClick={() => {
-                    void window.clipture.listActiveProcesses().then(setActiveProcesses);
-                    setConfiguringSystemAudio(true);
-                  }}
-                >
-                  Configure
+            <div className="audio-settings-panel">
+              <div className="audio-settings-header">
+                <div className="audio-settings-heading">
+                  <h2>Audio sources</h2>
+                  <p>Choose what audio to record and how it's captured.</p>
+                </div>
+                <button className="add-source wide-add-source" title="Add audio source" type="button" onClick={addSource}>
+                  <Plus size={16} />
+                  <span>Add source</span>
                 </button>
-                {configuringSystemAudio && (
-                  <SystemAudioModal
-                    source={source}
-                    activeProcesses={activeProcesses}
-                    otherAppProcesses={otherAppProcesses}
-                    onSave={(patch) => {
-                      onChange({
-                        audioSources: settings.audioSources.map((candidate) =>
-                          candidate.id === source.id ? { ...candidate, ...patch } : candidate
-                        )
-                      });
-                    }}
-                    onClose={() => setConfiguringSystemAudio(false)}
-                  />
-                )}
               </div>
-            ) : source.kind === "app" ? (
-              <div className="process-button-container">
-                <button
-                  className="secondary-button"
-                  onClick={() => {
-                    void window.clipture.listActiveProcesses().then(setActiveProcesses);
-                    setConfiguringAppAudio(source.id);
-                  }}
-                >
-                  {source.processName ? source.processName : "Select process"}
-                </button>
-                {configuringAppAudio === source.id && (
-                  <AppAudioModal
-                    source={source}
-                    activeProcesses={activeProcesses}
-                    onSave={(patch) => {
-                      onChange({
-                        audioSources: settings.audioSources.map((candidate) =>
-                          candidate.id === source.id ? { ...candidate, ...patch } : candidate
-                        )
-                      });
-                      setConfiguringAppAudio(null);
-                    }}
-                    onClose={() => setConfiguringAppAudio(null)}
-                  />
-                )}
+
+              <div className="audio-source-card">
+                {builtInAudioSources.map((source) => (
+                  <Fragment key={source.id}>
+                    <div className="audio-source-row">
+                      <div className="audio-source-main">
+                        <span className="audio-source-icon" aria-hidden="true">
+                          {audioSourceIcon(source)}
+                        </span>
+                        <span className="audio-source-text">
+                          <strong>{source.label}</strong>
+                          <span>{audioSourceDescription(source)}</span>
+                        </span>
+                      </div>
+                      <div className="audio-source-actions">
+                        <label className="audio-source-toggle" title={source.enabled ? "Disable this source" : "Enable this source"}>
+                          <input
+                            className="toggle-switch"
+                            type="checkbox"
+                            checked={source.enabled}
+                            onChange={(event) => setAudioSourceEnabled(source.id, event.target.checked)}
+                          />
+                        </label>
+                        {source.kind === "system" && (
+                          <>
+                            <button
+                              className="secondary-button compact-configure"
+                              type="button"
+                              onClick={() => {
+                                void window.clipture.listActiveProcesses().then(setActiveProcesses);
+                                setConfiguringSystemAudio(true);
+                              }}
+                            >
+                              Configure
+                            </button>
+                          </>
+                        )}
+                        {source.kind === "microphone" && (
+                          <>
+                            <button
+                              className="secondary-button compact-configure"
+                              type="button"
+                              onClick={() => {
+                                void window.clipture.listAudioInputDevices().then(setInputDevices);
+                                setConfiguringMicAudio(source.id);
+                              }}
+                            >
+                              Configure
+                            </button>
+                          </>
+                        )}
+                        {source.kind === "game" && (
+                          <span className="audio-status-badge">Auto-detected</span>
+                        )}
+                      </div>
+                    </div>
+                    {source.kind === "system" && configuringSystemAudio && (
+                      <SystemAudioModal
+                        source={source}
+                        activeProcesses={activeProcesses}
+                        otherAppProcesses={otherAppProcesses}
+                        onSave={(patch) => updateAudioSource(source.id, patch)}
+                        onClose={() => setConfiguringSystemAudio(false)}
+                      />
+                    )}
+                    {source.kind === "microphone" && configuringMicAudio === source.id && (
+                      <MicrophoneSettingsModal
+                        source={source}
+                        inputDevices={inputDevices}
+                        onUpdate={(patch) => updateAudioSource(source.id, patch)}
+                        onClose={() => setConfiguringMicAudio(null)}
+                      />
+                    )}
+                  </Fragment>
+                ))}
               </div>
-            ) : source.kind === "microphone" ? (
-              <div className="process-button-container">
-                <button
-                  className="secondary-button"
-                  onClick={() => {
-                    void window.clipture.listAudioInputDevices().then(setInputDevices);
-                    setConfiguringMicAudio(source.id);
-                  }}
-                >
-                  Configure
-                </button>
-                {configuringMicAudio === source.id && (
-                  <MicrophoneSettingsModal 
-                    source={source} 
-                    inputDevices={inputDevices} 
-                    onUpdate={(patch) => updateAudioSource(source.id, patch)} 
-                    onClose={() => setConfiguringMicAudio(null)} 
-                  />
-                )}
-              </div>
-            ) : (
-              <div className="process-button-container">
-                <span style={{ color: "#a5adba", padding: "0 10px", alignSelf: "center" }}>{source.enabled ? "Saved separately" : "Off"}</span>
-              </div>
-            )}
-          </div>
-        ))}
-        </div>
+
+              <section className="separate-app-section">
+                <div className="audio-section-copy">
+                  <h3>Separate app tracks</h3>
+                  <p>Apps you allow will be recorded on their own separate tracks. You can remove them anytime.</p>
+                </div>
+                <div className="audio-source-card app-track-card">
+                  {appAudioSources.length === 0 ? (
+                    <div className="audio-source-empty">No separate app tracks yet.</div>
+                  ) : (
+                    appAudioSources.map((source) => (
+                      <Fragment key={source.id}>
+                        <div
+                          className="audio-source-row app-track-row"
+                          onAuxClick={(event) => {
+                            if (event.button !== 1) return;
+                            event.preventDefault();
+                            removeSource(source.id);
+                          }}
+                        >
+                          <button
+                            className="audio-source-main audio-source-main-button"
+                            type="button"
+                            onClick={() => {
+                              void window.clipture.listActiveProcesses().then(setActiveProcesses);
+                              setConfiguringAppAudio(source.id);
+                            }}
+                          >
+                            <AppAudioSourceIcon source={source} fallback={appSourceInitial(source)} />
+                            <span className="audio-source-text">
+                              <strong>{appSourceName(source)}</strong>
+                              <span>Separate track</span>
+                            </span>
+                          </button>
+                          <div className="audio-source-actions">
+                            <label className="audio-source-toggle" title={source.enabled ? "Disable this track" : "Enable this track"}>
+                              <input
+                                className="toggle-switch"
+                                type="checkbox"
+                                checked={source.enabled}
+                                onChange={(event) => setAudioSourceEnabled(source.id, event.target.checked)}
+                              />
+                            </label>
+                            <button
+                              aria-label={`Delete ${appSourceName(source)}`}
+                              className="audio-icon-button danger"
+                              onClick={() => removeSource(source.id)}
+                              title="Delete audio source"
+                              type="button"
+                            >
+                              <Trash2 size={17} />
+                            </button>
+                          </div>
+                        </div>
+                        {configuringAppAudio === source.id && (
+                          <AppAudioModal
+                            source={source}
+                            activeProcesses={activeProcesses}
+                            onSave={(patch) => {
+                              updateAudioSource(source.id, patch);
+                              setConfiguringAppAudio(null);
+                            }}
+                            onClose={() => setConfiguringAppAudio(null)}
+                          />
+                        )}
+                      </Fragment>
+                    ))
+                  )}
+                </div>
+              </section>
+            </div>
           </div>
         )}
       </div>

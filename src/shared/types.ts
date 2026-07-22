@@ -52,6 +52,8 @@ export interface ClipSettings {
   showNotification: boolean;
   notificationPosition: "top-right" | "top-left" | "bottom-right" | "bottom-left" | "top-center";
   saveFolder: string;
+  importedVideoDirectories?: string[];
+  importedVideoTitles?: Record<string, string>;
   audioSources: AudioSourceRule[];
 }
 
@@ -61,6 +63,7 @@ export interface AudioSourceRule {
   kind: "microphone" | "game" | "app" | "rest" | "mix" | "system";
   processName?: string;
   processNames?: string[];
+  executablePath?: string;
   captureAllSystem?: boolean;
   enabled: boolean;
   omitIfSilent: boolean;
@@ -106,6 +109,9 @@ export interface ClipRecord {
   id: string;
   title: string;
   gameOrApp: string;
+  librarySource?: "clip" | "imported";
+  folderName?: string;
+  importedRoot?: string;
   isGame?: boolean;
   createdAt: string;
   durationSeconds: number;
@@ -138,6 +144,7 @@ export interface UpdateState {
 export interface ActiveProcess {
   name: string;
   pid: number;
+  executablePath?: string;
 }
 
 export interface CliptureApi {
@@ -146,9 +153,14 @@ export interface CliptureApi {
   saveSettings(settings: ClipSettings): Promise<ClipSettings>;
   saveClip(durationSeconds: number): Promise<SaveClipResult>;
   listClips(): Promise<ClipRecord[]>;
+  deleteClips(ids: string[]): Promise<boolean>;
+  importVideoFolders(): Promise<boolean>;
   clipUrl(filePath: string): Promise<string>;
+  clipIconUrl(clip: ClipRecord, preferredLabels?: string[]): Promise<string>;
+  processIconUrl(processName: string, executablePath?: string): Promise<string>;
   clipThumbnailUrl(filePath: string): Promise<string>;
-  clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise<{ url: string; mixed: boolean; message: string }>;
+  clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise<{ url: string; mixed: boolean; message: string; audioChunkUrl?: string; audioChunkSeconds?: number }>;
+  releasePlaybackCache(): Promise<boolean>;
   listActiveProcesses(): Promise<ActiveProcess[]>;
   listAudioInputDevices(): Promise<AudioInputDevice[]>;
   listDisplayDevices(): Promise<DisplayDevice[]>;
