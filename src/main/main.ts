@@ -3,7 +3,7 @@ import type { OpenDialogOptions } from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
-import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { format } from "node:util";
 import { basename, dirname, extname, join, parse, normalize } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -75,9 +75,18 @@ function formatSaveTimingValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+let saveTimingLogStream: ReturnType<typeof createWriteStream> | null = null;
+
 function appendSaveTimingLog(line: string): void {
   try {
-    appendFileSync(appDataPath("save-timing.log"), `[${new Date().toISOString()}] ${line}\n`);
+    if (!saveTimingLogStream || saveTimingLogStream.destroyed) {
+      const stream = createWriteStream(appDataPath("save-timing.log"), { flags: "a" });
+      stream.on("error", () => {
+        if (saveTimingLogStream === stream) saveTimingLogStream = null;
+      });
+      saveTimingLogStream = stream;
+    }
+    saveTimingLogStream.write(`[${new Date().toISOString()}] ${line}\n`);
   } catch {
     // Timing logs are diagnostic only; saving clips should never depend on file logging.
   }
@@ -319,15 +328,14 @@ class EngineClient {
       includeMicrophoneAudio: settings.audioSources.some((source) => source.id === "mic" && source.enabled),
       captureGameAudio: settings.audioSources.some((source) => source.id === "game" && source.enabled),
       captureForegroundSystemAudio: Boolean(systemAudioSource?.enabled && !(systemAudioSource.captureAllSystem ?? true)),
-      appAudioProcesses: Array.from(new Set([
-        ...settings.audioSources
-          .filter((source) => source.kind === "app" && source.enabled && source.processName?.trim())
-          .map((source) => source.processName!.trim()),
-        ...settings.audioSources
-          .filter((source) => source.id === "system" && source.enabled && !(source.captureAllSystem ?? true))
-          .flatMap((source) => source.processNames || [])
-          .map((name) => name.trim())
-      ])).join("|"),
+      appAudioProcesses: Array.from(new Set(settings.audioSources
+        .filter((source) => source.kind === "app" && source.enabled && source.processName?.trim())
+        .map((source) => source.processName!.trim()))).join("|"),
+      systemAudioProcesses: Array.from(new Set(settings.audioSources
+        .filter((source) => source.id === "system" && source.enabled && !(source.captureAllSystem ?? true))
+        .flatMap((source) => source.processNames || [])
+        .map((name) => name.trim())
+        .filter(Boolean))).join("|"),
       micVolume: settings.audioSources.find((source) => source.kind === "microphone")?.volume ?? 1.0,
       micIsolation: settings.audioSources.find((source) => source.kind === "microphone")?.voiceIsolation ?? false,
       micIsolationWeight: settings.audioSources.find((source) => source.kind === "microphone")?.voiceIsolationWeight ?? 1.0,

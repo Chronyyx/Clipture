@@ -1,4 +1,6 @@
 #include "clipture/Mp4Muxer.hpp"
+#include "clipture/AacEncoderSession.hpp"
+#include "clipture/BoundedWrite.hpp"
 
 #include <Windows.h>
 #include <mfapi.h>
@@ -16,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <sstream>
 #include <utility>
@@ -34,11 +37,22 @@ struct SampleInfo {
 
 struct OwnedSample {
     std::vector<std::byte> payload;
+    PacketPayloadPtr sharedPayload;
     SampleInfo info;
+    int64_t pts100ns = 0;
+    uint32_t encoderEpoch = 0;
+    int32_t primingFrames = 0;
+    uint32_t encodedFrameCount = 1024;
 };
+
+std::span<const std::byte> samplePayload(const OwnedSample& sample) {
+    if (sample.sharedPayload) return { sample.sharedPayload->data(), sample.sharedPayload->size() };
+    return { sample.payload.data(), sample.payload.size() };
+}
 
 struct PcmSampleView {
     std::span<const std::byte> payload;
+    int64_t pts100ns = 0;
     uint32_t durationFrames = 1;
 };
 
@@ -55,6 +69,8 @@ struct AacAudioTrack {
     int channels = 2;
     Bytes decoderConfig;
     std::vector<OwnedSample> samples;
+    int64_t firstPts100ns = 0;
+    int32_t primingFrames = 0;
 };
 
 using SaveTimingClock = std::chrono::steady_clock;
@@ -130,6 +146,19 @@ bool isPcmAudioPacket(const EncodedPacket& packet) {
         packet.channelCount > 0 &&
         packet.bitsPerSample == 16 &&
         !payloadEmpty(packet);
+}
+
+bool isAacAudioPacket(const EncodedPacket& packet) {
+    return packet.kind == PacketKind::Audio &&
+        packet.codec == PacketCodec::AacLc &&
+        packet.sampleRate > 0 &&
+        packet.channelCount > 0 &&
+        packet.audioFrameCount > 0 &&
+        !payloadEmpty(packet);
+}
+
+const std::string& packetTrackId(const EncodedPacket& packet) {
+    return packet.logicalTrackId.empty() ? packet.sourceId : packet.logicalTrackId;
 }
 
 int aacSampleRateIndex(int sampleRate) {
@@ -440,6 +469,158 @@ bool encodePcmTrackToAac(const PcmAudioTrack& pcmTrack, AacAudioTrack& aacTrack,
     aacTrack.sampleRate = sampleRate;
     aacTrack.channels = channels;
     aacTrack.decoderConfig = makeAacAudioSpecificConfig(sampleRate, channels);
+    if (!aacTrack.samples.empty()) aacTrack.firstPts100ns = aacTrack.samples.front().pts100ns;
+    return !aacTrack.samples.empty();
+}
+
+PcmAudioTrack selectUncoveredPcm(const PcmAudioTrack& pcmTrack, const AacAudioTrack* encodedTrack) {
+    if (!encodedTrack || encodedTrack->samples.empty()) return pcmTrack;
+
+    struct Coverage {
+        int64_t start = 0;
+        int64_t end = 0;
+    };
+    std::vector<Coverage> coverage;
+    coverage.reserve(encodedTrack->samples.size());
+    for (const auto& sample : encodedTrack->samples) {
+        const int64_t duration =
+            (static_cast<int64_t>(std::max<uint32_t>(1, sample.encodedFrameCount)) * 10'000'000LL) /
+            std::max(1, encodedTrack->sampleRate);
+        Coverage next { sample.pts100ns, sample.pts100ns + duration };
+        if (!coverage.empty() && next.start <= coverage.back().end + 50'000LL) {
+            coverage.back().end = std::max(coverage.back().end, next.end);
+        } else {
+            coverage.push_back(next);
+        }
+    }
+
+    PcmAudioTrack missing { pcmTrack.sourceId, pcmTrack.sampleRate, pcmTrack.channels, {} };
+    std::size_t coverageIndex = 0;
+    for (const auto& sample : pcmTrack.samples) {
+        const int64_t sampleEnd = sample.pts100ns +
+            (static_cast<int64_t>(sample.durationFrames) * 10'000'000LL) / std::max(1, pcmTrack.sampleRate);
+        while (coverageIndex < coverage.size() && coverage[coverageIndex].end < sample.pts100ns) {
+            ++coverageIndex;
+        }
+        const bool covered = coverageIndex < coverage.size() &&
+            coverage[coverageIndex].start <= sample.pts100ns + 10'000LL &&
+            coverage[coverageIndex].end + 10'000LL >= sampleEnd;
+        if (!covered) missing.samples.push_back(sample);
+    }
+    return missing;
+}
+
+void finalizeAudioTimeline(AacAudioTrack& track) {
+    std::sort(track.samples.begin(), track.samples.end(), [](const OwnedSample& left, const OwnedSample& right) {
+        if (left.pts100ns != right.pts100ns) return left.pts100ns < right.pts100ns;
+        return left.encoderEpoch < right.encoderEpoch;
+    });
+    track.samples.erase(
+        std::unique(track.samples.begin(), track.samples.end(), [](const OwnedSample& left, const OwnedSample& right) {
+            return std::abs(left.pts100ns - right.pts100ns) <= 10'000LL;
+        }),
+        track.samples.end());
+    if (track.samples.empty()) return;
+
+    track.firstPts100ns = track.samples.front().pts100ns;
+    track.primingFrames = std::max<int32_t>(0, track.samples.front().primingFrames);
+    for (auto& sample : track.samples) {
+        sample.info.duration = std::max<uint32_t>(1, sample.encodedFrameCount);
+    }
+}
+
+bool encodePcmTrackToAacBatched(const PcmAudioTrack& pcmTrack, AacAudioTrack& aacTrack, std::string& error) {
+    if (pcmTrack.samples.empty()) return false;
+
+    AacEncoderSession encoder;
+    const int sampleRate = std::max(8000, pcmTrack.sampleRate);
+    const int channels = std::clamp(pcmTrack.channels, 1, 2);
+    const uint32_t targetBatchFrames = static_cast<uint32_t>(std::max(1, sampleRate / 10));
+    const std::size_t bytesPerFrame = static_cast<std::size_t>(channels) * sizeof(int16_t);
+    std::vector<std::byte> batch;
+    batch.reserve(static_cast<std::size_t>(targetBatchFrames) * bytesPerFrame);
+    uint32_t batchFrames = 0;
+    int64_t batchPts100ns = 0;
+    int64_t expectedInputPts100ns = 0;
+    uint32_t epoch = 1;
+    bool epochActive = false;
+    std::vector<AacEncodedFrame> encodedFrames;
+
+    auto appendEncoded = [&]() {
+        for (auto& frame : encodedFrames) {
+            OwnedSample sample;
+            sample.payload = std::move(frame.payload);
+            sample.info.size = sample.payload.size();
+            sample.info.duration = frame.durationFrames;
+            sample.pts100ns = frame.pts100ns;
+            sample.encoderEpoch = epoch;
+            sample.primingFrames = frame.primingFrames;
+            sample.encodedFrameCount = frame.durationFrames;
+            aacTrack.samples.push_back(std::move(sample));
+        }
+        encodedFrames.clear();
+    };
+    auto startEpoch = [&]() {
+        if (epochActive) return true;
+        if (!encoder.start(sampleRate, channels, error)) return false;
+        epochActive = true;
+        return true;
+    };
+    auto flushBatch = [&]() {
+        if (batchFrames == 0) return true;
+        const bool ok = encoder.encode(batch, batchPts100ns, batchFrames, encodedFrames, error);
+        if (ok) appendEncoded();
+        batch.clear();
+        batchFrames = 0;
+        return ok;
+    };
+    auto finishEpoch = [&]() {
+        if (!epochActive) return true;
+        if (!flushBatch()) return false;
+        if (!encoder.finish(encodedFrames, error)) return false;
+        appendEncoded();
+        encoder.reset();
+        epochActive = false;
+        expectedInputPts100ns = 0;
+        ++epoch;
+        return true;
+    };
+
+    for (const auto& pcmSample : pcmTrack.samples) {
+        const uint32_t availableFrames = static_cast<uint32_t>(pcmSample.payload.size() / bytesPerFrame);
+        if (availableFrames == 0) continue;
+        constexpr int64_t kContiguousTolerance100ns = 50'000LL;
+        if (epochActive && std::abs(pcmSample.pts100ns - expectedInputPts100ns) > kContiguousTolerance100ns) {
+            if (!finishEpoch()) return false;
+        }
+        if (!startEpoch()) return false;
+        uint32_t consumedFrames = 0;
+        while (consumedFrames < availableFrames) {
+            if (batchFrames == 0) {
+                batchPts100ns = pcmSample.pts100ns +
+                    (static_cast<int64_t>(consumedFrames) * 10'000'000LL) / sampleRate;
+            }
+            const uint32_t copiedFrames = std::min(targetBatchFrames - batchFrames, availableFrames - consumedFrames);
+            const auto byteOffset = static_cast<std::size_t>(consumedFrames) * bytesPerFrame;
+            const auto byteCount = static_cast<std::size_t>(copiedFrames) * bytesPerFrame;
+            batch.insert(
+                batch.end(),
+                pcmSample.payload.begin() + static_cast<std::ptrdiff_t>(byteOffset),
+                pcmSample.payload.begin() + static_cast<std::ptrdiff_t>(byteOffset + byteCount));
+            batchFrames += copiedFrames;
+            consumedFrames += copiedFrames;
+            if (batchFrames == targetBatchFrames && !flushBatch()) return false;
+        }
+        expectedInputPts100ns = pcmSample.pts100ns +
+            (static_cast<int64_t>(availableFrames) * 10'000'000LL) / sampleRate;
+    }
+    if (!finishEpoch()) return false;
+
+    aacTrack.sourceId = pcmTrack.sourceId;
+    aacTrack.sampleRate = sampleRate;
+    aacTrack.channels = channels;
+    aacTrack.decoderConfig = makeAacAudioSpecificConfig(sampleRate, channels);
+    if (!aacTrack.samples.empty()) aacTrack.firstPts100ns = aacTrack.samples.front().pts100ns;
     return !aacTrack.samples.empty();
 }
 
@@ -469,11 +650,7 @@ std::size_t findStartCode(std::span<const std::byte> data, std::size_t offset, s
     return std::string::npos;
 }
 
-struct NalUnit {
-    std::size_t offset = 0;
-    std::size_t size = 0;
-    uint8_t type = 0;
-};
+using NalUnit = H264NalSpan;
 
 struct VideoSamplePlan {
     const EncodedPacket* packet = nullptr;
@@ -498,7 +675,11 @@ std::vector<NalUnit> parseAnnexBNalus(std::span<const std::byte> data) {
         const std::size_t nalEnd = next == std::string::npos ? data.size() : next;
         if (nalEnd > nalStart) {
             const auto header = std::to_integer<uint8_t>(data[nalStart]);
-            nalus.push_back({ nalStart, nalEnd - nalStart, static_cast<uint8_t>(header & 0x1F) });
+            nalus.push_back({
+                static_cast<uint32_t>(nalStart),
+                static_cast<uint32_t>(nalEnd - nalStart),
+                static_cast<uint8_t>(header & 0x1F)
+            });
         }
         offset = nalEnd;
     }
@@ -664,6 +845,103 @@ Bytes makeAudioTkhd(uint32_t trackId, uint64_t duration) {
     appendU32(payload, 0);
     appendU32(payload, 0);
     return fullBox("tkhd", version1 ? 1 : 0, 0x000007, payload);
+}
+
+Bytes makeAudioEdts(
+    const AacAudioTrack& track,
+    uint64_t movieDuration100ns,
+    int64_t videoStartPts100ns) {
+    if (track.samples.empty() || movieDuration100ns == 0) return {};
+
+    struct AudioRun {
+        int64_t presentationStart100ns = 0;
+        uint64_t mediaStartFrames = 0;
+        uint64_t mediaDurationFrames = 0;
+        uint32_t primingFrames = 0;
+        uint32_t epoch = 0;
+    };
+
+    constexpr int64_t kContiguousTolerance100ns = 50'000LL;
+    const int sampleRate = std::max(1, track.sampleRate);
+    std::vector<AudioRun> runs;
+    uint64_t mediaCursorFrames = 0;
+    int64_t expectedNextPts100ns = 0;
+    for (const auto& sample : track.samples) {
+        const uint32_t frameCount = std::max<uint32_t>(1, sample.encodedFrameCount);
+        const bool startsRun = runs.empty() ||
+            sample.encoderEpoch != runs.back().epoch ||
+            std::abs(sample.pts100ns - expectedNextPts100ns) > kContiguousTolerance100ns;
+        if (startsRun) {
+            runs.push_back(AudioRun {
+                sample.pts100ns,
+                mediaCursorFrames,
+                0,
+                static_cast<uint32_t>(std::max<int32_t>(0, sample.primingFrames)),
+                sample.encoderEpoch
+            });
+        }
+        runs.back().mediaDurationFrames += frameCount;
+        mediaCursorFrames += frameCount;
+        expectedNextPts100ns = sample.pts100ns +
+            (static_cast<int64_t>(frameCount) * 10'000'000LL) / sampleRate;
+    }
+
+    struct EditEntry {
+        uint64_t duration100ns = 0;
+        int64_t mediaTimeFrames = -1;
+    };
+    std::vector<EditEntry> edits;
+    uint64_t presentationCursor100ns = 0;
+    for (const auto& run : runs) {
+        const int64_t relativeStart100ns = run.presentationStart100ns - videoStartPts100ns;
+        uint64_t desiredStart100ns = relativeStart100ns > 0
+            ? static_cast<uint64_t>(relativeStart100ns)
+            : 0;
+        desiredStart100ns = std::min(desiredStart100ns, movieDuration100ns);
+        if (desiredStart100ns > presentationCursor100ns) {
+            edits.push_back({ desiredStart100ns - presentationCursor100ns, -1 });
+            presentationCursor100ns = desiredStart100ns;
+        }
+        if (presentationCursor100ns >= movieDuration100ns) break;
+
+        uint64_t trimmedFrames = run.primingFrames;
+        if (relativeStart100ns < 0) {
+            trimmedFrames += static_cast<uint64_t>(
+                ((-relativeStart100ns) * sampleRate + 9'999'999LL) / 10'000'000LL);
+        } else if (desiredStart100ns < presentationCursor100ns) {
+            const uint64_t overlap100ns = presentationCursor100ns - desiredStart100ns;
+            trimmedFrames += (overlap100ns * static_cast<uint64_t>(sampleRate) + 9'999'999ULL) /
+                10'000'000ULL;
+        }
+        if (trimmedFrames >= run.mediaDurationFrames) continue;
+
+        const uint64_t playableFrames = run.mediaDurationFrames - trimmedFrames;
+        uint64_t playableDuration100ns =
+            (playableFrames * 10'000'000ULL) / static_cast<uint64_t>(sampleRate);
+        playableDuration100ns = std::min(
+            playableDuration100ns,
+            movieDuration100ns - presentationCursor100ns);
+        if (playableDuration100ns == 0) continue;
+        edits.push_back({
+            playableDuration100ns,
+            static_cast<int64_t>(run.mediaStartFrames + trimmedFrames)
+        });
+        presentationCursor100ns += playableDuration100ns;
+    }
+    if (presentationCursor100ns < movieDuration100ns) {
+        edits.push_back({ movieDuration100ns - presentationCursor100ns, -1 });
+    }
+    if (edits.empty()) return {};
+
+    Bytes entries;
+    appendU32(entries, static_cast<uint32_t>(edits.size()));
+    for (const auto& edit : edits) {
+        appendU64(entries, edit.duration100ns);
+        appendU64(entries, static_cast<uint64_t>(edit.mediaTimeFrames));
+        appendU16(entries, 1);
+        appendU16(entries, 0);
+    }
+    return box("edts", fullBox("elst", 1, 0, entries));
 }
 
 Bytes makeMdhd(uint32_t timescale, uint64_t duration) {
@@ -934,7 +1212,11 @@ Bytes makeVideoTrak(const Bytes& avcConfig, const std::vector<VideoSamplePlan>& 
     return box("trak", trakPayload);
 }
 
-Bytes makeAudioTrak(const AacAudioTrack& track, uint32_t trackId, uint64_t movieDuration) {
+Bytes makeAudioTrak(
+    const AacAudioTrack& track,
+    uint32_t trackId,
+    uint64_t movieDuration,
+    int64_t videoStartPts100ns) {
     const uint32_t timescale = static_cast<uint32_t>(std::max(1, track.sampleRate));
     const uint64_t duration = samplesDuration(track.samples);
 
@@ -957,6 +1239,9 @@ Bytes makeAudioTrak(const AacAudioTrack& track, uint32_t trackId, uint64_t movie
 
     Bytes trakPayload;
     appendBytes(trakPayload, makeAudioTkhd(trackId, movieDuration));
+    if (const auto edits = makeAudioEdts(track, movieDuration, videoStartPts100ns); !edits.empty()) {
+        appendBytes(trakPayload, edits);
+    }
     appendBytes(trakPayload, box("mdia", mdiaPayload));
     return box("trak", trakPayload);
 }
@@ -968,64 +1253,148 @@ Bytes makeMoov(const Bytes& avcConfig, const std::vector<VideoSamplePlan>& sampl
     Bytes moovPayload;
     appendBytes(moovPayload, makeMvhd(timescale, duration, static_cast<uint32_t>(audioTracks.size() + 2)));
     appendBytes(moovPayload, makeVideoTrak(avcConfig, samples, width, height, fps));
+    const int64_t videoStartPts100ns = samples.empty() || !samples.front().packet
+        ? 0
+        : samples.front().packet->pts100ns;
     uint32_t trackId = 2;
     for (const auto& audioTrack : audioTracks) {
-        appendBytes(moovPayload, makeAudioTrak(audioTrack, trackId++, duration));
+        appendBytes(moovPayload, makeAudioTrak(audioTrack, trackId++, duration, videoStartPts100ns));
     }
     return box("moov", moovPayload);
 }
 
-void writeU32(std::ofstream& out, uint32_t value) {
-    const uint8_t bytes[] = {
-        static_cast<uint8_t>((value >> 24) & 0xFF),
-        static_cast<uint8_t>((value >> 16) & 0xFF),
-        static_cast<uint8_t>((value >> 8) & 0xFF),
-        static_cast<uint8_t>(value & 0xFF)
+class Win32FileWriter {
+public:
+    static constexpr DWORD maxWriteBytes = 4u * 1024u * 1024u;
+
+    explicit Win32FileWriter(const std::wstring& path) {
+        handle_ = CreateFileW(
+            path.c_str(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ,
+            nullptr,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+            nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) {
+            lastError_ = GetLastError();
+            return;
+        }
+
+        FILE_IO_PRIORITY_HINT_INFO priorityInfo {};
+        priorityInfo.PriorityHint = IoPriorityHintLow;
+        lowPriorityApplied_ = SetFileInformationByHandle(
+            handle_,
+            FileIoPriorityHintInfo,
+            &priorityInfo,
+            sizeof(priorityInfo)) != FALSE;
+    }
+
+    ~Win32FileWriter() {
+        close();
+    }
+
+    bool valid() const { return handle_ != INVALID_HANDLE_VALUE; }
+    bool good() const { return valid() && lastError_ == ERROR_SUCCESS; }
+    bool preallocated() const { return preallocated_; }
+    bool lowPriorityApplied() const { return lowPriorityApplied_; }
+    uint64_t bytesWritten() const { return bytesWritten_; }
+    DWORD maximumWriteSize() const { return maximumWriteSize_; }
+    DWORD lastError() const { return lastError_; }
+
+    bool preallocate(uint64_t size) {
+        if (!good() || size > static_cast<uint64_t>(std::numeric_limits<LONGLONG>::max())) return false;
+        LARGE_INTEGER target {};
+        target.QuadPart = static_cast<LONGLONG>(size);
+        LARGE_INTEGER beginning {};
+        FILE_ALLOCATION_INFO allocation {};
+        allocation.AllocationSize = target;
+        const bool allocationReserved = SetFileInformationByHandle(
+            handle_,
+            FileAllocationInfo,
+            &allocation,
+            sizeof(allocation)) != FALSE;
+        if (!SetFilePointerEx(handle_, target, nullptr, FILE_BEGIN) || !SetEndOfFile(handle_)) {
+            SetFilePointerEx(handle_, beginning, nullptr, FILE_BEGIN);
+            return false;
+        }
+        if (!SetFilePointerEx(handle_, beginning, nullptr, FILE_BEGIN)) return false;
+        preallocated_ = allocationReserved;
+        return preallocated_;
+    }
+
+    bool write(std::span<const std::byte> bytes) {
+        while (!bytes.empty() && good()) {
+            const DWORD request = static_cast<DWORD>(boundedWriteSize(bytes.size(), maxWriteBytes));
+            DWORD written = 0;
+            if (!WriteFile(handle_, bytes.data(), request, &written, nullptr) || written != request) {
+                lastError_ = GetLastError();
+                if (lastError_ == ERROR_SUCCESS) lastError_ = ERROR_WRITE_FAULT;
+                return false;
+            }
+            maximumWriteSize_ = std::max(maximumWriteSize_, request);
+            bytesWritten_ += written;
+            bytes = bytes.subspan(written);
+        }
+        return good();
+    }
+
+    bool close() {
+        if (handle_ == INVALID_HANDLE_VALUE) return lastError_ == ERROR_SUCCESS;
+        const HANDLE handle = std::exchange(handle_, INVALID_HANDLE_VALUE);
+        if (!CloseHandle(handle)) {
+            lastError_ = GetLastError();
+            return false;
+        }
+        return lastError_ == ERROR_SUCCESS;
+    }
+
+private:
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+    DWORD lastError_ = ERROR_SUCCESS;
+    DWORD maximumWriteSize_ = 0;
+    uint64_t bytesWritten_ = 0;
+    bool preallocated_ = false;
+    bool lowPriorityApplied_ = false;
+};
+
+void writeU32(Win32FileWriter& out, uint32_t value) {
+    const std::byte bytes[] = {
+        static_cast<std::byte>((value >> 24) & 0xFF),
+        static_cast<std::byte>((value >> 16) & 0xFF),
+        static_cast<std::byte>((value >> 8) & 0xFF),
+        static_cast<std::byte>(value & 0xFF)
     };
-    out.write(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+    out.write(bytes);
 }
 
-void writeU64(std::ofstream& out, uint64_t value) {
+void writeU64(Win32FileWriter& out, uint64_t value) {
     writeU32(out, static_cast<uint32_t>((value >> 32) & 0xFFFFFFFFULL));
     writeU32(out, static_cast<uint32_t>(value & 0xFFFFFFFFULL));
 }
 
-void writeType(std::ofstream& out, const char type[4]) {
-    out.write(type, 4);
+void writeType(Win32FileWriter& out, const char type[4]) {
+    out.write(std::as_bytes(std::span<const char>(type, 4)));
 }
 
-void writeBytes(std::ofstream& out, const Bytes& bytes) {
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-}
-
-void writeBytes(std::ofstream& out, std::span<const std::byte> bytes) {
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-}
-
-void writeBytes(std::ofstream& out, const std::vector<std::byte>& bytes) {
-    writeBytes(out, std::span<const std::byte>(bytes.data(), bytes.size()));
+void writeBytes(Win32FileWriter& out, const Bytes& bytes) {
+    out.write(std::as_bytes(std::span<const uint8_t>(bytes.data(), bytes.size())));
 }
 
 class BufferedByteWriter {
 public:
     explicit BufferedByteWriter(
-        std::ofstream& out,
+        Win32FileWriter& out,
         std::size_t capacity = 4 * 1024 * 1024,
-        std::function<bool()> shouldPace = {})
+        std::function<MuxPressureSample()> samplePressure = {})
         : out_(out),
           capacity_(std::max<std::size_t>(capacity, 1)),
-          shouldPace_(std::move(shouldPace)) {
+          samplePressure_(std::move(samplePressure)) {
         buffer_.reserve(capacity_);
     }
 
     void write(std::span<const std::byte> bytes) {
         while (!bytes.empty()) {
-            if (buffer_.empty() && bytes.size() >= capacity_) {
-                out_.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-                noteFlush();
-                return;
-            }
-
             const std::size_t available = capacity_ - buffer_.size();
             if (available == 0) {
                 flush();
@@ -1040,7 +1409,7 @@ public:
 
     void flush() {
         if (buffer_.empty()) return;
-        out_.write(reinterpret_cast<const char*>(buffer_.data()), static_cast<std::streamsize>(buffer_.size()));
+        out_.write(std::span<const std::byte>(buffer_.data(), buffer_.size()));
         buffer_.clear();
         noteFlush();
     }
@@ -1057,22 +1426,57 @@ public:
         return sleepMs_;
     }
 
+    std::size_t yieldCount() const { return yields_; }
+    std::size_t pressureTransitions() const { return pressureTransitions_; }
+    int64_t maximumQueueAge100ns() const { return maximumQueueAge100ns_; }
+    int maximumNvencPending() const { return maximumNvencPending_; }
+    int64_t maximumCaptureGap100ns() const { return maximumCaptureGap100ns_; }
+
 private:
     void noteFlush() {
         ++flushes_;
-        if (!shouldPace_ || !shouldPace_()) return;
-        Sleep(1);
-        ++sleeps_;
-        ++sleepMs_;
+        if (!samplePressure_) return;
+        const auto sample = samplePressure_();
+        maximumQueueAge100ns_ = std::max(maximumQueueAge100ns_, sample.oldestFrameAge100ns);
+        maximumNvencPending_ = std::max(maximumNvencPending_, sample.nvencPending);
+        maximumCaptureGap100ns_ = std::max(maximumCaptureGap100ns_, sample.captureGap100ns);
+
+        auto requested = sample.level;
+        const auto now = std::chrono::steady_clock::now();
+        if (requested == MuxPressureLevel::Healthy && pressure_ != MuxPressureLevel::Healthy) {
+            if (healthySince_.time_since_epoch().count() == 0) healthySince_ = now;
+            if (now - healthySince_ < std::chrono::milliseconds(250)) requested = pressure_;
+        } else if (requested != MuxPressureLevel::Healthy) {
+            healthySince_ = {};
+        }
+        if (requested != pressure_) {
+            pressure_ = requested;
+            ++pressureTransitions_;
+        }
+        if (pressure_ == MuxPressureLevel::Critical) {
+            Sleep(1);
+            ++sleeps_;
+            ++sleepMs_;
+        } else if (pressure_ == MuxPressureLevel::Elevated) {
+            SwitchToThread();
+            ++yields_;
+        }
     }
 
-    std::ofstream& out_;
+    Win32FileWriter& out_;
     const std::size_t capacity_;
-    std::function<bool()> shouldPace_;
+    std::function<MuxPressureSample()> samplePressure_;
     std::vector<std::byte> buffer_;
     std::size_t flushes_ = 0;
     std::size_t sleeps_ = 0;
     std::size_t sleepMs_ = 0;
+    std::size_t yields_ = 0;
+    std::size_t pressureTransitions_ = 0;
+    int64_t maximumQueueAge100ns_ = 0;
+    int maximumNvencPending_ = 0;
+    int64_t maximumCaptureGap100ns_ = 0;
+    MuxPressureLevel pressure_ = MuxPressureLevel::Healthy;
+    std::chrono::steady_clock::time_point healthySince_ {};
 };
 
 void writeU32(BufferedByteWriter& out, uint32_t value) {
@@ -1129,10 +1533,12 @@ MuxResult muxH264ToMp4(
     bool hasVideoPacket = false;
     std::vector<VideoSamplePlan> videoSamples;
     std::vector<PcmAudioTrack> pcmAudioTracks;
+    std::vector<AacAudioTrack> audioTracks;
     std::vector<std::byte> sps;
     std::vector<std::byte> pps;
     std::size_t videoPacketCount = 0;
     std::size_t pcmPacketCount = 0;
+    std::size_t aacPacketCount = 0;
     std::size_t writableNaluCount = 0;
     uint64_t videoSourceBytes = 0;
     uint64_t pcmSourceBytes = 0;
@@ -1144,13 +1550,10 @@ MuxResult muxH264ToMp4(
             ++videoPacketCount;
             const auto bytes = payloadBytes(packet);
             videoSourceBytes += bytes.size();
-            const auto nalus = parseAnnexBNalus(bytes);
-
             VideoSamplePlan sample;
             sample.packet = &packet;
             sample.info.keyframe = packet.keyframe;
-
-            for (const auto& nalu : nalus) {
+            auto collectNalu = [&](const NalUnit& nalu) {
                 if (nalu.type == 7 && sps.empty()) {
                     sps = copyNaluPayload(bytes, nalu);
                 } else if (nalu.type == 8 && pps.empty()) {
@@ -1160,23 +1563,62 @@ MuxResult muxH264ToMp4(
                 if (isWritableVideoNalu(nalu)) {
                     sample.writableNalus.push_back(nalu);
                 }
-            }
+            };
 
-            sample.info.size = avccSampleSize(sample.writableNalus);
+            if (packet.h264.analyzed) {
+                forEachH264Nal(packet.h264, collectNalu);
+                sample.info.size = packet.h264.avccSampleSize;
+            } else {
+                const auto nalus = parseAnnexBNalus(bytes);
+                for (const auto& nalu : nalus) collectNalu(nalu);
+                sample.info.size = avccSampleSize(sample.writableNalus);
+            }
             if (sample.info.size > 0) {
                 writableNaluCount += sample.writableNalus.size();
                 videoSamples.push_back(std::move(sample));
             }
+        } else if (isAacAudioPacket(packet)) {
+            ++aacPacketCount;
+            const auto& trackId = packetTrackId(packet);
+            auto track = std::find_if(audioTracks.begin(), audioTracks.end(), [&](const AacAudioTrack& candidate) {
+                return candidate.sourceId == trackId &&
+                    candidate.sampleRate == packet.sampleRate &&
+                    candidate.channels == packet.channelCount;
+            });
+            if (track == audioTracks.end()) {
+                audioTracks.push_back(AacAudioTrack {
+                    trackId,
+                    packet.sampleRate,
+                    packet.channelCount,
+                    makeAacAudioSpecificConfig(packet.sampleRate, packet.channelCount),
+                    {},
+                    packet.pts100ns
+                });
+                track = std::prev(audioTracks.end());
+            }
+            OwnedSample sample;
+            sample.sharedPayload = packet.payload;
+            sample.info.size = payloadSize(packet);
+            sample.info.duration = packet.audioFrameCount;
+            sample.pts100ns = packet.pts100ns;
+            sample.encoderEpoch = packet.encoderEpoch;
+            sample.primingFrames = packet.audioPrimingFrames;
+            sample.encodedFrameCount = packet.audioFrameCount;
+            track->samples.push_back(std::move(sample));
+            if (track->firstPts100ns == 0 || packet.pts100ns < track->firstPts100ns) {
+                track->firstPts100ns = packet.pts100ns;
+            }
         } else if (isPcmAudioPacket(packet)) {
             ++pcmPacketCount;
+            const auto& trackId = packetTrackId(packet);
             auto track = std::find_if(pcmAudioTracks.begin(), pcmAudioTracks.end(), [&](const PcmAudioTrack& candidate) {
-                return candidate.sourceId == packet.sourceId &&
+                return candidate.sourceId == trackId &&
                     candidate.sampleRate == packet.sampleRate &&
                     candidate.channels == packet.channelCount;
             });
             if (track == pcmAudioTracks.end()) {
                 pcmAudioTracks.push_back(PcmAudioTrack {
-                    packet.sourceId,
+                    trackId,
                     packet.sampleRate,
                     packet.channelCount,
                     {}
@@ -1188,7 +1630,7 @@ MuxResult muxH264ToMp4(
             pcmSourceBytes += bytes.size();
             const auto bytesPerFrame = static_cast<std::size_t>(std::max(1, packet.channelCount) * 2);
             const auto frames = static_cast<uint32_t>(std::max<std::size_t>(1, bytes.size() / bytesPerFrame));
-            track->samples.push_back(PcmSampleView { bytes, frames });
+            track->samples.push_back(PcmSampleView { bytes, packet.pts100ns, frames });
         }
     }
     logMuxSaveTiming(
@@ -1200,7 +1642,9 @@ MuxResult muxH264ToMp4(
             " videoBytes=" + std::to_string(videoSourceBytes) +
             " pcmPackets=" + std::to_string(pcmPacketCount) +
             " pcmTracks=" + std::to_string(pcmAudioTracks.size()) +
-            " pcmBytes=" + std::to_string(pcmSourceBytes));
+            " pcmBytes=" + std::to_string(pcmSourceBytes) +
+            " aacPackets=" + std::to_string(aacPacketCount) +
+            " aacTracks=" + std::to_string(audioTracks.size()));
     if (!hasVideoPacket) {
         result.message = "No encoded H.264 packets are buffered yet.";
         logMuxSaveTiming("total", totalStartedAt, "ok=false reason=no_video_packets");
@@ -1256,33 +1700,43 @@ MuxResult muxH264ToMp4(
             " maxSampleDuration100ns=" + std::to_string(maxSampleDuration100ns) +
             " longFrameGaps=" + std::to_string(longFrameGaps));
 
-    std::vector<AacAudioTrack> audioTracks;
     if (!pcmAudioTracks.empty()) {
         const auto aacStartedAt = SaveTimingClock::now();
-        HRESULT mfHr = MFStartup(MF_VERSION);
-        if (FAILED(mfHr)) {
-            result.message = hresultMessage("MFStartup failed for AAC audio encoding.", mfHr);
-            logMuxSaveTiming("total", totalStartedAt, "ok=false reason=mfstartup_failed");
-            return result;
-        }
-
         std::string audioError;
         for (const auto& pcmTrack : pcmAudioTracks) {
             const auto trackStartedAt = SaveTimingClock::now();
-            AacAudioTrack aacTrack;
-            const bool encoded = encodePcmTrackToAac(pcmTrack, aacTrack, audioError);
+            auto existing = std::find_if(audioTracks.begin(), audioTracks.end(), [&](const AacAudioTrack& candidate) {
+                return candidate.sourceId == pcmTrack.sourceId &&
+                    candidate.sampleRate == pcmTrack.sampleRate &&
+                    candidate.channels == pcmTrack.channels;
+            });
+            if (existing != audioTracks.end()) finalizeAudioTimeline(*existing);
+            const auto missingPcm = selectUncoveredPcm(
+                pcmTrack,
+                existing == audioTracks.end() ? nullptr : &*existing);
+            AacAudioTrack recoveredTrack;
+            const bool encoded = missingPcm.samples.empty()
+                ? true
+                : encodePcmTrackToAacBatched(missingPcm, recoveredTrack, audioError);
             logMuxSaveTiming(
                 "aac_encode_track",
                 trackStartedAt,
                 "ok=" + std::string(encoded ? "true" : "false") +
                     " source=\"" + pcmTrack.sourceId + "\"" +
                     " pcmSamples=" + std::to_string(pcmTrack.samples.size()) +
-                    " aacSamples=" + std::to_string(aacTrack.samples.size()));
-            if (encoded) {
-                audioTracks.push_back(std::move(aacTrack));
+                    " repairSamples=" + std::to_string(missingPcm.samples.size()) +
+                    " aacSamples=" + std::to_string(recoveredTrack.samples.size()));
+            if (encoded && !recoveredTrack.samples.empty()) {
+                if (existing == audioTracks.end()) {
+                    audioTracks.push_back(std::move(recoveredTrack));
+                } else {
+                    existing->samples.insert(
+                        existing->samples.end(),
+                        std::make_move_iterator(recoveredTrack.samples.begin()),
+                        std::make_move_iterator(recoveredTrack.samples.end()));
+                }
             }
         }
-        MFShutdown();
         logMuxSaveTiming(
             "aac_encode",
             aacStartedAt,
@@ -1297,6 +1751,9 @@ MuxResult muxH264ToMp4(
             return result;
         }
     }
+
+    for (auto& track : audioTracks) finalizeAudioTimeline(track);
+    std::erase_if(audioTracks, [](const AacAudioTrack& track) { return track.samples.empty(); });
 
     videoSamples.front().info.keyframe = true;
 
@@ -1331,12 +1788,14 @@ MuxResult muxH264ToMp4(
             " moovBytes=" + std::to_string(moov.size()) +
             " audioTracks=" + std::to_string(audioTracks.size()));
 
-    std::ofstream out(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
-    if (!out) {
+    Win32FileWriter out(path);
+    if (!out.valid()) {
         result.message = "MP4 muxing failed: could not create output file.";
         logMuxSaveTiming("total", totalStartedAt, "ok=false reason=create_output_failed");
         return result;
     }
+    const uint64_t finalFileSize = ftyp.size() + mdatHeaderSize + mdatPayloadSize + moov.size();
+    const bool preallocated = out.preallocate(finalFileSize);
 
     const auto headerStartedAt = SaveTimingClock::now();
     writeBytes(out, ftyp);
@@ -1348,9 +1807,15 @@ MuxResult muxH264ToMp4(
         writeU32(out, static_cast<uint32_t>(mdatPayloadSize + 8));
         writeType(out, "mdat");
     }
-    logMuxSaveTiming("write_header", headerStartedAt, "largeMdat=" + std::string(largeMdat ? "true" : "false"));
+    logMuxSaveTiming(
+        "write_header",
+        headerStartedAt,
+        "largeMdat=" + std::string(largeMdat ? "true" : "false") +
+            " preallocated=" + std::string(preallocated ? "true" : "false") +
+            " finalBytes=" + std::to_string(finalFileSize) +
+            " lowIoPriority=" + std::string(out.lowPriorityApplied() ? "true" : "false"));
 
-    BufferedByteWriter bufferedOut(out, 4 * 1024 * 1024, std::move(pacing.shouldPace));
+    BufferedByteWriter bufferedOut(out, Win32FileWriter::maxWriteBytes, std::move(pacing.samplePressure));
     const auto videoWriteStartedAt = SaveTimingClock::now();
     uint64_t videoWrittenBytes = 0;
     for (const auto& sample : videoSamples) {
@@ -1361,14 +1826,24 @@ MuxResult muxH264ToMp4(
     const auto videoFlushes = bufferedOut.flushCount();
     const auto videoSleeps = bufferedOut.sleepCount();
     const auto videoSleepMs = bufferedOut.sleepMs();
+    const int64_t videoWriteMs = std::max<int64_t>(1, saveTimingElapsedMs(videoWriteStartedAt));
+    const uint64_t videoThroughputMiBps =
+        (videoWrittenBytes * 1000ULL) / (static_cast<uint64_t>(videoWriteMs) * 1024ULL * 1024ULL);
     logMuxSaveTiming(
         "write_video_mdat",
         videoWriteStartedAt,
         "samples=" + std::to_string(videoSamples.size()) +
             " bytes=" + std::to_string(videoWrittenBytes) +
+            " throughputMiBps=" + std::to_string(videoThroughputMiBps) +
             " flushes=" + std::to_string(videoFlushes) +
+            " maxWriteBytes=" + std::to_string(out.maximumWriteSize()) +
+            " paceYields=" + std::to_string(bufferedOut.yieldCount()) +
             " paceSleeps=" + std::to_string(videoSleeps) +
-            " paceSleepMs=" + std::to_string(videoSleepMs));
+            " paceSleepMs=" + std::to_string(videoSleepMs) +
+            " pressureTransitions=" + std::to_string(bufferedOut.pressureTransitions()) +
+            " maxQueueAge100ns=" + std::to_string(bufferedOut.maximumQueueAge100ns()) +
+            " maxNvencPending=" + std::to_string(bufferedOut.maximumNvencPending()) +
+            " maxCaptureGap100ns=" + std::to_string(bufferedOut.maximumCaptureGap100ns()));
 
     const auto audioWriteStartedAt = SaveTimingClock::now();
     const auto audioFlushesBefore = bufferedOut.flushCount();
@@ -1377,7 +1852,7 @@ MuxResult muxH264ToMp4(
     uint64_t audioWrittenBytes = 0;
     for (const auto& track : audioTracks) {
         for (const auto& sample : track.samples) {
-            writeBytes(bufferedOut, sample.payload);
+            writeBytes(bufferedOut, samplePayload(sample));
             audioWrittenBytes += sample.info.size;
         }
     }
@@ -1396,10 +1871,11 @@ MuxResult muxH264ToMp4(
     logMuxSaveTiming("write_moov", moovWriteStartedAt, "bytes=" + std::to_string(moov.size()));
 
     const auto closeStartedAt = SaveTimingClock::now();
-    out.close();
+    const bool writeSucceeded = out.good();
+    const bool closeSucceeded = out.close();
     logMuxSaveTiming("file_close", closeStartedAt);
 
-    if (!out) {
+    if (!writeSucceeded || !closeSucceeded) {
         std::error_code ignored;
         std::filesystem::remove(path, ignored);
         result.message = "MP4 muxing failed while writing the output file.";
@@ -1415,6 +1891,8 @@ MuxResult muxH264ToMp4(
         totalStartedAt,
         "ok=true videoBytes=" + std::to_string(videoWrittenBytes) +
             " audioBytes=" + std::to_string(audioWrittenBytes) +
+            " fileBytes=" + std::to_string(out.bytesWritten()) +
+            " maxWriteBytes=" + std::to_string(out.maximumWriteSize()) +
             " path=\"" + result.filePath + "\"");
     return result;
 }

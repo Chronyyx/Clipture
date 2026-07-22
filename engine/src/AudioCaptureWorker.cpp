@@ -1,4 +1,5 @@
 #include "clipture/AudioCaptureWorker.hpp"
+#include "clipture/AudioReplayCoordinator.hpp"
 #include "clipture/ProcessSnapshot.hpp"
 
 #include <Windows.h>
@@ -486,8 +487,8 @@ WAVEFORMATEX* getDefaultRenderMixFormat() {
 
 }  // namespace
 
-AudioCaptureWorker::AudioCaptureWorker(PacketRingBuffer& packets)
-    : packets_(packets) {}
+AudioCaptureWorker::AudioCaptureWorker(PacketRingBuffer& packets, AudioReplayCoordinator* replayCoordinator)
+    : packets_(packets), replayCoordinator_(replayCoordinator) {}
 
 AudioCaptureWorker::~AudioCaptureWorker() {
     stop();
@@ -657,6 +658,15 @@ std::string AudioCaptureWorker::microphoneStatus() const {
     return microphoneStatus_;
 }
 
+void AudioCaptureWorker::publishPacket(EncodedPacket packet) {
+    packet.codec = PacketCodec::PcmS16;
+    if (replayCoordinator_) {
+        replayCoordinator_->publish(std::move(packet));
+    } else {
+        packets_.push(std::move(packet));
+    }
+}
+
 void AudioCaptureWorker::startMicThreadLocked() {
     if (micThread_.joinable()) return;
     micStopRequested_ = std::make_shared<std::atomic<bool>>(false);
@@ -797,7 +807,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                 packet.bitsPerSample = 16;
                 packet.payload = packets_.acquirePayload(static_cast<std::size_t>(frames) * fallbackChannels * sizeof(int16_t));
                 fillSilentS16(frames, fallbackChannels, mutablePayload(packet));
-                packets_.push(std::move(packet));
+                publishPacket(std::move(packet));
                 nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / fallbackSampleRate);
                 ++packetsCaptured_;
                 ++fills;
@@ -872,7 +882,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
             packet.bitsPerSample = 16;
             packet.payload = packets_.acquirePayload(static_cast<std::size_t>(catchUpFrames) * outputChannelsForSilence * sizeof(int16_t));
             fillSilentS16(catchUpFrames, outputChannelsForSilence, mutablePayload(packet));
-            packets_.push(std::move(packet));
+            publishPacket(std::move(packet));
             nextPts100ns += catchUpDuration100ns;
             ++packetsCaptured_;
         }
@@ -981,7 +991,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                     packet.channelCount = outputChannels;
                     packet.bitsPerSample = 16;
                     packet.payload = std::move(outPcm);
-                    packets_.push(std::move(packet));
+                    publishPacket(std::move(packet));
 
                     nextPts100ns += packet.duration100ns;
                     ++packetsCaptured_;
@@ -1010,7 +1020,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                     packet.bitsPerSample = 16;
                     packet.payload = packets_.acquirePayload(static_cast<std::size_t>(frames) * outputChannelsForSilence * sizeof(int16_t));
                     fillSilentS16(frames, outputChannelsForSilence, mutablePayload(packet));
-                    packets_.push(std::move(packet));
+                    publishPacket(std::move(packet));
                     nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
                     ++packetsCaptured_;
                     ++fills;
@@ -1220,7 +1230,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                     packet.channelCount = outputChannels;
                     packet.bitsPerSample = 16;
                     packet.payload = std::move(outPcm);
-                    packets_.push(std::move(packet));
+                    publishPacket(std::move(packet));
                     
                     nextPts100ns += packet.duration100ns;
                     ++packetsCaptured_;
@@ -1244,7 +1254,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
             packet.channelCount = outputChannels;
             packet.bitsPerSample = 16;
             packet.payload = std::move(pcm);
-            packets_.push(std::move(packet));
+            publishPacket(std::move(packet));
             nextPts100ns += packet.duration100ns;
             ++packetsCaptured_;
             capturedPacket = true;
@@ -1271,7 +1281,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                 packet.bitsPerSample = 16;
                 packet.payload = packets_.acquirePayload(static_cast<std::size_t>(frames) * outputChannelsForSilence * sizeof(int16_t));
                 fillSilentS16(frames, outputChannelsForSilence, mutablePayload(packet));
-                packets_.push(std::move(packet));
+                publishPacket(std::move(packet));
                 nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
                 ++packetsCaptured_;
                 ++fills;
@@ -1436,7 +1446,7 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
             packet.channelCount = outputChannels;
             packet.bitsPerSample = 16;
             packet.payload = std::move(pcm);
-            packets_.push(std::move(packet));
+            publishPacket(std::move(packet));
             nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
             ++packetsCaptured_;
             capturedPacket = true;
@@ -1464,7 +1474,7 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
                 packet.bitsPerSample = 16;
                 packet.payload = packets_.acquirePayload(static_cast<std::size_t>(frames) * outputChannelsForSilence * sizeof(int16_t));
                 fillSilentS16(frames, outputChannelsForSilence, mutablePayload(packet));
-                packets_.push(std::move(packet));
+                publishPacket(std::move(packet));
                 nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
                 ++packetsCaptured_;
                 ++fills;

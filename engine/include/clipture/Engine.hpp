@@ -1,6 +1,7 @@
 #pragma once
 
 #include "clipture/AudioCaptureWorker.hpp"
+#include "clipture/AudioReplayCoordinator.hpp"
 #include "clipture/CaptureSession.hpp"
 #include "clipture/Diagnostics.hpp"
 #include "clipture/EncoderWorker.hpp"
@@ -47,6 +48,7 @@ struct EngineSettings {
     std::string micDeviceMatchKey;
     std::string micDeviceName;
     std::vector<std::string> appAudioProcesses;
+    std::vector<std::string> systemAudioProcesses;
 };
 
 struct SaveClipResult {
@@ -68,6 +70,7 @@ private:
     void arm();
     void refreshPacketCounts();
     void maybeResetAutoVideoResolution();
+    void refreshAudioRouting();
 
     void gameDetectionLoop();
 
@@ -76,6 +79,8 @@ private:
     FrameQueue frameQueue_;
     PacketRingBuffer videoPackets_;
     PacketRingBuffer audioPackets_;
+    PacketRingBuffer aacAudioPackets_;
+    std::unique_ptr<AudioReplayCoordinator> audioReplayCoordinator_;
     std::unique_ptr<CaptureSession> captureSession_;
     std::unique_ptr<EncoderWorker> encoderWorker_;
     std::unique_ptr<AudioCaptureWorker> audioCaptureWorker_;

@@ -204,7 +204,8 @@ int main() {
                     extractString(line, "micDeviceId"),
                     extractString(line, "micDeviceMatchKey"),
                     extractString(line, "micDeviceName"),
-                    splitList(extractString(line, "appAudioProcesses"))
+                    splitList(extractString(line, "appAudioProcesses")),
+                    splitList(extractString(line, "systemAudioProcesses"))
                 };
                 respond(id, clipture::toJson(engine.configure(settings)));
                 continue;

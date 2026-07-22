@@ -14,8 +14,23 @@ struct MuxResult {
     std::string filePath;
 };
 
+enum class MuxPressureLevel {
+    Healthy,
+    Elevated,
+    Critical
+};
+
+struct MuxPressureSample {
+    MuxPressureLevel level = MuxPressureLevel::Healthy;
+    std::size_t frameQueueDepth = 0;
+    int64_t oldestFrameAge100ns = 0;
+    int nvencPending = 0;
+    int64_t captureGap100ns = 0;
+    int droppedFramesDelta = 0;
+};
+
 struct MuxWritePacing {
-    std::function<bool()> shouldPace;
+    std::function<MuxPressureSample()> samplePressure;
 };
 
 MuxResult muxH264ToMp4(

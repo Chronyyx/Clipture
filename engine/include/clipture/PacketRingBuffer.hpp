@@ -1,9 +1,11 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -18,16 +20,50 @@ enum class PacketKind {
     Audio
 };
 
+enum class PacketCodec : uint8_t {
+    Unknown,
+    H264AnnexB,
+    PcmS16,
+    AacLc
+};
+
+struct H264NalSpan {
+    uint32_t offset = 0;
+    uint32_t size = 0;
+    uint8_t type = 0;
+};
+
+struct H264PacketLayout {
+    static constexpr std::size_t inlineCapacity = 4;
+
+    std::array<H264NalSpan, inlineCapacity> inlineNalus {};
+    std::shared_ptr<const std::vector<H264NalSpan>> overflowNalus;
+    uint32_t avccSampleSize = 0;
+    uint8_t inlineCount = 0;
+    bool analyzed = false;
+    bool hasIdr = false;
+    bool hasSps = false;
+    bool hasPps = false;
+    bool hasAud = false;
+
+    std::size_t nalCount() const {
+        return static_cast<std::size_t>(inlineCount) + (overflowNalus ? overflowNalus->size() : 0);
+    }
+};
+
 using PacketPayload = std::vector<std::byte>;
 using PacketPayloadPtr = std::shared_ptr<PacketPayload>;
 
 struct EncodedPacket {
     PacketKind kind = PacketKind::Video;
+    PacketCodec codec = PacketCodec::Unknown;
     int64_t pts100ns = 0;
     int64_t dts100ns = 0;
     int64_t duration100ns = 0;
     bool keyframe = false;
+    bool audible = false;
     std::string sourceId;
+    std::string logicalTrackId;
     std::string encoderId;
     int sampleRate = 0;
     int channelCount = 0;
@@ -36,8 +72,22 @@ struct EncodedPacket {
     int encodedHeight = 0;
     int sourceWidth = 0;
     int sourceHeight = 0;
+    uint32_t audioFrameCount = 0;
+    int32_t audioPrimingFrames = 0;
+    uint32_t encoderEpoch = 0;
+    H264PacketLayout h264;
     PacketPayloadPtr payload;
 };
+
+template <typename Visitor>
+void forEachH264Nal(const H264PacketLayout& layout, Visitor&& visitor) {
+    for (std::size_t i = 0; i < layout.inlineCount; ++i) {
+        visitor(layout.inlineNalus[i]);
+    }
+    if (layout.overflowNalus) {
+        for (const auto& nalu : *layout.overflowNalus) visitor(nalu);
+    }
+}
 
 inline bool payloadEmpty(const EncodedPacket& packet) {
     return !packet.payload || packet.payload->empty();
@@ -151,6 +201,11 @@ public:
     std::vector<EncodedPacket> snapshot() const {
         std::lock_guard lock(mutex_);
         return { packets_.begin(), packets_.end() };
+    }
+
+    void eraseIf(const std::function<bool(const EncodedPacket&)>& predicate) {
+        std::lock_guard lock(mutex_);
+        std::erase_if(packets_, predicate);
     }
 
     void clear() {

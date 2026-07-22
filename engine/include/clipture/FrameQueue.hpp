@@ -16,6 +16,7 @@ struct CapturedFrame {
     int64_t pts100ns = 0;
     int width = 0;
     int height = 0;
+    int64_t queuedAtSteady100ns = 0;
 };
 
 class FrameQueue {
@@ -30,6 +31,7 @@ public:
 
     std::size_t size() const;
     int droppedFrames() const;
+    int64_t oldestFrameAge100ns() const;
 
 private:
     std::size_t capacity_;

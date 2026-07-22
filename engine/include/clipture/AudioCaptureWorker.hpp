@@ -13,9 +13,11 @@
 
 namespace clipture {
 
+class AudioReplayCoordinator;
+
 class AudioCaptureWorker {
 public:
-    explicit AudioCaptureWorker(PacketRingBuffer& packets);
+    explicit AudioCaptureWorker(PacketRingBuffer& packets, AudioReplayCoordinator* replayCoordinator = nullptr);
     ~AudioCaptureWorker();
 
     AudioCaptureWorker(const AudioCaptureWorker&) = delete;
@@ -47,8 +49,10 @@ private:
     void startAppCaptureThreadLocked(const std::string& processName);
     void startMicThreadLocked();
     void stopMicThread();
+    void publishPacket(EncodedPacket packet);
 
     PacketRingBuffer& packets_;
+    AudioReplayCoordinator* replayCoordinator_ = nullptr;
     std::vector<std::thread> coreThreads_;
     std::thread micThread_;
     std::thread notificationThread_;

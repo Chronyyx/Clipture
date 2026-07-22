@@ -1,4 +1,5 @@
 #include "clipture/EncoderWorker.hpp"
+#include "clipture/H264PacketAnalyzer.hpp"
 
 #include <Windows.h>
 #include <d3d11.h>
@@ -145,37 +146,6 @@ bool chooseNvencApiVersion(uint32_t driverMaxVersion, uint32_t& apiVersion, std:
 uint32_t nvencStructVersionForApi(uint32_t version, uint32_t apiVersion, bool extended = false) {
     return apiVersion | (version << 16) | (kNvencStructSignature << 28) |
         (extended ? kNvencExtendedStructFlag : 0u);
-}
-
-bool startCodeAt(std::span<const std::byte> data, std::size_t offset, std::size_t& size) {
-    if (offset + 3 <= data.size() &&
-        data[offset] == std::byte{0} &&
-        data[offset + 1] == std::byte{0} &&
-        data[offset + 2] == std::byte{1}) {
-        size = 3;
-        return true;
-    }
-    if (offset + 4 <= data.size() &&
-        data[offset] == std::byte{0} &&
-        data[offset + 1] == std::byte{0} &&
-        data[offset + 2] == std::byte{0} &&
-        data[offset + 3] == std::byte{1}) {
-        size = 4;
-        return true;
-    }
-    return false;
-}
-
-bool containsH264NalType(std::span<const std::byte> data, uint8_t wantedType) {
-    for (std::size_t i = 0; i + 4 < data.size(); ++i) {
-        std::size_t startCodeSize = 0;
-        if (!startCodeAt(data, i, startCodeSize)) continue;
-        const std::size_t nalOffset = i + startCodeSize;
-        if (nalOffset >= data.size()) continue;
-        const auto nalType = std::to_integer<uint8_t>(data[nalOffset]) & 0x1F;
-        if (nalType == wantedType) return true;
-    }
-    return false;
 }
 
 GUID nvencPresetGuid(int preset) {
@@ -1027,6 +997,7 @@ private:
         }
 
         packet.kind = PacketKind::Video;
+        packet.codec = PacketCodec::H264AnnexB;
         packet.pts100ns = static_cast<int64_t>(lock.outputTimeStamp ? lock.outputTimeStamp : slot.framePts100ns);
         packet.dts100ns = packet.pts100ns;
         packet.duration100ns = static_cast<int64_t>(lock.outputDuration ? lock.outputDuration : slot.frameDuration100ns);
@@ -1041,7 +1012,7 @@ private:
         if (lock.bitstreamSizeInBytes > 0 && lock.bitstreamBufferPtr) {
             std::memcpy(mutablePayload(packet).data(), lock.bitstreamBufferPtr, lock.bitstreamSizeInBytes);
         }
-        packet.keyframe = packet.keyframe || containsH264NalType(payloadBytes(packet), 5);
+        analyzeH264Packet(packet);
 
         funcs_.nvEncUnlockBitstream(encoder_, slot.bitstreamBuffer);
         if (slot.mappedInput) {
@@ -1360,6 +1331,10 @@ int EncoderWorker::framesAccepted() const {
 
 int EncoderWorker::framesEncoded() const {
     return framesEncoded_;
+}
+
+int EncoderWorker::pendingFrames() const {
+    return std::max(0, framesAccepted_.load() - framesEncoded_.load());
 }
 
 int EncoderWorker::sourceWidth() const {

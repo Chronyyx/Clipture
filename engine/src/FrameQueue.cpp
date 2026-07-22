@@ -1,11 +1,15 @@
 #include "clipture/FrameQueue.hpp"
 
+#include <chrono>
+
 namespace clipture {
 
 FrameQueue::FrameQueue(std::size_t capacity)
     : capacity_(capacity) {}
 
 void FrameQueue::push(CapturedFrame frame) {
+    frame.queuedAtSteady100ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count() / 100;
     {
         std::lock_guard lock(mutex_);
         if (stopped_) return;
@@ -56,6 +60,14 @@ std::size_t FrameQueue::size() const {
 int FrameQueue::droppedFrames() const {
     std::lock_guard lock(mutex_);
     return droppedFrames_;
+}
+
+int64_t FrameQueue::oldestFrameAge100ns() const {
+    std::lock_guard lock(mutex_);
+    if (frames_.empty() || frames_.front().queuedAtSteady100ns <= 0) return 0;
+    const int64_t now100ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count() / 100;
+    return std::max<int64_t>(0, now100ns - frames_.front().queuedAtSteady100ns);
 }
 
 }  // namespace clipture

@@ -27,6 +27,7 @@ public:
     bool nvencRuntimeLoaded() const;
     int framesAccepted() const;
     int framesEncoded() const;
+    int pendingFrames() const;
     int sourceWidth() const;
     int sourceHeight() const;
     int outputWidth() const;

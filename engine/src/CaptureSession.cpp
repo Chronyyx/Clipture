@@ -266,6 +266,8 @@ struct CaptureSession::Impl {
     GraphicsCaptureSession session { nullptr };
     winrt::event_token frameArrivedToken {};
     std::atomic<int> capturedFrames = 0;
+    std::atomic<int64_t> lastFramePts100ns = 0;
+    std::atomic<int64_t> lastFrameInterval100ns = 0;
     FrameQueue* frameQueue = nullptr;
     std::string resolution = "Native monitor";
     std::string displayName = "Primary display";
@@ -287,6 +289,8 @@ CaptureSession::~CaptureSession() {
 
 bool CaptureSession::startMonitor(FrameQueue* frameQueue, const std::string& monitorId) {
     stop();
+    impl_->lastFramePts100ns.store(0);
+    impl_->lastFrameInterval100ns.store(0);
     impl_->frameQueue = frameQueue;
     impl_->hdrTonemappingActive = false;
     impl_->tonemapper.reset();
@@ -398,6 +402,10 @@ bool CaptureSession::startMonitor(FrameQueue* frameQueue, const std::string& mon
                 auto frame = sender.TryGetNextFrame();
                 if (frame) {
                     const auto timestamp100ns = now100ns();
+                    const auto previousTimestamp100ns = impl_->lastFramePts100ns.exchange(timestamp100ns);
+                    if (previousTimestamp100ns > 0) {
+                        impl_->lastFrameInterval100ns.store(timestamp100ns - previousTimestamp100ns);
+                    }
                     if (impl_->frameQueue) {
                         auto access = frame.Surface().template as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                         Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
@@ -508,6 +516,10 @@ bool CaptureSession::running() const {
 
 int CaptureSession::capturedFrames() const {
     return impl_->capturedFrames.load(std::memory_order_relaxed);
+}
+
+int64_t CaptureSession::lastFrameInterval100ns() const {
+    return impl_->lastFrameInterval100ns.load(std::memory_order_relaxed);
 }
 
 std::string CaptureSession::resolution() const {
