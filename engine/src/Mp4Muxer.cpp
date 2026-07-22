@@ -58,6 +58,7 @@ struct AacAudioTrack {
 };
 
 using SaveTimingClock = std::chrono::steady_clock;
+constexpr uint64_t kMp4Version0MaxDuration = 0xFFFFFFFFULL;
 
 int64_t saveTimingElapsedMs(SaveTimingClock::time_point startedAt) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(SaveTimingClock::now() - startedAt).count();
@@ -560,12 +561,20 @@ Bytes makeFtyp() {
     return box("ftyp", payload);
 }
 
-Bytes makeMvhd(uint32_t timescale, uint32_t duration, uint32_t nextTrackId) {
+Bytes makeMvhd(uint32_t timescale, uint64_t duration, uint32_t nextTrackId) {
     Bytes payload;
-    appendU32(payload, 0);
-    appendU32(payload, 0);
-    appendU32(payload, timescale);
-    appendU32(payload, duration);
+    const bool version1 = duration > kMp4Version0MaxDuration;
+    if (version1) {
+        appendU64(payload, 0);
+        appendU64(payload, 0);
+        appendU32(payload, timescale);
+        appendU64(payload, duration);
+    } else {
+        appendU32(payload, 0);
+        appendU32(payload, 0);
+        appendU32(payload, timescale);
+        appendU32(payload, static_cast<uint32_t>(duration));
+    }
     appendU32(payload, 0x00010000);
     appendU16(payload, 0x0100);
     appendU16(payload, 0);
@@ -582,16 +591,25 @@ Bytes makeMvhd(uint32_t timescale, uint32_t duration, uint32_t nextTrackId) {
     appendU32(payload, 0x40000000);
     for (int i = 0; i < 6; ++i) appendU32(payload, 0);
     appendU32(payload, nextTrackId);
-    return fullBox("mvhd", 0, 0, payload);
+    return fullBox("mvhd", version1 ? 1 : 0, 0, payload);
 }
 
-Bytes makeTkhd(uint32_t duration, int width, int height) {
+Bytes makeTkhd(uint64_t duration, int width, int height) {
     Bytes payload;
-    appendU32(payload, 0);
-    appendU32(payload, 0);
-    appendU32(payload, 1);
-    appendU32(payload, 0);
-    appendU32(payload, duration);
+    const bool version1 = duration > kMp4Version0MaxDuration;
+    if (version1) {
+        appendU64(payload, 0);
+        appendU64(payload, 0);
+        appendU32(payload, 1);
+        appendU32(payload, 0);
+        appendU64(payload, duration);
+    } else {
+        appendU32(payload, 0);
+        appendU32(payload, 0);
+        appendU32(payload, 1);
+        appendU32(payload, 0);
+        appendU32(payload, static_cast<uint32_t>(duration));
+    }
     appendU32(payload, 0);
     appendU32(payload, 0);
     appendU16(payload, 0);
@@ -609,16 +627,25 @@ Bytes makeTkhd(uint32_t duration, int width, int height) {
     appendU32(payload, 0x40000000);
     appendU32(payload, static_cast<uint32_t>(std::max(1, width)) << 16);
     appendU32(payload, static_cast<uint32_t>(std::max(1, height)) << 16);
-    return fullBox("tkhd", 0, 0x000007, payload);
+    return fullBox("tkhd", version1 ? 1 : 0, 0x000007, payload);
 }
 
-Bytes makeAudioTkhd(uint32_t trackId, uint32_t duration) {
+Bytes makeAudioTkhd(uint32_t trackId, uint64_t duration) {
     Bytes payload;
-    appendU32(payload, 0);
-    appendU32(payload, 0);
-    appendU32(payload, trackId);
-    appendU32(payload, 0);
-    appendU32(payload, duration);
+    const bool version1 = duration > kMp4Version0MaxDuration;
+    if (version1) {
+        appendU64(payload, 0);
+        appendU64(payload, 0);
+        appendU32(payload, trackId);
+        appendU32(payload, 0);
+        appendU64(payload, duration);
+    } else {
+        appendU32(payload, 0);
+        appendU32(payload, 0);
+        appendU32(payload, trackId);
+        appendU32(payload, 0);
+        appendU32(payload, static_cast<uint32_t>(duration));
+    }
     appendU32(payload, 0);
     appendU32(payload, 0);
     appendU16(payload, 0);
@@ -636,18 +663,26 @@ Bytes makeAudioTkhd(uint32_t trackId, uint32_t duration) {
     appendU32(payload, 0x40000000);
     appendU32(payload, 0);
     appendU32(payload, 0);
-    return fullBox("tkhd", 0, 0x000007, payload);
+    return fullBox("tkhd", version1 ? 1 : 0, 0x000007, payload);
 }
 
-Bytes makeMdhd(uint32_t timescale, uint32_t duration) {
+Bytes makeMdhd(uint32_t timescale, uint64_t duration) {
     Bytes payload;
-    appendU32(payload, 0);
-    appendU32(payload, 0);
-    appendU32(payload, timescale);
-    appendU32(payload, duration);
+    const bool version1 = duration > kMp4Version0MaxDuration;
+    if (version1) {
+        appendU64(payload, 0);
+        appendU64(payload, 0);
+        appendU32(payload, timescale);
+        appendU64(payload, duration);
+    } else {
+        appendU32(payload, 0);
+        appendU32(payload, 0);
+        appendU32(payload, timescale);
+        appendU32(payload, static_cast<uint32_t>(duration));
+    }
     appendU16(payload, 0x55C4);
     appendU16(payload, 0);
-    return fullBox("mdhd", 0, 0, payload);
+    return fullBox("mdhd", version1 ? 1 : 0, 0, payload);
 }
 
 Bytes makeHdlr() {
@@ -865,15 +900,15 @@ Bytes makeCo64(const Samples& samples) {
 }
 
 template <typename Samples>
-uint32_t samplesDuration(const Samples& samples) {
+uint64_t samplesDuration(const Samples& samples) {
     uint64_t duration = 0;
     for (const auto& sample : samples) duration += std::max<uint32_t>(1, sampleInfo(sample).duration);
-    return static_cast<uint32_t>(std::min<uint64_t>(duration, 0xFFFFFFFFULL));
+    return duration;
 }
 
 Bytes makeVideoTrak(const Bytes& avcConfig, const std::vector<VideoSamplePlan>& samples, int width, int height, int /*fps*/) {
     const uint32_t timescale = 10'000'000u; // 100ns units — matches PTS-based sample durations
-    const uint32_t duration = samplesDuration(samples);
+    const uint64_t duration = samplesDuration(samples);
 
     Bytes stblPayload;
     appendBytes(stblPayload, makeStsd(avcConfig, width, height));
@@ -899,9 +934,9 @@ Bytes makeVideoTrak(const Bytes& avcConfig, const std::vector<VideoSamplePlan>& 
     return box("trak", trakPayload);
 }
 
-Bytes makeAudioTrak(const AacAudioTrack& track, uint32_t trackId, uint32_t movieDuration) {
+Bytes makeAudioTrak(const AacAudioTrack& track, uint32_t trackId, uint64_t movieDuration) {
     const uint32_t timescale = static_cast<uint32_t>(std::max(1, track.sampleRate));
-    const uint32_t duration = samplesDuration(track.samples);
+    const uint64_t duration = samplesDuration(track.samples);
 
     Bytes stblPayload;
     appendBytes(stblPayload, makeAudioStsd(track));
@@ -928,7 +963,7 @@ Bytes makeAudioTrak(const AacAudioTrack& track, uint32_t trackId, uint32_t movie
 
 Bytes makeMoov(const Bytes& avcConfig, const std::vector<VideoSamplePlan>& samples, const std::vector<AacAudioTrack>& audioTracks, int width, int height, int fps) {
     const uint32_t timescale = 10'000'000u; // movie timescale in 100ns units — matches video track
-    const uint32_t duration = samplesDuration(samples);
+    const uint64_t duration = samplesDuration(samples);
 
     Bytes moovPayload;
     appendBytes(moovPayload, makeMvhd(timescale, duration, static_cast<uint32_t>(audioTracks.size() + 2)));
@@ -1205,7 +1240,21 @@ MuxResult muxH264ToMp4(
         logMuxSaveTiming("total", totalStartedAt, "ok=false reason=no_writable_samples");
         return result;
     }
-    logMuxSaveTiming("duration_plan", durationStartedAt, "videoSamples=" + std::to_string(videoSamples.size()));
+    const uint64_t plannedVideoDuration100ns = samplesDuration(videoSamples);
+    const uint32_t targetFrameDuration100ns = static_cast<uint32_t>(10'000'000LL / std::max(1, fps));
+    uint32_t maxSampleDuration100ns = 0;
+    std::size_t longFrameGaps = 0;
+    for (const auto& sample : videoSamples) {
+        maxSampleDuration100ns = std::max(maxSampleDuration100ns, sample.info.duration);
+        if (sample.info.duration > targetFrameDuration100ns * 2u) ++longFrameGaps;
+    }
+    logMuxSaveTiming(
+        "duration_plan",
+        durationStartedAt,
+        "videoSamples=" + std::to_string(videoSamples.size()) +
+            " plannedDuration100ns=" + std::to_string(plannedVideoDuration100ns) +
+            " maxSampleDuration100ns=" + std::to_string(maxSampleDuration100ns) +
+            " longFrameGaps=" + std::to_string(longFrameGaps));
 
     std::vector<AacAudioTrack> audioTracks;
     if (!pcmAudioTracks.empty()) {

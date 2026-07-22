@@ -353,10 +353,21 @@ export function App() {
   }
 
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void window.clipture.getDiagnostics().then(setDiagnostics), 2000);
-    const unsubscribeLibrary = window.clipture.onLibraryChanged(() => void refresh());
-    void window.clipture.getUpdateState().then(setUpdateState);
+    void refresh().catch((error) => {
+      console.error("Failed to refresh app state:", error);
+      setNotice(error instanceof Error ? error.message : "Could not refresh app state.");
+    });
+    const timer = window.setInterval(() => {
+      void window.clipture.getDiagnostics().then(setDiagnostics).catch((error) => {
+        console.warn("Failed to refresh diagnostics:", error);
+      });
+    }, 2000);
+    const unsubscribeLibrary = window.clipture.onLibraryChanged(() => {
+      void refresh().catch((error) => console.error("Failed to refresh library:", error));
+    });
+    void window.clipture.getUpdateState().then(setUpdateState).catch((error) => {
+      console.warn("Failed to read update state:", error);
+    });
     const unsubscribeUpdates = window.clipture.onUpdateStateChanged(setUpdateState);
     const unsubscribeSound = window.clipture.onPlaySound((sound) => {
       const url = clipSoundUrlsRef.current[sound];
@@ -985,6 +996,11 @@ type MixedAudioChunk = {
   lastUsedAt: number;
 };
 
+type MixedAudioChunkRequest = {
+  promise: Promise<void>;
+  controller: AbortController;
+};
+
 function acceleratorFromKeyboardEvent(event: KeyboardEvent) {
   const ignoredKeys = new Set(["Control", "Shift", "Alt", "Meta", "OS"]);
   if (ignoredKeys.has(event.key)) return "";
@@ -1059,10 +1075,12 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const gainNodeRef = useRef<GainNode | null>(null);
   const connectedVideoRef = useRef<HTMLVideoElement | null>(null);
   const mixedChunkCacheRef = useRef<Map<number, MixedAudioChunk>>(new Map());
-  const mixedChunkRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
+  const mixedChunkRequestsRef = useRef<Map<number, MixedAudioChunkRequest>>(new Map());
   const mixedScheduledChunksRef = useRef<Map<number, AudioBufferSourceNode[]>>(new Map());
   const mixedTimerRef = useRef<number | null>(null);
   const mixedGenerationRef = useRef(0);
+  const mixedPrimingPlayRef = useRef(false);
+  const mixedPlayRequestRef = useRef(0);
 
   const ensureAudioContext = () => {
     if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
@@ -1078,29 +1096,47 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     return audioCtxRef.current;
   };
 
+  const stopMixedNodes = (nodes: AudioBufferSourceNode[]) => {
+    for (const node of nodes) {
+      try {
+        node.stop();
+      } catch {
+        // Already stopped.
+      }
+      try {
+        node.disconnect();
+      } catch {
+        // Already disconnected.
+      }
+    }
+  };
+
+  const stopScheduledMixedChunk = (chunkIndex: number) => {
+    const nodes = mixedScheduledChunksRef.current.get(chunkIndex);
+    if (!nodes) return;
+    stopMixedNodes(nodes);
+    mixedScheduledChunksRef.current.delete(chunkIndex);
+  };
+
   const stopMixedAudio = () => {
     for (const nodes of mixedScheduledChunksRef.current.values()) {
-      for (const node of nodes) {
-        try {
-          node.stop();
-        } catch {
-          // Already stopped.
-        }
-        try {
-          node.disconnect();
-        } catch {
-          // Already disconnected.
-        }
-      }
+      stopMixedNodes(nodes);
     }
     mixedScheduledChunksRef.current.clear();
   };
 
-  const clearMixedAudio = () => {
+  const resetMixedAudioTimeline = () => {
     mixedGenerationRef.current += 1;
     stopMixedAudio();
-    mixedChunkCacheRef.current.clear();
+    for (const request of mixedChunkRequestsRef.current.values()) {
+      request.controller.abort();
+    }
     mixedChunkRequestsRef.current.clear();
+  };
+
+  const clearMixedAudio = () => {
+    resetMixedAudioTimeline();
+    mixedChunkCacheRef.current.clear();
   };
 
   const mixedChunkUrl = (chunkIndex: number) => {
@@ -1112,17 +1148,24 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     return `${mixedAudioChunkUrl}${separator}start=${encodeURIComponent(start.toFixed(3))}&duration=${encodeURIComponent(chunkDuration.toFixed(3))}`;
   };
 
+  const mixedChunkIndexForTime = (time: number) => {
+    const chunkSeconds = Math.max(1, mixedAudioChunkSeconds || 8);
+    return Math.max(0, Math.floor(Math.max(0, time) / chunkSeconds));
+  };
+
   const loadMixedChunk = (chunkIndex: number, generation: number) => {
     if (!mixedPlayback || !mixedAudioChunkUrl) return Promise.resolve();
     if (mixedChunkCacheRef.current.has(chunkIndex)) return Promise.resolve();
     const pending = mixedChunkRequestsRef.current.get(chunkIndex);
-    if (pending) return pending;
+    if (pending) return pending.promise;
 
     const chunkSeconds = Math.max(1, mixedAudioChunkSeconds || 8);
     const chunkStart = chunkIndex * chunkSeconds;
     if (duration > 0 && chunkStart > duration + 0.25) return Promise.resolve();
 
-    const request = fetch(mixedChunkUrl(chunkIndex))
+    const controller = new AbortController();
+    let request: Promise<void>;
+    request = fetch(mixedChunkUrl(chunkIndex), { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`audio chunk ${response.status}`);
         const arrayBuffer = await response.arrayBuffer();
@@ -1137,13 +1180,16 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
         });
       })
       .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
         console.warn("Mixed audio chunk failed:", error);
       })
       .finally(() => {
-        mixedChunkRequestsRef.current.delete(chunkIndex);
+        if (mixedChunkRequestsRef.current.get(chunkIndex)?.promise === request) {
+          mixedChunkRequestsRef.current.delete(chunkIndex);
+        }
       });
 
-    mixedChunkRequestsRef.current.set(chunkIndex, request);
+    mixedChunkRequestsRef.current.set(chunkIndex, { promise: request, controller });
     return request;
   };
 
@@ -1159,7 +1205,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     for (const [chunkIndex] of mixedScheduledChunksRef.current.entries()) {
       const chunkEnd = (chunkIndex + 1) * chunkSeconds;
       if (chunkEnd < time - 1) {
-        mixedScheduledChunksRef.current.delete(chunkIndex);
+        stopScheduledMixedChunk(chunkIndex);
       }
     }
   };
@@ -1185,16 +1231,26 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     source.buffer = chunk.buffer;
     source.playbackRate.value = playbackRate;
     source.connect(gain);
+    const scheduledNodes = [source];
     source.onended = () => {
-      mixedScheduledChunksRef.current.delete(chunkIndex);
+      if (mixedScheduledChunksRef.current.get(chunkIndex) === scheduledNodes) {
+        mixedScheduledChunksRef.current.delete(chunkIndex);
+      }
     };
 
-    mixedScheduledChunksRef.current.set(chunkIndex, [source]);
+    mixedScheduledChunksRef.current.set(chunkIndex, scheduledNodes);
     chunk.lastUsedAt = performance.now();
     try {
       source.start(ctx.currentTime + secondsUntilChunk + 0.035, offset);
     } catch (error) {
-      mixedScheduledChunksRef.current.delete(chunkIndex);
+      if (mixedScheduledChunksRef.current.get(chunkIndex) === scheduledNodes) {
+        mixedScheduledChunksRef.current.delete(chunkIndex);
+      }
+      try {
+        source.disconnect();
+      } catch {
+        // Already disconnected.
+      }
       console.warn("Mixed audio schedule failed:", error);
     }
   };
@@ -1202,7 +1258,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const ensureMixedBuffered = () => {
     if (!mixedPlayback || !mixedAudioChunkUrl) return;
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || video.seeking) return;
 
     const chunkSeconds = Math.max(1, mixedAudioChunkSeconds || 8);
     const time = Math.max(0, video.currentTime);
@@ -1228,6 +1284,56 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
       console.warn("Mixed audio resume failed:", error);
     }
     ensureMixedBuffered();
+  };
+
+  const playMixedWhenReady = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (!mixedPlayback || !mixedAudioChunkUrl) {
+      try {
+        await video.play();
+      } catch (error) {
+        console.warn("Video play failed:", error);
+      }
+      return;
+    }
+
+    const requestId = mixedPlayRequestRef.current + 1;
+    mixedPlayRequestRef.current = requestId;
+    const generation = mixedGenerationRef.current;
+    const chunkIndex = mixedChunkIndexForTime(video.currentTime);
+
+    if (!mixedChunkCacheRef.current.has(chunkIndex)) {
+      mixedPrimingPlayRef.current = true;
+      if (!video.paused) video.pause();
+      setPlaying(false);
+      await loadMixedChunk(chunkIndex, generation);
+      if (requestId !== mixedPlayRequestRef.current || generation !== mixedGenerationRef.current) {
+        if (requestId === mixedPlayRequestRef.current) mixedPrimingPlayRef.current = false;
+        return;
+      }
+    }
+
+    const ctx = ensureAudioContext();
+    try {
+      await ctx.resume();
+    } catch (error) {
+      console.warn("Mixed audio resume failed:", error);
+    }
+    if (requestId !== mixedPlayRequestRef.current || generation !== mixedGenerationRef.current) {
+      if (requestId === mixedPlayRequestRef.current) mixedPrimingPlayRef.current = false;
+      return;
+    }
+
+    mixedPrimingPlayRef.current = true;
+    try {
+      await video.play();
+      ensureMixedBuffered();
+    } catch (error) {
+      console.warn("Video play failed:", error);
+    } finally {
+      if (requestId === mixedPlayRequestRef.current) mixedPrimingPlayRef.current = false;
+    }
   };
 
   useEffect(() => {
@@ -1266,7 +1372,6 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   }, [mixedPlayback, volume]);
 
   useEffect(() => {
-    clearMixedAudio();
     if (!mixedPlayback || !mixedAudioChunkUrl || !src) return;
 
     const tick = () => ensureMixedBuffered();
@@ -1286,7 +1391,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
-      void video.play();
+      void playMixedWhenReady();
     } else {
       video.pause();
     }
@@ -1348,10 +1453,22 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     setHoldingFast(false);
   };
 
+  useEffect(() => {
+    const stopFastHold = () => endFastHold();
+    window.addEventListener("pointerup", stopFastHold);
+    window.addEventListener("blur", stopFastHold);
+    document.addEventListener("visibilitychange", stopFastHold);
+    return () => {
+      window.removeEventListener("pointerup", stopFastHold);
+      window.removeEventListener("blur", stopFastHold);
+      document.removeEventListener("visibilitychange", stopFastHold);
+    };
+  }, []);
+
   const seekToPercent = (percent: number) => {
     const video = videoRef.current;
     if (!video || !Number.isFinite(video.duration)) return;
-    if (mixedPlayback) stopMixedAudio();
+    if (mixedPlayback) resetMixedAudioTimeline();
     video.currentTime = (Math.min(100, Math.max(0, percent)) / 100) * video.duration;
   };
 
@@ -1384,9 +1501,16 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
           onPointerEnter={showControls}
           onPointerDown={(event) => {
             if ((event.target as HTMLElement).closest(".player-controls")) return;
+            event.currentTarget.setPointerCapture(event.pointerId);
             beginFastHold();
           }}
-          onPointerUp={endFastHold}
+          onPointerUp={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+            endFastHold();
+          }}
+          onLostPointerCapture={endFastHold}
           onPointerCancel={() => {
             endFastHold();
             hideControls();
@@ -1400,7 +1524,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
             ref={videoRef}
             key={src}
             src={src}
-            autoPlay
+            autoPlay={!mixedPlayback}
             crossOrigin="anonymous"
             muted={mixedPlayback}
             preload="metadata"
@@ -1411,7 +1535,20 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
             onDoubleClick={toggleFullscreen}
             onPlay={() => {
               setPlaying(true);
-              if (mixedPlayback) void restartMixedAudio();
+              if (!mixedPlayback) return;
+              if (mixedPrimingPlayRef.current) {
+                stopMixedAudio();
+                ensureMixedBuffered();
+                return;
+              }
+              const chunkIndex = mixedChunkIndexForTime(videoRef.current?.currentTime ?? 0);
+              if (!mixedChunkCacheRef.current.has(chunkIndex)) {
+                videoRef.current?.pause();
+                setPlaying(false);
+                void playMixedWhenReady();
+                return;
+              }
+              void restartMixedAudio();
             }}
             onPause={() => {
               setPlaying(false);
@@ -1420,20 +1557,29 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
             onLoadedMetadata={(event) => {
               const nextDuration = event.currentTarget.duration;
               if (Number.isFinite(nextDuration)) setDuration(nextDuration);
-              if (mixedPlayback) ensureMixedBuffered();
+              if (mixedPlayback) {
+                ensureMixedBuffered();
+                void playMixedWhenReady();
+              }
             }}
             onTimeUpdate={(event) => {
               setCurrentTime(event.currentTarget.currentTime);
               if (mixedPlayback) ensureMixedBuffered();
             }}
             onSeeking={() => {
-              if (mixedPlayback) stopMixedAudio();
+              if (mixedPlayback) {
+                mixedPlayRequestRef.current += 1;
+                resetMixedAudioTimeline();
+              }
             }}
             onSeeked={(event) => {
               setCurrentTime(event.currentTarget.currentTime);
               if (!mixedPlayback) return;
-              ensureMixedBuffered();
-              if (!event.currentTarget.paused) void restartMixedAudio();
+              if (event.currentTarget.paused) {
+                ensureMixedBuffered();
+              } else {
+                void playMixedWhenReady();
+              }
             }}
             onRateChange={(event) => {
               if (mixedPlayback && !event.currentTarget.paused) void restartMixedAudio();

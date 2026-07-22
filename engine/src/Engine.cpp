@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cctype>
+#include <cmath>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -715,6 +716,21 @@ void Engine::gameDetectionLoop() {
             std::vector<std::string> detectedGames;
             std::vector<std::string> foregroundSystemApps;
             std::map<std::string, std::string> dynamicTrackAliases;
+            auto sourceProcessMatches = [](const std::string& sourceSpec, const std::string& processName) {
+                const auto sourceName = lowerAscii(captureProcessName(sourceSpec));
+                const auto wantedName = lowerAscii(captureProcessName(processName));
+                return !sourceName.empty() && !wantedName.empty() && sourceName == wantedName;
+            };
+            auto forgetForegroundSystemSource = [&](const std::string& processName) {
+                foregroundSystemProcesses_.erase(
+                    std::remove_if(
+                        foregroundSystemProcesses_.begin(),
+                        foregroundSystemProcesses_.end(),
+                        [&](const std::string& sourceSpec) {
+                            return sourceProcessMatches(sourceSpec, processName);
+                        }),
+                    foregroundSystemProcesses_.end());
+            };
             auto rememberForegroundSystemSource = [&](const std::string& sourceSpec) {
                 if (sourceSpec.empty()) return;
                 foregroundSystemProcesses_.erase(
@@ -722,7 +738,11 @@ void Engine::gameDetectionLoop() {
                         foregroundSystemProcesses_.begin(),
                         foregroundSystemProcesses_.end(),
                         [&](const std::string& name) {
-                            if (isPidProcessSpec(sourceSpec) || isPidProcessSpec(name)) {
+                            if (isPidProcessSpec(sourceSpec)) {
+                                if (!isPidProcessSpec(name) && sourceProcessMatches(name, sourceSpec)) return true;
+                                return lowerAscii(name) == lowerAscii(sourceSpec);
+                            }
+                            if (isPidProcessSpec(name)) {
                                 return lowerAscii(name) == lowerAscii(sourceSpec);
                             }
                             return lowerAscii(captureProcessName(name)) == lowerAscii(captureProcessName(sourceSpec));
@@ -750,12 +770,15 @@ void Engine::gameDetectionLoop() {
                             if (settings_.captureGameAudio && isGame &&
                                 !containsProcessName(settings_.appAudioProcesses, fgExeName) &&
                                 !containsProcessName(dynamicSources, fgExeName)) {
+                                forgetForegroundSystemSource(fgExeName);
                                 dynamicSources.push_back("game:" + fgExeName);
                                 detectedGames.push_back(fgExeName);
                             } else if ((settings_.captureForegroundSystemAudio || settings_.captureGameAudio) && !isGame &&
                                 !containsProcessName(settings_.appAudioProcesses, fgExeName)) {
-                                rememberForegroundSystemSource(fgExeName);
-                                dynamicTrackAliases[sourceIdForProcessSpec(fgExeName)] = "system-loopback-pcm";
+                                const auto foregroundSpec = appPidSourceSpec(fgPid, fgExeName);
+                                const auto foregroundSource = foregroundSpec.empty() ? fgExeName : foregroundSpec;
+                                rememberForegroundSystemSource(foregroundSource);
+                                dynamicTrackAliases[sourceIdForProcessSpec(foregroundSource)] = "system-loopback-pcm";
                                 foregroundSystemApps.push_back(fgExeName);
 
                                 for (const auto audioProcessId : activeAudioSessionProcessIds()) {
@@ -770,8 +793,11 @@ void Engine::gameDetectionLoop() {
                                     const bool relatedByTree =
                                         processHasAncestor(processSnapshot, audioProcessId, fgPid) ||
                                         processHasAncestor(processSnapshot, fgPid, audioProcessId);
+                                    const bool alreadyCoveredByForegroundTree =
+                                        processHasAncestor(processSnapshot, audioProcessId, fgPid);
                                     const bool relatedBySameExe = lowerAscii(audioProcess->exeName) == lowerAscii(fgExeName);
                                     const bool alreadyCoveredByName = containsProcessName(dynamicSources, audioProcess->exeName);
+                                    if (alreadyCoveredByForegroundTree) continue;
                                     if (alreadyCoveredByName && (!relatedBySameExe || relatedByTree)) continue;
                                     const bool relatedToForeground = relatedByTree || relatedBySameExe;
                                     if (!relatedToForeground) continue;
@@ -804,6 +830,7 @@ void Engine::gameDetectionLoop() {
                     }
 
                     if (isGame) {
+                        forgetForegroundSystemSource(exeName);
                         dynamicSources.push_back("game:" + exeName);
                         detectedGames.push_back(exeName);
                     }
@@ -819,8 +846,17 @@ void Engine::gameDetectionLoop() {
                             const bool processStillRunning = isPidProcessSpec(name)
                                 ? findProcessInfo(processSnapshot, processIdFromPidSourceSpec(name)) != nullptr
                                 : processSnapshot.contains(name);
+                            const bool nowCapturedAsGame = settings_.captureGameAudio &&
+                                std::any_of(
+                                    dynamicSources.begin(),
+                                    dynamicSources.end(),
+                                    [&](const std::string& sourceSpec) {
+                                        return sourceSpec.rfind("game:", 0) == 0 &&
+                                            sourceProcessMatches(sourceSpec, name);
+                                    });
                             return isIgnoredForegroundProcess(captureProcessName(name)) ||
                                 containsProcessName(settings_.appAudioProcesses, name) ||
+                                nowCapturedAsGame ||
                                 !processStillRunning;
                         }),
                     foregroundSystemProcesses_.end());
@@ -835,6 +871,7 @@ void Engine::gameDetectionLoop() {
                         : containsProcessName(dynamicSources, processName);
                     if (!alreadyAdded) {
                         dynamicSources.push_back(processName);
+                        dynamicTrackAliases[sourceIdForProcessSpec(processName)] = "system-loopback-pcm";
                     }
                 }
             }
@@ -1024,91 +1061,122 @@ std::vector<EncodedPacket> mixPcmPackets(
     int64_t clipEnd,
     std::vector<float>& mixScratch) {
     if (packets.empty()) return {};
-    
+
     int sampleRate = 0;
     int channels = 0;
-    
+
     for (const auto& p : packets) {
         if (sampleRate == 0) sampleRate = p.sampleRate;
         if (channels == 0) channels = p.channelCount;
     }
-    
+
     if (clipStart >= clipEnd || sampleRate == 0 || channels == 0) return {};
-    
-    int64_t totalDuration = clipEnd - clipStart;
-    int64_t totalSamples = (totalDuration * sampleRate) / 10'000'000;
+
+    struct PcmInputView {
+        std::span<const std::byte> bytes;
+        const int16_t* samples = nullptr;
+        int64_t startFrame = 0;
+        int64_t endFrame = 0;
+        int frames = 0;
+    };
+
+    const int bytesPerFrame = channels * static_cast<int>(sizeof(int16_t));
+    auto timelineFrameFrom100ns = [sampleRate](int64_t offset100ns) {
+        return (offset100ns * sampleRate) / 10'000'000LL;
+    };
+
+    const int64_t totalDuration = clipEnd - clipStart;
+    const int64_t totalSamples = timelineFrameFrom100ns(totalDuration);
+    if (totalSamples <= 0) return {};
+
+    std::vector<PcmInputView> inputs;
+    inputs.reserve(packets.size());
     bool hasAudio = false;
     for (const auto& p : packets) {
         if (p.sampleRate != sampleRate || p.channelCount != channels) continue;
         const auto bytes = payloadBytes(p);
         if (bytes.empty()) continue;
 
-        const int numSamples = static_cast<int>(bytes.size() / (channels * sizeof(int16_t)));
-        if (numSamples <= 0) continue;
-        const int64_t packetDuration = p.duration100ns > 0
-            ? p.duration100ns
-            : (static_cast<int64_t>(numSamples) * 10'000'000LL) / sampleRate;
-        if (p.pts100ns + packetDuration <= clipStart || p.pts100ns >= clipEnd) continue;
+        const int frames = static_cast<int>(bytes.size() / static_cast<std::size_t>(bytesPerFrame));
+        if (frames <= 0) continue;
+        const int64_t startFrame = timelineFrameFrom100ns(p.pts100ns - clipStart);
+        const int64_t endFrame = startFrame + frames;
+        if (endFrame <= 0 || startFrame >= totalSamples) continue;
 
         const auto* pcm = reinterpret_cast<const int16_t*>(bytes.data());
-        const std::size_t sampleCount = bytes.size() / sizeof(int16_t);
-        for (std::size_t i = 0; i < sampleCount; ++i) {
-            if (pcm[i] != 0) {
-                hasAudio = true;
-                break;
-            }
-        }
-        if (hasAudio) break;
-    }
-
-    if (!hasAudio) {
-        return {};
-    }
-
-    mixScratch.assign(
-        static_cast<std::size_t>(totalSamples) * static_cast<std::size_t>(channels),
-        0.0f);
-    
-    for (const auto& p : packets) {
-        if (p.sampleRate != sampleRate || p.channelCount != channels) continue;
-        int64_t offset100ns = p.pts100ns - clipStart;
-        if (offset100ns < 0) continue;
-        int64_t offsetSamples = (offset100ns * sampleRate) / 10'000'000;
-        
-        const auto bytes = payloadBytes(p);
-        const int16_t* pcm = reinterpret_cast<const int16_t*>(bytes.data());
-        int numSamples = static_cast<int>(bytes.size() / (channels * sizeof(int16_t)));
-        
-        for (int i = 0; i < numSamples; ++i) {
-            for (int ch = 0; ch < channels; ++ch) {
-                int64_t mixIdx = (offsetSamples + i) * channels + ch;
-                if (mixIdx >= 0 && mixIdx < static_cast<int64_t>(mixScratch.size())) {
-                    mixScratch[static_cast<std::size_t>(mixIdx)] += pcm[i * channels + ch];
+        if (!hasAudio) {
+            const std::size_t sampleCount = bytes.size() / sizeof(int16_t);
+            for (std::size_t i = 0; i < sampleCount; ++i) {
+                if (pcm[i] != 0) {
+                    hasAudio = true;
+                    break;
                 }
             }
         }
+        inputs.push_back(PcmInputView { bytes, pcm, startFrame, endFrame, frames });
     }
 
-    bool mixedHasAudio = false;
-    for (const auto val : mixScratch) {
-        if (std::abs(val) >= 1.0f) {
-            mixedHasAudio = true;
-            break;
-        }
-    }
-    if (!mixedHasAudio) {
+    if (inputs.empty() || !hasAudio) {
         return {};
     }
-    
+
+    std::sort(inputs.begin(), inputs.end(), [](const PcmInputView& a, const PcmInputView& b) {
+        return a.startFrame < b.startFrame;
+    });
+
     std::vector<EncodedPacket> mixed;
-    int framesPerPacket = std::max(1, sampleRate / 100);
+    const int framesPerPacket = std::max(1, sampleRate / 100);
     mixed.reserve(static_cast<std::size_t>((totalSamples + framesPerPacket - 1) / framesPerPacket));
-    
-    for (int64_t i = 0; i < totalSamples; i += framesPerPacket) {
-        int frames = static_cast<int>(std::min<int64_t>(framesPerPacket, totalSamples - i));
+    mixScratch.resize(static_cast<std::size_t>(framesPerPacket) * static_cast<std::size_t>(channels));
+
+    std::size_t firstCandidate = 0;
+    for (int64_t sampleOffset = 0; sampleOffset < totalSamples; sampleOffset += framesPerPacket) {
+        const int frames = static_cast<int>(std::min<int64_t>(framesPerPacket, totalSamples - sampleOffset));
+        const std::size_t scratchSamples = static_cast<std::size_t>(frames) * static_cast<std::size_t>(channels);
+        std::fill(mixScratch.begin(), mixScratch.begin() + static_cast<std::ptrdiff_t>(scratchSamples), 0.0f);
+
+        const int64_t chunkStart100ns = clipStart + (sampleOffset * 10'000'000LL) / sampleRate;
+
+        while (firstCandidate < inputs.size() &&
+               inputs[firstCandidate].endFrame <= sampleOffset) {
+            ++firstCandidate;
+        }
+
+        for (std::size_t inputIndex = firstCandidate; inputIndex < inputs.size(); ++inputIndex) {
+            const auto& input = inputs[inputIndex];
+            if (input.startFrame >= sampleOffset + frames) break;
+
+            const int64_t overlapStartFrame = std::max(sampleOffset, input.startFrame);
+            const int64_t overlapEndFrame = std::min(sampleOffset + frames, input.endFrame);
+            if (overlapEndFrame <= overlapStartFrame) continue;
+
+            const int64_t outputStartFrame = overlapStartFrame - sampleOffset;
+            const int64_t inputStartFrame = overlapStartFrame - input.startFrame;
+            const int64_t copyFrames = std::min<int64_t>({
+                overlapEndFrame - overlapStartFrame,
+                frames - outputStartFrame,
+                input.frames - inputStartFrame
+            });
+            if (copyFrames <= 0) continue;
+
+            for (int64_t frame = 0; frame < copyFrames; ++frame) {
+                for (int ch = 0; ch < channels; ++ch) {
+                    const std::size_t outIndex = static_cast<std::size_t>((outputStartFrame + frame) * channels + ch);
+                    const std::size_t inIndex = static_cast<std::size_t>((inputStartFrame + frame) * channels + ch);
+                    mixScratch[outIndex] += input.samples[inIndex];
+                }
+            }
+        }
+
+        float peak = 0.0f;
+        for (std::size_t sample = 0; sample < scratchSamples; ++sample) {
+            peak = std::max(peak, std::abs(mixScratch[sample]));
+        }
+        const float limiterGain = peak > 32767.0f ? 32767.0f / peak : 1.0f;
+
         EncodedPacket mp;
         mp.kind = PacketKind::Audio;
-        mp.pts100ns = clipStart + (i * 10'000'000) / sampleRate;
+        mp.pts100ns = chunkStart100ns;
         mp.dts100ns = mp.pts100ns;
         mp.duration100ns = (frames * 10'000'000) / sampleRate;
         mp.sourceId = newSourceId;
@@ -1121,7 +1189,7 @@ std::vector<EncodedPacket> mixPcmPackets(
         int16_t* outPcm = reinterpret_cast<int16_t*>(mutablePayload(mp).data());
         for (int j = 0; j < frames; ++j) {
             for (int ch = 0; ch < channels; ++ch) {
-                float val = mixScratch[static_cast<std::size_t>((i + j) * channels + ch)];
+                float val = mixScratch[static_cast<std::size_t>(j * channels + ch)] * limiterGain;
                 outPcm[j * channels + ch] = static_cast<int16_t>(std::clamp(val, -32768.0f, 32767.0f));
             }
         }
@@ -1150,7 +1218,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     };
     MuxWritePacing savePacing {
         [this, saveStartDroppedFrames]() {
-            return frameQueue_.droppedFrames() > saveStartDroppedFrames;
+            return frameQueue_.droppedFrames() > saveStartDroppedFrames ||
+                frameQueue_.size() >= 4;
         }
     };
     logEngineSaveTiming(
@@ -1187,6 +1256,28 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         return result;
     }
     const int actualDuration = actualClipDurationSeconds(clipPackets, duration);
+    if (clipPackets.size() >= 2) {
+        const auto videoTimelineStartedAt = SaveTimingClock::now();
+        const int64_t targetFrameDuration100ns = 10'000'000LL / std::max(1, diagnostics_.fps);
+        int64_t maxGap100ns = 0;
+        std::size_t longFrameGaps = 0;
+        for (std::size_t i = 1; i < clipPackets.size(); ++i) {
+            const int64_t gap100ns = std::max<int64_t>(1, clipPackets[i].pts100ns - clipPackets[i - 1].pts100ns);
+            maxGap100ns = std::max(maxGap100ns, gap100ns);
+            if (gap100ns > targetFrameDuration100ns * 2) ++longFrameGaps;
+        }
+        const int64_t span100ns = std::max<int64_t>(
+            0,
+            clipPackets.back().pts100ns - clipPackets.front().pts100ns +
+                std::max<int64_t>(clipPackets.back().duration100ns, targetFrameDuration100ns));
+        logEngineSaveTiming(
+            "video_timeline",
+            videoTimelineStartedAt,
+            "span100ns=" + std::to_string(span100ns) +
+                " targetFrame100ns=" + std::to_string(targetFrameDuration100ns) +
+                " maxGap100ns=" + std::to_string(maxGap100ns) +
+                " longFrameGaps=" + std::to_string(longFrameGaps));
+    }
 
     auto [width, height] = encodedResolutionFromPackets(clipPackets);
     if (width <= 0 || height <= 0) {

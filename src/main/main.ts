@@ -345,16 +345,30 @@ class EngineClient {
 
   private request<T>(type: string, payload: Record<string, unknown>, timeoutMs: number = 5000): Promise<T> {
     if (!this.child) return Promise.reject(new Error("Native engine is not running."));
+    const child = this.child;
     const id = this.nextId++;
     const message = JSON.stringify({ id, type, ...payload });
-    this.child.stdin.write(`${message}\n`);
     return new Promise((resolve, reject) => {
+      const fail = (error: Error) => {
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        this.pending.delete(id);
+        clearTimeout(pending.timer);
+        reject(error);
+      };
       const timer = setTimeout(() => {
         if (!this.pending.has(id)) return;
         this.pending.delete(id);
         reject(new Error(`Engine request timed out: ${type}`));
       }, timeoutMs);
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
+      try {
+        child.stdin.write(`${message}\n`, (error) => {
+          if (error) fail(error instanceof Error ? error : new Error(String(error)));
+        });
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -750,6 +764,14 @@ function sendMixedAudioChunk(
   let stderr = "";
   let settled = false;
 
+  const endChunkResponse = (statusCode: number, body?: string | Buffer) => {
+    if (settled || res.destroyed) return;
+    settled = true;
+    const length = Buffer.isBuffer(body) ? body.length : undefined;
+    res.writeHead(statusCode, audioChunkHeaders(length !== undefined ? { "Content-Length": length } : {}));
+    res.end(body);
+  };
+
   child.stdout.on("data", (chunk: Buffer) => {
     chunks.push(chunk);
   });
@@ -759,33 +781,25 @@ function sendMixedAudioChunk(
   });
 
   res.on("close", () => {
-    if (!settled) child.kill();
+    if (settled) return;
+    settled = true;
+    child.kill();
   });
 
   child.on("error", (error) => {
-    settled = true;
-    if (!res.headersSent) {
-      res.writeHead(500, audioChunkHeaders()).end(`ffmpeg unavailable: ${error.message}`);
-    } else {
-      res.end();
-    }
+    endChunkResponse(500, `ffmpeg unavailable: ${error.message}`);
   });
 
   child.on("exit", (code) => {
-    settled = true;
+    if (settled || res.destroyed) return;
     if (code !== 0 || chunks.length === 0) {
       const message = stderr.trim() || `ffmpeg exited with code ${code}`;
-      if (!res.headersSent) {
-        res.writeHead(500, audioChunkHeaders()).end(message);
-      } else {
-        res.end();
-      }
+      endChunkResponse(500, message);
       return;
     }
 
     const buffer = Buffer.concat(chunks);
-    res.writeHead(200, audioChunkHeaders({ "Content-Length": buffer.length }));
-    res.end(buffer);
+    endChunkResponse(200, buffer);
   });
 }
 
@@ -1817,7 +1831,9 @@ function saveSettings(settings: ClipSettings): ClipSettings {
     openAsHidden: true,
     args: app.isPackaged ? ["--hidden"] : [app.getAppPath(), "--hidden"],
   });
-  void engine.configure(normalized);
+  void engine.configure(normalized).catch((error) => {
+    console.error("Failed to configure engine:", error);
+  });
   const hotkeyStatus = registerHotkey(normalized);
   if (hotkeyStatus) console.log(`[settings] ${hotkeyStatus}`);
   return normalized;
