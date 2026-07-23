@@ -4,9 +4,15 @@ Clipture is a Windows replay-buffer application built around low-latency NVIDIA 
 
 ## Current Release
 
-Version `1.1.0` builds on the RAM replay pipeline with a lighter startup path, faster clip-library browsing, improved imported-video support, and a more capable buffered video player.
+Version `1.1.1` fixes the custom Windows titlebar layout so the Clipture icon and branding are no longer cut off while preserving the update and native window controls at the top right.
 
-## What's New in 1.1.0
+## What's New in 1.1.1
+
+- Removes the full-width titlebar layer that could cover the top of the Clipture icon and sidebar branding.
+- Keeps only the update, minimize, maximize, and close control area at the top right.
+- Places the Save last button back at the right edge, directly below the window controls.
+
+## 1.1.0 Highlights
 
 - Applies engine settings before capture is armed, avoiding an unnecessary default capture startup and restart.
 - Staggers optional app-audio capture and game detection after the core video, system-audio, and microphone paths are running.

@@ -432,7 +432,6 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <div className="titlebar-drag-region" />
       <TitlebarUpdateControls 
             updateState={updateState} 
             onCheck={() => void checkForUpdatesNow()} 

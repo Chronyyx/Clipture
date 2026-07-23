@@ -41,6 +41,7 @@ select {
 }
 
 .app-shell {
+  position: relative;
   display: grid;
   grid-template-columns: 248px 1fr;
   height: 100vh;
@@ -48,15 +49,16 @@ select {
   background: #101114;
 }
 
-.titlebar-drag-region {
+.app-shell::before {
+  content: "";
   position: absolute;
   top: 0;
-  left: 0;
-  right: 208px;
+  right: 0;
+  width: 208px;
   height: 32px;
-  -webkit-app-region: drag;
-  z-index: 9999;
+  z-index: 9998;
   background: #101114;
+  pointer-events: none;
 }
 
 .titlebar-update-controls {
@@ -159,6 +161,7 @@ select {
   align-items: center;
   gap: 12px;
   margin-bottom: 28px;
+  -webkit-app-region: drag;
 }
 
 .brand span,
@@ -212,8 +215,7 @@ select {
 }
 
 .workspace {
-  margin-top: 32px;
-  height: calc(100vh - 32px);
+  height: 100vh;
   padding: 0 24px 24px 24px;
   overflow-y: auto;
 }
@@ -223,7 +225,13 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  padding: 40px 0 0;
   margin-bottom: 18px;
+  -webkit-app-region: drag;
+}
+
+.topbar button {
+  -webkit-app-region: no-drag;
 }
 
 h1,
@@ -301,6 +309,12 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
+  padding-top: 22px;
+  -webkit-app-region: drag;
+}
+
+.library-hero button {
+  -webkit-app-region: no-drag;
 }
 
 .library-title {
