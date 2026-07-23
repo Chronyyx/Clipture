@@ -61,6 +61,17 @@ select {
   pointer-events: none;
 }
 
+.titlebar-drag-region {
+  position: absolute;
+  z-index: 9999;
+  top: 0;
+  left: 0;
+  right: 208px;
+  height: 32px;
+  background: transparent;
+  -webkit-app-region: drag;
+}
+
 .titlebar-update-controls {
   position: absolute;
   top: 4px;

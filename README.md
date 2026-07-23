@@ -4,9 +4,13 @@ Clipture is a Windows replay-buffer application built around low-latency NVIDIA 
 
 ## Current Release
 
-Version `1.1.1` fixes the custom Windows titlebar layout so the Clipture icon and branding are no longer cut off while preserving the update and native window controls at the top right.
+Version `1.1.2` is a bugfix release for the custom Windows titlebar drag area.
 
-## What's New in 1.1.1
+## What's New in 1.1.2
+
+- Bugfix: restores dragging from the very top of the app without covering the Clipture icon or window controls.
+
+## 1.1.1 Highlights
 
 - Removes the full-width titlebar layer that could cover the top of the Clipture icon and sidebar branding.
 - Keeps only the update, minimize, maximize, and close control area at the top right.

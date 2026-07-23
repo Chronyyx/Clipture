@@ -432,6 +432,7 @@ export function App() {
 
   return (
     <div className="app-shell">
+      <div className="titlebar-drag-region" aria-hidden="true" />
       <TitlebarUpdateControls 
             updateState={updateState} 
             onCheck={() => void checkForUpdatesNow()} 
