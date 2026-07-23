@@ -23,7 +23,8 @@ public:
     AudioCaptureWorker(const AudioCaptureWorker&) = delete;
     AudioCaptureWorker& operator=(const AudioCaptureWorker&) = delete;
 
-    void start();
+    void start(bool startConfiguredApps = true);
+    void startConfiguredAppSources();
     void stop();
     void configureAppSources(const std::vector<std::string>& processNames);
     void setMicSettings(float volume, bool isolation, float isolationWeight, bool noiseGateEnabled, bool autoNoiseGate, float noiseGateThreshold, int noiseGateDebounceMs, const std::string& micDeviceId, const std::string& micDeviceMatchKey, const std::string& micDeviceName);
@@ -77,6 +78,7 @@ private:
     std::atomic<float> noiseGateThreshold_ = 0.05f;
     std::atomic<int> noiseGateDebounceMs_ = 180;
     std::atomic<bool> running_ = false;
+    bool appCaptureEnabled_ = true;
     std::atomic<bool> notificationPending_ = false;
     std::atomic<int> micRefreshVersion_ = 0;
     std::atomic<int> packetsCaptured_ = 0;

@@ -1,5 +1,5 @@
-import { Activity, Check, ChevronDown, Clapperboard, Clock, Download, Edit3, FolderOpen, Gamepad2, Library, Maximize2, Mic, Pause, Play, Plus, RefreshCw, Save, Search, SlidersHorizontal, Trash2, Upload, Volume2, X } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Clock, Download, Edit3, FolderOpen, Gamepad2, Library, Maximize2, Mic, Minus, Pause, Play, Plus, RefreshCw, Save, Search, SlidersHorizontal, Trash2, Upload, Volume2, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 // @ts-ignore
 import logoUrl from "../../assets/svgviewer-output.svg";
 import type { KeyboardEvent } from "react";
@@ -588,6 +588,8 @@ function LibraryView({
   }, [folderFilter, query, settings, tabClips]);
 
   const selectedCount = selectedClipIds.size;
+  const allFilteredClipsSelected = filteredClips.length > 0
+    && filteredClips.every((clip) => selectedClipIds.has(clip.id));
 
   const toggleClipSelection = (clipId: string) => {
     setSelectedClipIds((current) => {
@@ -601,6 +603,18 @@ function LibraryView({
   const cancelSelection = () => {
     setSelectionMode(false);
     setSelectedClipIds(new Set());
+  };
+
+  const toggleSelectAllFilteredClips = () => {
+    setSelectedClipIds((current) => {
+      const next = new Set(current);
+      if (filteredClips.every((clip) => next.has(clip.id))) {
+        filteredClips.forEach((clip) => next.delete(clip.id));
+      } else {
+        filteredClips.forEach((clip) => next.add(clip.id));
+      }
+      return next;
+    });
   };
 
   const deleteSelectedClips = async () => {
@@ -679,6 +693,12 @@ function LibraryView({
               <div className="selection-bar">
                 <strong>{selectedCount} selected</strong>
                 <span className="selection-divider" />
+                <button className="secondary-button select-all-button" type="button" onClick={toggleSelectAllFilteredClips} disabled={filteredClips.length === 0}>
+                  <span className={allFilteredClipsSelected ? "select-clips-empty-box checked" : "select-clips-empty-box"} aria-hidden="true">
+                    {allFilteredClipsSelected && <Check size={13} />}
+                  </span>
+                  {allFilteredClipsSelected ? "Deselect all" : "Select all"}
+                </button>
                 <button className="secondary-button" type="button" onClick={cancelSelection}>Cancel</button>
                 <button className="danger-button" type="button" onClick={() => void deleteSelectedClips()} disabled={selectedCount === 0}>
                   <Trash2 size={18} /> Delete
@@ -802,7 +822,38 @@ function clipSourceLabels(clip: ClipRecord, settings?: ClipSettings): string[] {
   ]);
 }
 
-function useClipIconUrl(clip: ClipRecord, preferredLabels: string[]): string {
+function useNearViewport<T extends Element>(delayMs = 75): [React.MutableRefObject<T | null>, boolean] {
+  const elementRef = useRef<T | null>(null);
+  const [intersecting, setIntersecting] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") {
+      setIntersecting(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => setIntersecting(entries.some((entry) => entry.isIntersecting)),
+      { rootMargin: "700px 0px" }
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!intersecting) {
+      setReady(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setReady(true), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [delayMs, intersecting]);
+
+  return [elementRef, ready];
+}
+
+function useClipIconUrl(clip: ClipRecord, preferredLabels: string[], enabled = true): string {
   const [iconUrl, setIconUrl] = useState("");
   const focusedAppsKey = (clip.focusedApps ?? []).join("|");
   const audioTracksKey = clip.audioTracks.join("|");
@@ -810,6 +861,12 @@ function useClipIconUrl(clip: ClipRecord, preferredLabels: string[]): string {
 
   useEffect(() => {
     let active = true;
+    if (!enabled) {
+      setIconUrl("");
+      return () => {
+        active = false;
+      };
+    }
     if (preferredLabels.some((label) => label.trim().toLowerCase() === "clipture")) {
       setIconUrl(logoUrl);
       return () => {
@@ -825,7 +882,7 @@ function useClipIconUrl(clip: ClipRecord, preferredLabels: string[]): string {
     return () => {
       active = false;
     };
-  }, [clip.id, clip.gameOrApp, focusedAppsKey, audioTracksKey, preferredLabelsKey]);
+  }, [clip.id, clip.gameOrApp, focusedAppsKey, audioTracksKey, preferredLabelsKey, enabled]);
 
   return iconUrl;
 }
@@ -850,20 +907,27 @@ function ClipCard({
   const createdAt = parseClipDate(clip.createdAt);
   const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
   const [thumbnailUrl, setThumbnailUrl] = useState<string>("");
+  const [cardRef, loadMedia] = useNearViewport<HTMLElement>();
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState(displayTitle);
   const sourceLabels = useMemo(() => clipSourceLabels(clip, settings), [clip, settings]);
-  const iconUrl = useClipIconUrl(clip, sourceLabels);
+  const iconUrl = useClipIconUrl(clip, sourceLabels, loadMedia);
 
   useEffect(() => {
     let active = true;
+    if (!loadMedia) {
+      setThumbnailUrl("");
+      return () => {
+        active = false;
+      };
+    }
     window.clipture.clipThumbnailUrl(clip.filePath).then((url) => {
       if (active && url) setThumbnailUrl(url);
     });
     return () => {
       active = false;
     };
-  }, [clip.filePath]);
+  }, [clip.filePath, loadMedia]);
 
   const handleRename = async () => {
     const newTitle = editTitle.trim() || "Clipture";
@@ -887,14 +951,14 @@ function ClipCard({
   }, [editTitle, isEditingTitle, clip.title]);
 
   return (
-    <article className={[isActive ? "clip-card active" : "clip-card", isSelected ? "selected" : "", selectionMode ? "selectable" : ""].filter(Boolean).join(" ")}>
+    <article ref={cardRef} className={[isActive ? "clip-card active" : "clip-card", isSelected ? "selected" : "", selectionMode ? "selectable" : ""].filter(Boolean).join(" ")}>
       <button className="thumbnail-button" onClick={selectionMode ? onToggleSelected : onPlay}>
         {selectionMode && (
           <span className={isSelected ? "clip-select-box checked" : "clip-select-box"}>
             {isSelected && <Check size={18} />}
           </span>
         )}
-        {thumbnailUrl ? <img src={thumbnailUrl} alt="" /> : <div className="thumbnail-fallback">{clip.encoder}</div>}
+        {thumbnailUrl ? <img src={thumbnailUrl} alt="" loading="eager" decoding="async" /> : <div className="thumbnail-skeleton" aria-hidden="true" />}
         {clip.durationSeconds > 0 && <span className="duration-badge">{formatDuration(clip.durationSeconds)}</span>}
         {!selectionMode && (
           <span className="play-badge">
@@ -985,9 +1049,14 @@ function formatClipTime(date: Date | undefined) {
 
 function formatDuration(seconds: number) {
   const safeSeconds = Math.max(0, Math.round(seconds));
-  const minutes = Math.floor(safeSeconds / 60);
+  const days = Math.floor(safeSeconds / 86400);
+  const hours = Math.floor((safeSeconds % 86400) / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
   const remainder = safeSeconds % 60;
-  return minutes > 0 ? `${minutes}:${String(remainder).padStart(2, "0")}` : `0:${String(remainder).padStart(2, "0")}`;
+  const clock = `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+  if (days > 0) return `${days}d ${String(hours).padStart(2, "0")}:${clock}`;
+  if (hours > 0) return `${hours}:${clock}`;
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
 }
 
 type MixedAudioChunk = {
@@ -1028,8 +1097,17 @@ function acceleratorFromKeyboardEvent(event: KeyboardEvent) {
 
 function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: () => void; settings?: ClipSettings }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const fastHoldStartedAtRef = useRef(0);
+  const fastHoldActivatedRef = useRef(false);
   const holdTimeoutRef = useRef<number | null>(null);
+  const videoClickTimeoutRef = useRef<number | null>(null);
+  const keyboardSeekDelayRef = useRef<number | null>(null);
+  const keyboardSeekIntervalRef = useRef<number | null>(null);
+  const keyboardSeekDirectionRef = useRef<-1 | 0 | 1>(0);
+  const keyboardSeekStartedAtRef = useRef(0);
+  const keyboardSeekingRef = useRef(false);
+  const seekFeedbackTotalRef = useRef(0);
+  const seekFeedbackSequenceRef = useRef(0);
+  const seekFeedbackTimeoutRef = useRef<number | null>(null);
   const [src, setSrc] = useState("");
   const [message, setMessage] = useState("Preparing playback");
   const [mixedPlayback, setMixedPlayback] = useState(false);
@@ -1042,6 +1120,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(clip.durationSeconds);
   const [volume, setVolume] = useState(1);
+  const [seekFeedback, setSeekFeedback] = useState<{ direction: -1 | 1; seconds: number; sequence: number } | null>(null);
   const sourceLabels = useMemo(() => clipSourceLabels(clip, settings), [clip, settings]);
   const sourceText = sourceLabels.length > 0 ? sourceLabels.join(", ") : clip.gameOrApp;
   const iconUrl = useClipIconUrl(clip, sourceLabels);
@@ -1057,6 +1136,8 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     setHoldingFast(false);
     setCurrentTime(0);
     setDuration(clip.durationSeconds);
+    setSeekFeedback(null);
+    seekFeedbackTotalRef.current = 0;
     void window.clipture.clipPlaybackUrl(clip.filePath, clip.audioTracks).then((result) => {
       if (!active) return;
       setSrc(result.url);
@@ -1406,6 +1487,27 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     }
   };
 
+  const handleVideoClick = () => {
+    if (fastHoldActivatedRef.current) {
+      fastHoldActivatedRef.current = false;
+      return;
+    }
+    if (videoClickTimeoutRef.current) window.clearTimeout(videoClickTimeoutRef.current);
+    videoClickTimeoutRef.current = window.setTimeout(() => {
+      videoClickTimeoutRef.current = null;
+      togglePlayback();
+    }, 220);
+  };
+
+  const handleVideoDoubleClick = () => {
+    fastHoldActivatedRef.current = false;
+    if (videoClickTimeoutRef.current) {
+      window.clearTimeout(videoClickTimeoutRef.current);
+      videoClickTimeoutRef.current = null;
+    }
+    toggleFullscreen();
+  };
+
   const showControls = () => {
     setControlsVisible(true);
     if (controlsTimeoutRef.current) window.clearTimeout(controlsTimeoutRef.current);
@@ -1425,6 +1527,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   useEffect(() => {
     return () => {
       if (controlsTimeoutRef.current) window.clearTimeout(controlsTimeoutRef.current);
+      if (videoClickTimeoutRef.current) window.clearTimeout(videoClickTimeoutRef.current);
       clearMixedAudio();
       if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
         audioCtxRef.current.close().catch(console.error);
@@ -1433,11 +1536,12 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   }, []);
 
   const beginFastHold = () => {
-    fastHoldStartedAtRef.current = Date.now();
+    fastHoldActivatedRef.current = false;
     if (holdTimeoutRef.current) window.clearTimeout(holdTimeoutRef.current);
     holdTimeoutRef.current = window.setTimeout(() => {
       const video = videoRef.current;
       if (!video) return;
+      fastHoldActivatedRef.current = true;
       video.playbackRate = 2;
       setHoldingFast(true);
     }, 500);
@@ -1472,6 +1576,117 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     video.currentTime = (Math.min(100, Math.max(0, percent)) / 100) * video.duration;
   };
 
+  const showSeekFeedback = useCallback((actualSeconds: number) => {
+    if (Math.abs(actualSeconds) < 0.01) return;
+    seekFeedbackTotalRef.current += actualSeconds;
+    const total = seekFeedbackTotalRef.current;
+    setSeekFeedback({
+      direction: total < 0 ? -1 : 1,
+      seconds: Math.max(1, Math.round(Math.abs(total))),
+      sequence: seekFeedbackSequenceRef.current
+    });
+    if (seekFeedbackTimeoutRef.current) window.clearTimeout(seekFeedbackTimeoutRef.current);
+    seekFeedbackTimeoutRef.current = window.setTimeout(() => {
+      seekFeedbackTimeoutRef.current = null;
+      setSeekFeedback(null);
+      seekFeedbackTotalRef.current = 0;
+    }, 850);
+  }, []);
+
+  const seekBySeconds = useCallback((seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const videoDuration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : duration;
+    if (!Number.isFinite(videoDuration) || videoDuration <= 0) return;
+    const previousTime = Math.max(0, video.currentTime);
+    const nextTime = Math.min(videoDuration, Math.max(0, previousTime + seconds));
+    const actualSeconds = nextTime - previousTime;
+    if (Math.abs(actualSeconds) < 0.01) return;
+    video.currentTime = nextTime;
+    setCurrentTime(nextTime);
+    showSeekFeedback(actualSeconds);
+  }, [duration, showSeekFeedback]);
+
+  useEffect(() => {
+    const clearKeyboardSeekTimers = () => {
+      if (keyboardSeekDelayRef.current) {
+        window.clearTimeout(keyboardSeekDelayRef.current);
+        keyboardSeekDelayRef.current = null;
+      }
+      if (keyboardSeekIntervalRef.current) {
+        window.clearInterval(keyboardSeekIntervalRef.current);
+        keyboardSeekIntervalRef.current = null;
+      }
+    };
+
+    const finishKeyboardSeek = () => {
+      if (keyboardSeekDirectionRef.current === 0) return;
+      clearKeyboardSeekTimers();
+      keyboardSeekDirectionRef.current = 0;
+      keyboardSeekingRef.current = false;
+      const video = videoRef.current;
+      if (!mixedPlayback || !video || video.seeking) return;
+      if (video.paused) ensureMixedBuffered();
+      else void playMixedWhenReady();
+    };
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
+      event.preventDefault();
+      if (event.repeat) return;
+
+      finishKeyboardSeek();
+      const direction: -1 | 1 = event.key === "ArrowLeft" ? -1 : 1;
+      keyboardSeekDirectionRef.current = direction;
+      keyboardSeekStartedAtRef.current = performance.now();
+      keyboardSeekingRef.current = true;
+      seekFeedbackTotalRef.current = 0;
+      seekFeedbackSequenceRef.current += 1;
+      setSeekFeedback(null);
+      seekBySeconds(direction * 5);
+
+      keyboardSeekDelayRef.current = window.setTimeout(() => {
+        const seekAgain = () => {
+          const heldMs = performance.now() - keyboardSeekStartedAtRef.current;
+          const step = heldMs >= 2000 ? 20 : heldMs >= 900 ? 10 : 5;
+          seekBySeconds(direction * step);
+        };
+        seekAgain();
+        keyboardSeekIntervalRef.current = window.setInterval(seekAgain, 120);
+      }, 300);
+    };
+
+    const handleKeyUp = (event: globalThis.KeyboardEvent) => {
+      const direction = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+      if (direction !== 0 && direction === keyboardSeekDirectionRef.current) finishKeyboardSeek();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) finishKeyboardSeek();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", finishKeyboardSeek);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      clearKeyboardSeekTimers();
+      keyboardSeekDirectionRef.current = 0;
+      keyboardSeekingRef.current = false;
+      if (seekFeedbackTimeoutRef.current) {
+        window.clearTimeout(seekFeedbackTimeoutRef.current);
+        seekFeedbackTimeoutRef.current = null;
+      }
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", finishKeyboardSeek);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [mixedPlayback, seekBySeconds]);
+
   const progressPercent = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
   const aspectWidth = parseInt((clip.resolution || "").split("x")[0]) || 16;
@@ -1501,16 +1716,10 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
           onPointerEnter={showControls}
           onPointerDown={(event) => {
             if ((event.target as HTMLElement).closest(".player-controls")) return;
-            event.currentTarget.setPointerCapture(event.pointerId);
+            if (event.button !== 0) return;
             beginFastHold();
           }}
-          onPointerUp={(event) => {
-            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-              event.currentTarget.releasePointerCapture(event.pointerId);
-            }
-            endFastHold();
-          }}
-          onLostPointerCapture={endFastHold}
+          onPointerUp={endFastHold}
           onPointerCancel={() => {
             endFastHold();
             hideControls();
@@ -1528,11 +1737,8 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
             crossOrigin="anonymous"
             muted={mixedPlayback}
             preload="metadata"
-            onClick={() => {
-              if (Date.now() - fastHoldStartedAtRef.current > 180) return;
-              togglePlayback();
-            }}
-            onDoubleClick={toggleFullscreen}
+            onClick={handleVideoClick}
+            onDoubleClick={handleVideoDoubleClick}
             onPlay={() => {
               setPlaying(true);
               if (!mixedPlayback) return;
@@ -1575,6 +1781,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
             onSeeked={(event) => {
               setCurrentTime(event.currentTarget.currentTime);
               if (!mixedPlayback) return;
+              if (keyboardSeekingRef.current) return;
               if (event.currentTarget.paused) {
                 ensureMixedBuffered();
               } else {
@@ -1591,6 +1798,16 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
             }}
           />
           {holdingFast && <div className="speed-pill">2x</div>}
+          {seekFeedback && (
+            <div key={seekFeedback.sequence} className={`seek-feedback ${seekFeedback.direction < 0 ? "backward" : "forward"}`} aria-hidden="true">
+              {seekFeedback.direction < 0 && <ChevronLeft className="seek-feedback-chevron" />}
+              {seekFeedback.direction < 0
+                ? <Minus className="seek-feedback-sign" />
+                : <Plus className="seek-feedback-sign" />}
+              <strong className="seek-feedback-number">{seekFeedback.seconds}</strong>
+              {seekFeedback.direction > 0 && <ChevronRight className="seek-feedback-chevron" />}
+            </div>
+          )}
           <div className="player-controls">
             <input
               className="player-scrubber"
@@ -1634,7 +1851,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
         </div>
       ) : <div className="empty">{message}</div>}
       <div className="player-meta">
-        <span>{clip.durationSeconds}s</span>
+        <span>{formatDuration(clip.durationSeconds)}</span>
         <span>{clip.resolution}</span>
         <span>{clip.fps} FPS</span>
         <span>{displayAudioTracks(clip.audioTracks) || "No audio tracks"}</span>
@@ -2113,6 +2330,68 @@ function MicrophoneSettingsModal({
   );
 }
 
+function DraftNumberInput({
+  value,
+  min,
+  max,
+  disabled = false,
+  onCommit
+}: {
+  value: number;
+  min: number;
+  max: number;
+  disabled?: boolean;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(() => String(value));
+  const cancelNextBlur = useRef(false);
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commitDraft = () => {
+    const parsed = Number(draft.trim());
+    if (!draft.trim() || !Number.isFinite(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    const nextValue = Math.min(max, Math.max(min, Math.round(parsed)));
+    setDraft(String(nextValue));
+    if (nextValue !== value) onCommit(nextValue);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      value={draft}
+      disabled={disabled}
+      onChange={(event) => {
+        if (/^\d*$/.test(event.target.value)) setDraft(event.target.value);
+      }}
+      onBlur={() => {
+        if (cancelNextBlur.current) {
+          cancelNextBlur.current = false;
+          setDraft(String(value));
+          return;
+        }
+        commitDraft();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        } else if (event.key === "Escape") {
+          cancelNextBlur.current = true;
+          setDraft(String(value));
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
 function SettingsView({
   settings,
   clipSounds,
@@ -2429,13 +2708,12 @@ function SettingsView({
       </label>
       <label>
         Bitrate Mbps
-        <input
-          type="number"
+        <DraftNumberInput
           min={4}
           max={120}
           value={settings.bitrateMbps}
           disabled={settings.autoBitrate}
-          onChange={(event) => onChange({ bitrateMbps: Number(event.target.value) })}
+          onCommit={(bitrateMbps) => onChange({ bitrateMbps })}
         />
       </label>
       <label className="toggle-label">
@@ -2449,13 +2727,12 @@ function SettingsView({
       </label>
       <label>
         Max auto bitrate Mbps
-        <input
-          type="number"
+        <DraftNumberInput
           min={4}
           max={120}
           value={settings.maxAutoBitrateMbps}
           disabled={!settings.autoBitrate}
-          onChange={(event) => onChange({ maxAutoBitrateMbps: Number(event.target.value) })}
+          onCommit={(maxAutoBitrateMbps) => onChange({ maxAutoBitrateMbps })}
         />
       </label>
       <label>

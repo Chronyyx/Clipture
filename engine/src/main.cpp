@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <mmsystem.h>
 
+#include <algorithm>
 #include <exception>
 #include <iostream>
 #include <sstream>
@@ -177,6 +178,17 @@ int main() {
 
             if (line.find("\"listDisplayDevices\"") != std::string::npos) {
                 respond(id, clipture::displayDevicesJson());
+                continue;
+            }
+
+            if (line.find("\"listRunningProcesses\"") != std::string::npos) {
+                respond(id, engine.runningProcessesJson(extractBool(line, "includeExecutablePaths", false)));
+                continue;
+            }
+
+            if (line.find("\"getProcessExecutablePath\"") != std::string::npos) {
+                respond(id, engine.processExecutablePathJson(
+                    static_cast<uint32_t>(std::max(0, extractInt(line, "processId", 0)))));
                 continue;
             }
 

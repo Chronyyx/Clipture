@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <mutex>
 
@@ -64,6 +65,8 @@ public:
 
     const Diagnostics& diagnostics();
     const Diagnostics& configure(const EngineSettings& settings);
+    std::string runningProcessesJson(bool includeExecutablePaths) const;
+    std::string processExecutablePathJson(uint32_t processId) const;
     SaveClipResult saveClip(const SaveClipRequest& request);
 
 private:
@@ -92,6 +95,9 @@ private:
     
     std::atomic<bool> gameDetectionRunning_{false};
     std::thread gameDetectionThread_;
+    std::mutex gameDetectionWaitMutex_;
+    std::condition_variable gameDetectionWaitCv_;
+    bool armed_ = false;
     
     struct ForegroundHistoryEntry {
         std::chrono::steady_clock::time_point timestamp;

@@ -3,7 +3,8 @@ import type { OpenDialogOptions } from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
-import { appendFileSync, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { readdir as readdirAsync, stat as statAsync, rm as rmAsync } from "node:fs/promises";
 import { format } from "node:util";
 import { basename, dirname, extname, join, parse, normalize } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -346,7 +347,7 @@ class EngineClient {
       micDeviceId: settings.audioSources.find((source) => source.kind === "microphone")?.micDeviceId ?? "",
       micDeviceMatchKey: settings.audioSources.find((source) => source.kind === "microphone")?.micDeviceMatchKey ?? "",
       micDeviceName: settings.audioSources.find((source) => source.kind === "microphone")?.micDeviceName ?? ""
-    });
+    }, 15_000);
     this.lastDiagnostics = diagnostics;
     return diagnostics;
   }
@@ -378,6 +379,26 @@ class EngineClient {
         fail(error instanceof Error ? error : new Error(String(error)));
       }
     });
+  }
+
+  async listRunningProcesses(includeExecutablePaths = false): Promise<ActiveProcess[]> {
+    if (!this.child) this.start();
+    if (!this.child) return [];
+    try {
+      return await this.request<ActiveProcess[]>("listRunningProcesses", { includeExecutablePaths }, 5000);
+    } catch {
+      return [];
+    }
+  }
+
+  async processExecutablePath(processId: number): Promise<string> {
+    if (!this.child) this.start();
+    if (!this.child || !Number.isInteger(processId) || processId <= 0) return "";
+    try {
+      return await this.request<string>("getProcessExecutablePath", { processId }, 3000);
+    } catch {
+      return "";
+    }
   }
 
   private readStdout(chunk: Buffer): void {
@@ -587,11 +608,11 @@ function soundsFolderPath(): string {
 }
 
 function cleanupAbandonedPreviewCache(): void {
-  try {
-    rmSync(appDataPath("preview-cache"), { recursive: true, force: true });
-  } catch {
-    // Best effort cleanup for the removed disk-backed preview experiment.
-  }
+  setTimeout(() => {
+    void rmAsync(appDataPath("preview-cache"), { recursive: true, force: true }).catch(() => {
+      // Best effort cleanup for the removed disk-backed preview experiment.
+    });
+  }, 6000);
 }
 
 function safeSoundFileName(filePath: string): string {
@@ -1004,8 +1025,38 @@ type ClipIconCandidatePlan = {
   fallbackCandidates: string[];
 };
 
+class AsyncTaskLimiter {
+  private active = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(private readonly limit: number) {}
+
+  run<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const start = () => {
+        this.active++;
+        void task().then(resolve, reject).finally(() => {
+          this.active--;
+          this.waiting.shift()?.();
+        });
+      };
+      if (this.active < this.limit) start();
+      else this.waiting.push(start);
+    });
+  }
+}
+
+const thumbnailTaskLimiter = new AsyncTaskLimiter(3);
+const iconTaskLimiter = new AsyncTaskLimiter(2);
+const thumbnailWidth = 480;
+const thumbnailHeight = 270;
+const thumbnailCacheLimit = 64;
+const thumbnailDataUrlCache = new Map<string, { signature: string; dataUrl: string }>();
+const pendingThumbnailTasks = new Map<string, Promise<string>>();
+
 let iconProcessSnapshot: { expiresAt: number; promise: Promise<ProcessIconEntry[]> } | undefined;
 const processIconDataUrls = new Map<string, string>();
+const processExecutablePaths = new Map<number, string>();
 const knownGameIconAliases = new Map<string, string[]>([
   ["counter-strike 2", ["cs2.exe"]],
   ["roblox", ["robloxplayerbeta.exe"]],
@@ -1016,6 +1067,7 @@ const knownGameIconAliases = new Map<string, string[]>([
   ["minecraft", ["minecraft.windows.exe", "javaw.exe"]]
 ]);
 let installedIconTargets: Array<{ name: string; root: string }> | undefined;
+const installedExecutableIconPaths = new Map<string, string>();
 
 function stripExecutableExtension(value: string): string {
   return value.replace(/\.exe$/i, "");
@@ -1247,52 +1299,27 @@ function findExecutableInDirectory(root: string, aliases: string[]): string {
   return "";
 }
 
-function parseProcessIconSnapshot(stdout: string): ProcessIconEntry[] {
-  const text = stdout.trim();
-  if (!text) return [];
-  try {
-    const parsed = JSON.parse(text);
-    const rows = Array.isArray(parsed) ? parsed : [parsed];
-    return rows
-      .map((row) => ({
-        name: typeof row?.Name === "string" ? row.Name : "",
-        pid: Number(row?.ProcessId),
-        executablePath: typeof row?.ExecutablePath === "string" ? row.ExecutablePath : undefined
-      }))
-      .filter((row) => row.name && Number.isFinite(row.pid));
-  } catch {
-    return [];
-  }
-}
-
 function listProcessesForIcons(): Promise<ProcessIconEntry[]> {
   const now = Date.now();
   if (iconProcessSnapshot && iconProcessSnapshot.expiresAt > now) return iconProcessSnapshot.promise;
 
-  const command = "Get-CimInstance Win32_Process | Select-Object Name,ProcessId,ExecutablePath | ConvertTo-Json -Compress";
-  const promise = new Promise<ProcessIconEntry[]>((resolve) => {
-    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command], { windowsHide: true });
-    let stdout = "";
-    let settled = false;
-    const finish = (entries: ProcessIconEntry[]) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      resolve(entries);
-    };
-    const timeout = setTimeout(() => {
-      child.kill();
-      finish([]);
-    }, 6000);
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.on("error", () => finish([]));
-    child.on("exit", () => finish(parseProcessIconSnapshot(stdout)));
-  });
+  const promise = engine.listRunningProcesses(false).then((processes) => processes.map((process) => ({
+    name: process.name,
+    pid: process.pid,
+    executablePath: process.executablePath
+  }))).catch(() => []);
 
-  iconProcessSnapshot = { expiresAt: now + 10_000, promise };
+  iconProcessSnapshot = { expiresAt: now + 30_000, promise };
   return promise;
+}
+
+async function executablePathForProcess(process: ProcessIconEntry | undefined): Promise<string> {
+  if (!process) return "";
+  if (process.executablePath) return process.executablePath;
+  if (processExecutablePaths.has(process.pid)) return processExecutablePaths.get(process.pid) ?? "";
+  const executablePath = await engine.processExecutablePath(process.pid);
+  processExecutablePaths.set(process.pid, executablePath);
+  return executablePath;
 }
 
 function findIconProcess(candidates: string[], processes: ProcessIconEntry[]): ProcessIconEntry | undefined {
@@ -1318,31 +1345,39 @@ function findIconProcess(candidates: string[], processes: ProcessIconEntry[]): P
 function findInstalledExecutableForIcon(candidates: string[]): string {
   if (candidates.length === 0) return "";
   const aliases = candidateAliasNames(candidates);
+  const cacheKey = [...aliases].sort().join("|");
+  if (installedExecutableIconPaths.has(cacheKey)) return installedExecutableIconPaths.get(cacheKey) ?? "";
   const candidateNames = new Set(aliases.map((alias) => stripExecutableExtension(alias).toLowerCase()));
   for (const target of scanInstalledIconTargets()) {
     const targetName = stripExecutableExtension(target.name).toLowerCase();
     const matchingGameName = candidateNames.has(targetName) || aliases.some((alias) => stripExecutableExtension(alias).toLowerCase() === targetName);
     if (!matchingGameName || !existsSync(target.root)) continue;
     const executablePath = findExecutableInDirectory(target.root, aliases);
-    if (executablePath) return executablePath;
+    if (executablePath) {
+      installedExecutableIconPaths.set(cacheKey, executablePath);
+      return executablePath;
+    }
   }
+  installedExecutableIconPaths.set(cacheKey, "");
   return "";
 }
 
 async function clipIconUrl(clip: ClipRecord, preferredLabels: string[] = []): Promise<string> {
-  const candidatePlan = clipIconCandidatePlan(clip, preferredLabels);
-  const processes = await listProcessesForIcons();
-  const gameProcess = findIconProcess(candidatePlan.gameCandidates, processes);
-  const process = gameProcess ?? (
-    candidatePlan.gameCandidates.length > 0
-      ? undefined
-      : findIconProcess(candidatePlan.fallbackCandidates, processes)
-  );
-  const executablePath =
-    process?.executablePath ||
-    findInstalledExecutableForIcon(candidatePlan.gameCandidates) ||
-    findInstalledExecutableForIcon(candidatePlan.fallbackCandidates);
-  return executableIconDataUrl(executablePath, 20);
+  return iconTaskLimiter.run(async () => {
+    const candidatePlan = clipIconCandidatePlan(clip, preferredLabels);
+    const processes = await listProcessesForIcons();
+    const gameProcess = findIconProcess(candidatePlan.gameCandidates, processes);
+    const process = gameProcess ?? (
+      candidatePlan.gameCandidates.length > 0
+        ? undefined
+        : findIconProcess(candidatePlan.fallbackCandidates, processes)
+    );
+    const executablePath =
+      await executablePathForProcess(process) ||
+      findInstalledExecutableForIcon(candidatePlan.gameCandidates) ||
+      findInstalledExecutableForIcon(candidatePlan.fallbackCandidates);
+    return executableIconDataUrl(executablePath, 20);
+  });
 }
 
 async function executableIconDataUrl(executablePath: string | undefined, size: number): Promise<string> {
@@ -1371,12 +1406,12 @@ async function processIconUrl(processName: string, executablePath?: string): Pro
   const candidates = uniqueIconCandidates([processName]);
   if (candidates.length === 0) return "";
   const process = findIconProcess(candidates, await listProcessesForIcons());
-  const resolvedPath = process?.executablePath || findInstalledExecutableForIcon(candidates);
+  const resolvedPath = await executablePathForProcess(process) || findInstalledExecutableForIcon(candidates);
   return executableIconDataUrl(resolvedPath, 36);
 }
 
 async function listActiveProcesses(): Promise<ActiveProcess[]> {
-  const iconEntries = await listProcessesForIcons();
+  const iconEntries = await engine.listRunningProcesses(true);
   if (iconEntries.length > 0) {
     const byName = new Map<string, ActiveProcess>();
     for (const process of iconEntries) {
@@ -1812,13 +1847,50 @@ function releasePlaybackCache(): boolean {
 
 async function clipThumbnailUrl(filePath: string): Promise<string> {
   if (!existsSync(filePath)) return "";
+  const cacheKey = lowerPath(filePath);
+  let signature = "";
   try {
-    const img = await nativeImage.createThumbnailFromPath(filePath, { width: 640, height: 360 });
-    return img.toDataURL();
-  } catch (err) {
-    console.error(`Failed to generate thumbnail for ${filePath}:`, err);
+    const fileStats = statSync(filePath);
+    signature = `${fileStats.size}:${fileStats.mtimeMs}`;
+  } catch {
     return "";
   }
+
+  const cached = thumbnailDataUrlCache.get(cacheKey);
+  if (cached?.signature === signature) {
+    thumbnailDataUrlCache.delete(cacheKey);
+    thumbnailDataUrlCache.set(cacheKey, cached);
+    return cached.dataUrl;
+  }
+  thumbnailDataUrlCache.delete(cacheKey);
+
+  const pending = pendingThumbnailTasks.get(cacheKey);
+  if (pending) return pending;
+
+  const task = thumbnailTaskLimiter.run(async () => {
+    try {
+      const image = await nativeImage.createThumbnailFromPath(filePath, {
+        width: thumbnailWidth,
+        height: thumbnailHeight
+      });
+      if (image.isEmpty()) return "";
+
+      const jpeg = image.toJPEG(76);
+      const dataUrl = `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+      thumbnailDataUrlCache.set(cacheKey, { signature, dataUrl });
+      while (thumbnailDataUrlCache.size > thumbnailCacheLimit) {
+        const oldestKey = thumbnailDataUrlCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        thumbnailDataUrlCache.delete(oldestKey);
+      }
+      return dataUrl;
+    } catch (err) {
+      console.error(`Failed to generate thumbnail for ${filePath}:`, err);
+      return "";
+    }
+  });
+  pendingThumbnailTasks.set(cacheKey, task);
+  return task.finally(() => pendingThumbnailTasks.delete(cacheKey));
 }
 
 function readSettings(): ClipSettings {
@@ -1902,7 +1974,7 @@ function enrichSavedClip(clip: ClipRecord, settings = readSettings()): ClipRecor
   };
 }
 
-function scanImportedVideoFiles(root: string): string[] {
+async function scanImportedVideoFiles(root: string): Promise<string[]> {
   const files: string[] = [];
   const queue = [root];
   let scanned = 0;
@@ -1912,7 +1984,7 @@ function scanImportedVideoFiles(root: string): string[] {
     const current = queue.shift()!;
     let entries;
     try {
-      entries = readdirSync(current, { withFileTypes: true });
+      entries = await readdirAsync(current, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -1931,25 +2003,46 @@ function scanImportedVideoFiles(root: string): string[] {
   return files;
 }
 
-function readImportedVideoClips(settings = readSettings()): ClipRecord[] {
+type ImportedVideoIndexState = {
+  rootsKey: string;
+  clips: ClipRecord[];
+  ready: boolean;
+  generation: number;
+  scan?: Promise<ClipRecord[]>;
+};
+
+let importedVideoIndexGeneration = 0;
+let importedVideoIndex: ImportedVideoIndexState = { rootsKey: "", clips: [], ready: false, generation: importedVideoIndexGeneration };
+
+function importedVideoRootsKey(settings: ClipSettings): string {
+  return JSON.stringify((settings.importedVideoDirectories ?? []).map((root) => normalizedPathKey(root)));
+}
+
+function applyImportedVideoTitles(clips: ClipRecord[], settings: ClipSettings): ClipRecord[] {
   const titleOverrides = new Map(Object.entries(settings.importedVideoTitles ?? {}).map(([filePath, title]) => [normalizedPathKey(filePath), title]));
+  return clips.map((clip) => ({
+    ...clip,
+    title: titleOverrides.get(normalizedPathKey(clip.filePath)) || parse(clip.filePath).name || "Imported video"
+  }));
+}
+
+async function scanImportedVideoClips(settings: ClipSettings): Promise<ClipRecord[]> {
   const clips: ClipRecord[] = [];
 
   for (const root of settings.importedVideoDirectories ?? []) {
     const normalizedRoot = normalize(root);
-    if (!existsSync(normalizedRoot)) continue;
     const folderName = basename(normalizedRoot) || "Imported videos";
-    for (const filePath of scanImportedVideoFiles(normalizedRoot)) {
+    for (const filePath of await scanImportedVideoFiles(normalizedRoot)) {
       let stats;
       try {
-        stats = statSync(filePath);
+        stats = await statAsync(filePath);
       } catch {
         continue;
       }
       const parsed = parse(filePath);
       clips.push({
         id: importedClipId(filePath),
-        title: titleOverrides.get(normalizedPathKey(filePath)) || parsed.name || "Imported video",
+        title: parsed.name || "Imported video",
         gameOrApp: folderName,
         librarySource: "imported",
         folderName,
@@ -1968,6 +2061,51 @@ function readImportedVideoClips(settings = readSettings()): ClipRecord[] {
   return clips.sort((a, b) => Number(new Date(b.createdAt)) - Number(new Date(a.createdAt)));
 }
 
+function invalidateImportedVideoIndex(): void {
+  importedVideoIndexGeneration++;
+  importedVideoIndex = { rootsKey: "", clips: [], ready: false, generation: importedVideoIndexGeneration };
+}
+
+function ensureImportedVideoIndex(settings: ClipSettings, delayMs = 2000): Promise<ClipRecord[]> {
+  const rootsKey = importedVideoRootsKey(settings);
+  if (importedVideoIndex.rootsKey !== rootsKey) {
+    importedVideoIndexGeneration++;
+    importedVideoIndex = { rootsKey, clips: [], ready: false, generation: importedVideoIndexGeneration };
+  }
+  if (importedVideoIndex.ready) return Promise.resolve(importedVideoIndex.clips);
+  if (importedVideoIndex.scan) return importedVideoIndex.scan;
+
+  const settingsSnapshot: ClipSettings = {
+    ...settings,
+    importedVideoDirectories: [...(settings.importedVideoDirectories ?? [])],
+    importedVideoTitles: { ...(settings.importedVideoTitles ?? {}) },
+    audioSources: [...settings.audioSources]
+  };
+  const generation = importedVideoIndex.generation;
+  const scan = new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, delayMs)))
+    .then(() => scanImportedVideoClips(settingsSnapshot))
+    .then((clips) => {
+      if (importedVideoIndex.rootsKey !== rootsKey || importedVideoIndex.generation !== generation) return clips;
+      importedVideoIndex = { rootsKey, clips, ready: true, generation };
+      mainWindow?.webContents.send("library:changed");
+      return clips;
+    })
+    .catch((error) => {
+      console.error("Failed to index imported video folders:", error);
+      if (importedVideoIndex.rootsKey === rootsKey && importedVideoIndex.generation === generation) {
+        importedVideoIndex = { rootsKey, clips: [], ready: true, generation };
+      }
+      return [];
+    });
+  importedVideoIndex.scan = scan;
+  return scan;
+}
+
+async function getImportedVideoClips(settings = readSettings()): Promise<ClipRecord[]> {
+  const clips = await ensureImportedVideoIndex(settings, 0);
+  return applyImportedVideoTitles(clips, settings);
+}
+
 function readClips(): ClipRecord[] {
   const path = clipsPath();
   if (!existsSync(path)) return [];
@@ -1983,9 +2121,14 @@ function readClips(): ClipRecord[] {
 
 function listLibraryClips(): ClipRecord[] {
   const settings = readSettings();
+  const rootsKey = importedVideoRootsKey(settings);
+  const importedClips = importedVideoIndex.rootsKey === rootsKey && importedVideoIndex.ready
+    ? applyImportedVideoTitles(importedVideoIndex.clips, settings)
+    : [];
+  void ensureImportedVideoIndex(settings).catch(() => {});
   return [
     ...readClips(),
-    ...readImportedVideoClips(settings)
+    ...importedClips
   ];
 }
 
@@ -1993,14 +2136,14 @@ function writeClips(clips: ClipRecord[]): void {
   writeFileSync(clipsPath(), JSON.stringify(clips.filter((clip) => clip.librarySource !== "imported"), null, 2));
 }
 
-function deleteClips(ids: string[]): boolean {
+async function deleteClips(ids: string[]): Promise<boolean> {
   const idSet = new Set(ids);
   if (idSet.size === 0) return false;
   const importedIds = [...idSet].filter((id) => id.startsWith("imported:"));
   let removedImported = false;
   if (importedIds.length > 0) {
     const settings = readSettings();
-    const importedClips = readImportedVideoClips(settings);
+    const importedClips = await getImportedVideoClips(settings);
     const titleOverrides = { ...(settings.importedVideoTitles ?? {}) };
     for (const clip of importedClips) {
       if (!idSet.has(clip.id)) continue;
@@ -2015,6 +2158,8 @@ function deleteClips(ids: string[]): boolean {
     }
     if (removedImported) {
       saveSettings({ ...settings, importedVideoTitles: titleOverrides });
+      invalidateImportedVideoIndex();
+      void ensureImportedVideoIndex(readSettings(), 250).catch(() => {});
     }
   }
 
@@ -2061,6 +2206,8 @@ async function importVideoFolders(): Promise<boolean> {
     ...result.filePaths
   ].map((value) => normalize(value))));
   saveSettings({ ...settings, importedVideoDirectories: directories });
+  invalidateImportedVideoIndex();
+  void ensureImportedVideoIndex(readSettings(), 250).catch(() => {});
   mainWindow?.webContents.send("library:changed");
   return true;
 }
@@ -2372,16 +2519,20 @@ app.on("second-instance", (_event, commandLine) => {
 });
 
 app.whenReady().then(async () => {
+  const startupSettings = readSettings();
   cleanupAbandonedPreviewCache();
   setupPreviewServer();
   ensureBundledClipSounds();
-  saveSettings(readSettings());
-  engine.start();
   createTray();
   await createWindow();
   await createNotificationWindow();
-  registerHotkey(readSettings());
-  checkForAppUpdates();
+  registerHotkey(startupSettings);
+  setTimeout(() => {
+    void engine.configure(startupSettings).catch((error) => {
+      console.error("Failed to configure engine at startup:", error);
+    });
+  }, 250);
+  setTimeout(() => checkForAppUpdates(), 4000);
 });
 
 app.on("window-all-closed", () => {});
@@ -2402,12 +2553,12 @@ ipcMain.handle("settings:save", (_event, settings: ClipSettings) => saveSettings
 ipcMain.handle("library:list", () => listLibraryClips());
 ipcMain.handle("library:delete", (_event, ids: string[]) => deleteClips(Array.isArray(ids) ? ids : []));
 ipcMain.handle("library:importVideoFolders", () => importVideoFolders());
-ipcMain.handle("library:rename", (_event, id: string, newTitle: string) => {
+ipcMain.handle("library:rename", async (_event, id: string, newTitle: string) => {
   const trimmedTitle = typeof newTitle === "string" ? newTitle.trim() : "";
   if (!trimmedTitle) return false;
   if (id.startsWith("imported:")) {
     const settings = readSettings();
-    const importedClip = readImportedVideoClips(settings).find((clip) => clip.id === id);
+    const importedClip = (await getImportedVideoClips(settings)).find((clip) => clip.id === id);
     if (!importedClip || !existsSync(importedClip.filePath)) return false;
     const safeTitle = trimmedTitle.replace(/[\\/:*?"<>|]/g, "_").trim() || "video";
     const dir = dirname(importedClip.filePath);
@@ -2435,6 +2586,8 @@ ipcMain.handle("library:rename", (_event, id: string, newTitle: string) => {
       ...settings,
       importedVideoTitles: titleOverrides
     });
+    invalidateImportedVideoIndex();
+    void ensureImportedVideoIndex(readSettings(), 250).catch(() => {});
     mainWindow?.webContents.send("library:changed");
     return true;
   }

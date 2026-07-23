@@ -678,14 +678,11 @@ Engine::Engine()
       audioReplayCoordinator_(std::make_unique<AudioReplayCoordinator>(audioPackets_, aacAudioPackets_)),
       captureSession_(std::make_unique<CaptureSession>()),
       encoderWorker_(std::make_unique<EncoderWorker>(frameQueue_, videoPackets_)),
-      audioCaptureWorker_(std::make_unique<AudioCaptureWorker>(audioPackets_, audioReplayCoordinator_.get())) {
-    gameDetectionRunning_ = true;
-    gameDetectionThread_ = std::thread([this] { gameDetectionLoop(); });
-    arm();
-}
+      audioCaptureWorker_(std::make_unique<AudioCaptureWorker>(audioPackets_, audioReplayCoordinator_.get())) {}
 
 Engine::~Engine() {
     gameDetectionRunning_ = false;
+    gameDetectionWaitCv_.notify_all();
     if (gameDetectionThread_.joinable()) {
         gameDetectionThread_.join();
     }
@@ -728,6 +725,16 @@ void Engine::refreshAudioRouting() {
 }
 
 void Engine::gameDetectionLoop() {
+    {
+        std::unique_lock lock(gameDetectionWaitMutex_);
+        if (gameDetectionWaitCv_.wait_for(lock, std::chrono::milliseconds(900), [this] {
+                return !gameDetectionRunning_.load();
+            })) {
+            return;
+        }
+    }
+    if (audioCaptureWorker_) audioCaptureWorker_->startConfiguredAppSources();
+
     std::size_t detectionPasses = 0;
     while (gameDetectionRunning_) {
         {
@@ -965,13 +972,42 @@ void Engine::gameDetectionLoop() {
             }
         }
         
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::unique_lock lock(gameDetectionWaitMutex_);
+        gameDetectionWaitCv_.wait_for(lock, std::chrono::seconds(2), [this] {
+            return !gameDetectionRunning_.load();
+        });
     }
 }
 
 const Diagnostics& Engine::diagnostics() {
     refreshPacketCounts();
     return diagnostics_;
+}
+
+std::string Engine::runningProcessesJson(bool includeExecutablePaths) const {
+    const auto snapshot = RunningProcessSnapshot::captureNameOnly();
+    std::ostringstream json;
+    json << "[";
+    bool wroteProcess = false;
+    for (const auto& process : snapshot.entries()) {
+        if (process.exeName.empty() || process.processId == 0) continue;
+        if (wroteProcess) json << ",";
+        wroteProcess = true;
+        json << "{"
+             << "\"name\":\"" << jsonEscape(process.exeName) << "\","
+             << "\"pid\":" << process.processId;
+        if (includeExecutablePaths) {
+            json << ",\"executablePath\":\""
+                 << jsonEscape(RunningProcessSnapshot::queryProcessPath(process.processId)) << "\"";
+        }
+        json << "}";
+    }
+    json << "]";
+    return json.str();
+}
+
+std::string Engine::processExecutablePathJson(uint32_t processId) const {
+    return "\"" + jsonEscape(RunningProcessSnapshot::queryProcessPath(processId)) + "\"";
 }
 
 const Diagnostics& Engine::configure(const EngineSettings& settings) {
@@ -1120,6 +1156,12 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     } else {
         audioPackets_.setRetention(retention100ns);
         aacAudioPackets_.setRetention(retention100ns);
+    }
+    if (!armed_) {
+        armed_ = true;
+        arm();
+        gameDetectionRunning_ = true;
+        gameDetectionThread_ = std::thread([this] { gameDetectionLoop(); });
     }
     refreshPacketCounts();
     return diagnostics_;
@@ -1721,7 +1763,7 @@ void Engine::arm() {
     diagnostics_.status = captureStarted ? captureSession_->status() : captureSession_->status();
     refreshAudioRouting();
     audioReplayCoordinator_->start();
-    audioCaptureWorker_->start();
+    audioCaptureWorker_->start(false);
     diagnostics_.audioReady = audioCaptureWorker_->running();
     refreshPacketCounts();
 }

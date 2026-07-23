@@ -494,7 +494,7 @@ AudioCaptureWorker::~AudioCaptureWorker() {
     stop();
 }
 
-void AudioCaptureWorker::start() {
+void AudioCaptureWorker::start(bool startConfiguredApps) {
     if (running_.exchange(true)) return;
     coreThreads_.emplace_back(&AudioCaptureWorker::runCapture, this, true, "system-loopback-pcm");
     {
@@ -505,13 +505,25 @@ void AudioCaptureWorker::start() {
     std::vector<std::string> appProcessNames;
     {
         std::lock_guard lock(configMutex_);
+        appCaptureEnabled_ = startConfiguredApps;
         appProcessNames = appProcessNames_;
-        for (const auto& processName : appProcessNames) {
-            startAppCaptureThreadLocked(processName);
+        if (appCaptureEnabled_) {
+            for (const auto& processName : appProcessNames) {
+                startAppCaptureThreadLocked(processName);
+            }
         }
     }
     if (appProcessNames.empty()) {
         std::cerr << "[audio] No app audio sources configured." << std::endl;
+    }
+}
+
+void AudioCaptureWorker::startConfiguredAppSources() {
+    std::lock_guard lock(configMutex_);
+    if (!running_ || appCaptureEnabled_) return;
+    appCaptureEnabled_ = true;
+    for (const auto& processName : appProcessNames_) {
+        startAppCaptureThreadLocked(processName);
     }
 }
 
@@ -524,6 +536,7 @@ void AudioCaptureWorker::stop() {
     std::vector<std::thread> appThreadsToJoin;
     {
         std::lock_guard lock(configMutex_);
+        appCaptureEnabled_ = false;
         for (auto& [_, appThread] : appThreads_) {
             if (appThread.stopRequested) appThread.stopRequested->store(true);
             if (appThread.thread.joinable()) {
@@ -589,7 +602,7 @@ void AudioCaptureWorker::configureAppSources(const std::vector<std::string>& pro
         for (const auto& name : appProcessNames_) std::cerr << " " << name;
         std::cerr << (appProcessNames_.empty() ? " (none)" : "") << std::endl;
 
-        if (running_) {
+        if (running_ && appCaptureEnabled_) {
             for (const auto& processName : removed) {
                 auto it = appThreads_.find(processName);
                 if (it == appThreads_.end()) continue;
