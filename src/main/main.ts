@@ -9,7 +9,36 @@ import { format } from "node:util";
 import { basename, dirname, extname, join, parse, normalize } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
+import { constants as osConstants, setPriority } from "node:os";
 import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, SaveClipResult, ClipSoundOption, UpdateState } from "../shared/types";
+
+type CapturePressure = EngineDiagnostics["capturePressure"];
+
+let latestCapturePressure: CapturePressure = "healthy";
+
+function updateCapturePressure(pressure: CapturePressure | undefined): void {
+  latestCapturePressure = pressure ?? "healthy";
+  thumbnailTaskLimiter?.pump();
+  iconTaskLimiter?.pump();
+}
+
+function backgroundWorkLimit(healthyLimit: number): number {
+  return latestCapturePressure === "healthy" ? healthyLimit : 1;
+}
+
+function lowerProcessPriority(child: ChildProcessWithoutNullStreams | import("node:child_process").ChildProcess): void {
+  if (!child.pid) return;
+  try {
+    setPriority(child.pid, osConstants.priority.PRIORITY_BELOW_NORMAL);
+  } catch {
+    // Best effort; capture correctness never depends on process priority hints.
+  }
+}
+
+async function yieldForCapturePressure(): Promise<void> {
+  const delayMs = latestCapturePressure === "critical" ? 200 : latestCapturePressure === "elevated" ? 20 : 0;
+  if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
 
 const defaultSettings: ClipSettings = {
   clipLengthSeconds: 30,
@@ -222,6 +251,17 @@ class EngineClient {
     bitrateMbps: 40,
     hardwareAcceleration: false,
     droppedFrames: 0,
+    captureOverflowDrops: 0,
+    captureCoalescedDrops: 0,
+    captureSlotDrops: 0,
+    captureCallbackErrors: 0,
+    schedulerDroppedFrames: 0,
+    encoderBackpressureDrops: 0,
+    nvencInFlightFrames: 0,
+    maximumCaptureGap100ns: 0,
+    maximumSubmitLatency100ns: 0,
+    captureEpoch: 0,
+    capturePressure: "healthy",
     nvencAvailable: false,
     engineRunning: false,
     d3d11Ready: false,
@@ -273,6 +313,7 @@ class EngineClient {
     try {
       const diagnostics = await this.request<EngineDiagnostics>("getDiagnostics", {});
       this.lastDiagnostics = diagnostics;
+      updateCapturePressure(diagnostics.capturePressure);
       return diagnostics;
     } catch (error) {
       // The engine might be blocked (e.g. saving a clip), so just return the last known state instead of throwing.
@@ -349,6 +390,7 @@ class EngineClient {
       micDeviceName: settings.audioSources.find((source) => source.kind === "microphone")?.micDeviceName ?? ""
     }, 15_000);
     this.lastDiagnostics = diagnostics;
+    updateCapturePressure(diagnostics.capturePressure);
     return diagnostics;
   }
 
@@ -728,6 +770,29 @@ function audioChunkHeaders(extra: Record<string, string | number> = {}): Record<
   };
 }
 
+function selectedPlaybackAudioIndexes(audioTracks: string[]): number[] {
+  return audioTracks
+    .map((track, index) => ({ track, index }))
+    .filter(({ track }) => track !== "mixed-preview-pcm" && track !== "Mixed preview")
+    .map(({ index }) => index);
+}
+
+function mixedAudioFilter(audioIndexes: number[]): string {
+  const alignedInputs = audioIndexes.map((index, position) => ({
+    input: `[0:a:${index}]`,
+    output: `[aligned${position}]`
+  }));
+  if (alignedInputs.length === 1) {
+    return `${alignedInputs[0].input}aresample=48000:async=1:first_pts=0,apad[aout]`;
+  }
+
+  const alignmentFilters = alignedInputs
+    .map(({ input, output }) => `${input}aresample=48000:async=1:first_pts=0,apad${output}`)
+    .join(";");
+  return `${alignmentFilters};${alignedInputs.map(({ output }) => output).join("")}` +
+    `amix=inputs=${alignedInputs.length}:duration=longest:dropout_transition=0[aout]`;
+}
+
 function sendMixedAudioChunk(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
@@ -758,25 +823,24 @@ function sendMixedAudioChunk(
     return;
   }
 
-  const filterInputs = audioIndexes.map((index) => `[0:a:${index}]`).join("");
-  const filter = audioIndexes.length === 1
-    ? `${filterInputs}aresample=48000[aout]`
-    : `${filterInputs}amix=inputs=${audioIndexes.length}:duration=longest:dropout_transition=0,aresample=48000[aout]`;
+  const filter = mixedAudioFilter(audioIndexes);
 
   const child = spawn(resolveFfmpegPath(), [
     "-hide_banner",
     "-loglevel",
     "error",
-    "-ss",
-    start.toFixed(3),
-    "-t",
-    duration.toFixed(3),
     "-i",
     filePath,
     "-filter_complex",
     filter,
     "-map",
     "[aout]",
+    // Output-side seeking preserves MP4 edit-list gaps. Input-side seeking can
+    // start sparse AAC tracks from the wrong media run and replay old audio.
+    "-ss",
+    start.toFixed(6),
+    "-t",
+    duration.toFixed(6),
     "-vn",
     "-sn",
     "-dn",
@@ -788,6 +852,7 @@ function sendMixedAudioChunk(
     "wav",
     "pipe:1"
   ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  lowerProcessPriority(child);
 
   const chunks: Buffer[] = [];
   let stderr = "";
@@ -954,6 +1019,7 @@ function resolveFfmpegPath(): string {
 function runFfmpeg(args: string[]): Promise<{ ok: boolean; message: string }> {
   return new Promise((resolve) => {
     const child = spawn(resolveFfmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    lowerProcessPriority(child);
     let stderr = "";
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
@@ -973,6 +1039,7 @@ function queryFfmpegFilterSupport(): Promise<{ scaleCuda: boolean; scaleNpp: boo
   if (!ffmpegFilterSupport) {
     ffmpegFilterSupport = new Promise((resolve) => {
       const child = spawn(resolveFfmpegPath(), ["-hide_banner", "-filters"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      lowerProcessPriority(child);
       let output = "";
       child.stdout?.on("data", (chunk: Buffer) => {
         output += chunk.toString("utf8");
@@ -1029,7 +1096,10 @@ class AsyncTaskLimiter {
   private active = 0;
   private readonly waiting: Array<() => void> = [];
 
-  constructor(private readonly limit: number) {}
+  constructor(
+    private readonly limit: number,
+    private readonly currentLimit: () => number = () => limit
+  ) {}
 
   run<T>(task: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -1037,17 +1107,24 @@ class AsyncTaskLimiter {
         this.active++;
         void task().then(resolve, reject).finally(() => {
           this.active--;
-          this.waiting.shift()?.();
+          this.pump();
         });
       };
-      if (this.active < this.limit) start();
-      else this.waiting.push(start);
+      this.waiting.push(start);
+      this.pump();
     });
+  }
+
+  pump(): void {
+    const effectiveLimit = Math.max(1, Math.min(this.limit, this.currentLimit()));
+    while (this.active < effectiveLimit && this.waiting.length > 0) {
+      this.waiting.shift()?.();
+    }
   }
 }
 
-const thumbnailTaskLimiter = new AsyncTaskLimiter(3);
-const iconTaskLimiter = new AsyncTaskLimiter(2);
+const thumbnailTaskLimiter = new AsyncTaskLimiter(3, () => backgroundWorkLimit(3));
+const iconTaskLimiter = new AsyncTaskLimiter(2, () => backgroundWorkLimit(2));
 const thumbnailWidth = 480;
 const thumbnailHeight = 270;
 const thumbnailCacheLimit = 64;
@@ -1819,10 +1896,7 @@ async function stitchSegmentedClip(
 async function clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise<{ url: string; mixed: boolean; message: string; audioChunkUrl?: string; audioChunkSeconds?: number }> {
   if (!existsSync(filePath)) return { url: "", mixed: false, message: "Clip file was not found." };
 
-  const selectedAudioIndexes = audioTracks
-    .map((track, index) => ({ track, index }))
-    .filter(({ track }) => track !== "mixed-preview-pcm" && track !== "Mixed preview")
-    .map(({ index }) => index);
+  const selectedAudioIndexes = selectedPlaybackAudioIndexes(audioTracks);
 
   if (selectedAudioIndexes.length <= 1) {
     return {
@@ -1981,6 +2055,7 @@ async function scanImportedVideoFiles(root: string): Promise<string[]> {
   const maxEntries = 6000;
 
   while (queue.length > 0 && scanned < maxEntries) {
+    await yieldForCapturePressure();
     const current = queue.shift()!;
     let entries;
     try {
@@ -1991,6 +2066,7 @@ async function scanImportedVideoFiles(root: string): Promise<string[]> {
 
     for (const entry of entries) {
       if (++scanned > maxEntries) break;
+      if ((scanned & 127) === 0) await yieldForCapturePressure();
       const fullPath = join(current, entry.name);
       if (entry.isDirectory()) {
         if (!entry.name.startsWith(".")) queue.push(fullPath);

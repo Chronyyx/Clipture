@@ -1,6 +1,7 @@
 #include "clipture/Mp4Muxer.hpp"
 #include "clipture/AacEncoderSession.hpp"
 #include "clipture/BoundedWrite.hpp"
+#include "clipture/VideoTimeline.hpp"
 
 #include <Windows.h>
 #include <mfapi.h>
@@ -19,6 +20,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <span>
 #include <sstream>
 #include <utility>
@@ -624,6 +626,139 @@ bool encodePcmTrackToAacBatched(const PcmAudioTrack& pcmTrack, AacAudioTrack& aa
     return !aacTrack.samples.empty();
 }
 
+struct AudioContinuityStats {
+    std::size_t insertedSilenceSamples = 0;
+    std::size_t removedOverlappingSamples = 0;
+    int64_t maximumGap100ns = 0;
+};
+
+struct ReusableSilenceSample {
+    PacketPayloadPtr payload;
+    uint32_t frameCount = 1024;
+};
+
+bool makeReusableAacSilence(
+    int sampleRate,
+    int channels,
+    std::vector<ReusableSilenceSample>& silence,
+    std::string& error) {
+    AacEncoderSession encoder;
+    if (!encoder.start(sampleRate, channels, error)) return false;
+
+    const uint32_t inputFrames = static_cast<uint32_t>(std::max(sampleRate, 8'000));
+    const std::size_t sampleCount = static_cast<std::size_t>(inputFrames) * std::max(1, channels);
+    std::vector<std::byte> zeroPcm(sampleCount * sizeof(int16_t), std::byte { 0 });
+    std::vector<AacEncodedFrame> encoded;
+    if (!encoder.encode(zeroPcm, 1, inputFrames, encoded, error)) return false;
+    if (!encoder.finish(encoded, error)) return false;
+    if (encoded.empty()) {
+        error = "AAC encoder produced no reusable silence samples.";
+        return false;
+    }
+
+    const std::size_t first = encoded.size() > 10 ? 4 : 0;
+    const std::size_t last = std::min(encoded.size(), first + 16);
+    silence.reserve(last - first);
+    for (std::size_t index = first; index < last; ++index) {
+        auto& frame = encoded[index];
+        if (frame.payload.empty()) continue;
+        silence.push_back({
+            std::make_shared<PacketPayload>(std::move(frame.payload)),
+            std::max<uint32_t>(1, frame.durationFrames)
+        });
+    }
+    if (silence.empty()) {
+        error = "AAC encoder produced no usable silence samples.";
+        return false;
+    }
+    return true;
+}
+
+bool makeAudioTimelineContinuous(
+    AacAudioTrack& track,
+    AudioContinuityStats& stats,
+    std::string& error) {
+    if (track.samples.empty()) return true;
+
+    const int sampleRate = std::max(1, track.sampleRate);
+    constexpr int64_t kTolerance100ns = 50'000LL;
+    auto sampleDuration100ns = [sampleRate](const OwnedSample& sample) {
+        return (static_cast<int64_t>(std::max<uint32_t>(1, sample.encodedFrameCount)) * 10'000'000LL) /
+            sampleRate;
+    };
+
+    std::vector<OwnedSample> continuous;
+    continuous.reserve(track.samples.size());
+    std::vector<ReusableSilenceSample> reusableSilence;
+    std::size_t nextSilence = 0;
+    const uint32_t timelineEpoch = std::max<uint32_t>(1, track.samples.front().encoderEpoch);
+
+    auto appendSample = [&](OwnedSample sample, int64_t pts100ns, bool preservePriming) {
+        sample.pts100ns = pts100ns;
+        sample.encoderEpoch = timelineEpoch;
+        if (!preservePriming) sample.primingFrames = 0;
+        sample.info.duration = std::max<uint32_t>(1, sample.encodedFrameCount);
+        continuous.push_back(std::move(sample));
+    };
+
+    const int64_t firstPts100ns = track.samples.front().pts100ns;
+    appendSample(std::move(track.samples.front()), firstPts100ns, true);
+    int64_t expectedPts100ns = continuous.front().pts100ns + sampleDuration100ns(continuous.front());
+    for (std::size_t index = 1; index < track.samples.size(); ++index) {
+        auto sample = std::move(track.samples[index]);
+        const int64_t duration100ns = sampleDuration100ns(sample);
+        const int64_t sampleEnd100ns = sample.pts100ns + duration100ns;
+        if (sample.pts100ns < expectedPts100ns - kTolerance100ns ||
+            sampleEnd100ns <= expectedPts100ns + kTolerance100ns) {
+            ++stats.removedOverlappingSamples;
+            continue;
+        }
+
+        const int64_t gap100ns = sample.pts100ns - expectedPts100ns;
+        stats.maximumGap100ns = std::max(stats.maximumGap100ns, gap100ns);
+        if (gap100ns > kTolerance100ns) {
+            if (reusableSilence.empty() &&
+                !makeReusableAacSilence(sampleRate, track.channels, reusableSilence, error)) {
+                return false;
+            }
+            const uint32_t silenceFrameCount = reusableSilence.front().frameCount;
+            const int64_t silenceDuration100ns =
+                (static_cast<int64_t>(silenceFrameCount) * 10'000'000LL) / sampleRate;
+            const int64_t silenceSamples = std::max<int64_t>(
+                0,
+                (gap100ns + silenceDuration100ns / 2) / std::max<int64_t>(1, silenceDuration100ns));
+            for (int64_t silenceIndex = 0; silenceIndex < silenceSamples; ++silenceIndex) {
+                const auto& reusable = reusableSilence[nextSilence++ % reusableSilence.size()];
+                OwnedSample silent;
+                silent.sharedPayload = reusable.payload;
+                silent.info.size = reusable.payload ? reusable.payload->size() : 0;
+                silent.info.duration = reusable.frameCount;
+                silent.encodedFrameCount = reusable.frameCount;
+                appendSample(std::move(silent), expectedPts100ns, false);
+                expectedPts100ns += sampleDuration100ns(continuous.back());
+                ++stats.insertedSilenceSamples;
+            }
+        }
+
+        appendSample(std::move(sample), expectedPts100ns, false);
+        expectedPts100ns += sampleDuration100ns(continuous.back());
+    }
+
+    track.samples = std::move(continuous);
+    track.firstPts100ns = track.samples.front().pts100ns;
+    track.primingFrames = std::max<int32_t>(0, track.samples.front().primingFrames);
+    int64_t verifiedNextPts100ns = track.samples.front().pts100ns;
+    for (const auto& sample : track.samples) {
+        if (sample.encoderEpoch != timelineEpoch ||
+            std::abs(sample.pts100ns - verifiedNextPts100ns) > kTolerance100ns) {
+            error = "AAC timeline remained discontinuous after normalization.";
+            return false;
+        }
+        verifiedNextPts100ns = sample.pts100ns + sampleDuration100ns(sample);
+    }
+    return true;
+}
+
 bool startCodeAt(std::span<const std::byte> data, std::size_t offset, std::size_t& size) {
     if (offset + 3 <= data.size() &&
         data[offset] == std::byte{0} &&
@@ -852,81 +987,40 @@ Bytes makeAudioEdts(
     uint64_t movieDuration100ns,
     int64_t videoStartPts100ns) {
     if (track.samples.empty() || movieDuration100ns == 0) return {};
-
-    struct AudioRun {
-        int64_t presentationStart100ns = 0;
-        uint64_t mediaStartFrames = 0;
-        uint64_t mediaDurationFrames = 0;
-        uint32_t primingFrames = 0;
-        uint32_t epoch = 0;
-    };
-
-    constexpr int64_t kContiguousTolerance100ns = 50'000LL;
     const int sampleRate = std::max(1, track.sampleRate);
-    std::vector<AudioRun> runs;
-    uint64_t mediaCursorFrames = 0;
-    int64_t expectedNextPts100ns = 0;
-    for (const auto& sample : track.samples) {
-        const uint32_t frameCount = std::max<uint32_t>(1, sample.encodedFrameCount);
-        const bool startsRun = runs.empty() ||
-            sample.encoderEpoch != runs.back().epoch ||
-            std::abs(sample.pts100ns - expectedNextPts100ns) > kContiguousTolerance100ns;
-        if (startsRun) {
-            runs.push_back(AudioRun {
-                sample.pts100ns,
-                mediaCursorFrames,
-                0,
-                static_cast<uint32_t>(std::max<int32_t>(0, sample.primingFrames)),
-                sample.encoderEpoch
-            });
-        }
-        runs.back().mediaDurationFrames += frameCount;
-        mediaCursorFrames += frameCount;
-        expectedNextPts100ns = sample.pts100ns +
-            (static_cast<int64_t>(frameCount) * 10'000'000LL) / sampleRate;
-    }
-
     struct EditEntry {
         uint64_t duration100ns = 0;
         int64_t mediaTimeFrames = -1;
     };
     std::vector<EditEntry> edits;
-    uint64_t presentationCursor100ns = 0;
-    for (const auto& run : runs) {
-        const int64_t relativeStart100ns = run.presentationStart100ns - videoStartPts100ns;
-        uint64_t desiredStart100ns = relativeStart100ns > 0
-            ? static_cast<uint64_t>(relativeStart100ns)
-            : 0;
-        desiredStart100ns = std::min(desiredStart100ns, movieDuration100ns);
-        if (desiredStart100ns > presentationCursor100ns) {
-            edits.push_back({ desiredStart100ns - presentationCursor100ns, -1 });
-            presentationCursor100ns = desiredStart100ns;
-        }
-        if (presentationCursor100ns >= movieDuration100ns) break;
 
-        uint64_t trimmedFrames = run.primingFrames;
-        if (relativeStart100ns < 0) {
-            trimmedFrames += static_cast<uint64_t>(
-                ((-relativeStart100ns) * sampleRate + 9'999'999LL) / 10'000'000LL);
-        } else if (desiredStart100ns < presentationCursor100ns) {
-            const uint64_t overlap100ns = presentationCursor100ns - desiredStart100ns;
-            trimmedFrames += (overlap100ns * static_cast<uint64_t>(sampleRate) + 9'999'999ULL) /
-                10'000'000ULL;
-        }
-        if (trimmedFrames >= run.mediaDurationFrames) continue;
+    uint64_t mediaDurationFrames = 0;
+    for (const auto& sample : track.samples) {
+        mediaDurationFrames += std::max<uint32_t>(1, sample.encodedFrameCount);
+    }
+    const int64_t relativeStart100ns = track.samples.front().pts100ns - videoStartPts100ns;
+    const uint64_t presentationStart100ns = relativeStart100ns > 0
+        ? std::min<uint64_t>(static_cast<uint64_t>(relativeStart100ns), movieDuration100ns)
+        : 0;
+    if (presentationStart100ns > 0) edits.push_back({ presentationStart100ns, -1 });
 
-        const uint64_t playableFrames = run.mediaDurationFrames - trimmedFrames;
-        uint64_t playableDuration100ns =
-            (playableFrames * 10'000'000ULL) / static_cast<uint64_t>(sampleRate);
-        playableDuration100ns = std::min(
-            playableDuration100ns,
+    uint64_t trimmedFrames = static_cast<uint64_t>(
+        std::max<int32_t>(0, track.samples.front().primingFrames));
+    if (relativeStart100ns < 0) {
+        trimmedFrames += static_cast<uint64_t>(
+            ((-relativeStart100ns) * sampleRate + 9'999'999LL) / 10'000'000LL);
+    }
+
+    uint64_t presentationCursor100ns = presentationStart100ns;
+    if (trimmedFrames < mediaDurationFrames && presentationCursor100ns < movieDuration100ns) {
+        const uint64_t playableFrames = mediaDurationFrames - trimmedFrames;
+        const uint64_t playableDuration100ns = std::min(
+            (playableFrames * 10'000'000ULL) / static_cast<uint64_t>(sampleRate),
             movieDuration100ns - presentationCursor100ns);
-        if (playableDuration100ns == 0) continue;
-        edits.push_back({
-            playableDuration100ns,
-            static_cast<int64_t>(run.mediaStartFrames + trimmedFrames)
-        });
-        presentationCursor100ns += playableDuration100ns;
+        if (playableDuration100ns > 0) {
+            edits.push_back({ playableDuration100ns, static_cast<int64_t>(trimmedFrames) });
+            presentationCursor100ns += playableDuration100ns;
+        }
     }
     if (presentationCursor100ns < movieDuration100ns) {
         edits.push_back({ movieDuration100ns - presentationCursor100ns, -1 });
@@ -1668,14 +1762,10 @@ MuxResult muxH264ToMp4(
             const int64_t gap = std::max<int64_t>(1, videoSamples[i + 1].packet->pts100ns - videoSamples[i].packet->pts100ns);
             videoSamples[i].info.duration = static_cast<uint32_t>(std::min<int64_t>(gap, 0xFFFFFFFFLL));
         }
-        // Last frame: use the packet's own duration or average of previous gaps.
-        if (!videoSamples.empty()) {
-            const int64_t totalSpan = videoSamples.back().packet->pts100ns - videoSamples.front().packet->pts100ns;
-            const int64_t avgDuration = totalSpan > 0 && videoSamples.size() > 1
-                ? totalSpan / static_cast<int64_t>(videoSamples.size() - 1)
-                : 10'000'000LL / std::max(1, fps);
-            videoSamples.back().info.duration = static_cast<uint32_t>(std::min<int64_t>(std::max<int64_t>(1, avgDuration), 0xFFFFFFFFLL));
-        }
+        // A large gap is already represented by the preceding sample. Reusing the
+        // average here would count that gap a second time at the end of the clip.
+        videoSamples.back().info.duration = finalVideoSampleDuration100ns(
+            videoSamples.back().packet->duration100ns, fps);
     } else if (videoSamples.size() == 1) {
         videoSamples[0].info.duration = static_cast<uint32_t>(10'000'000LL / std::max(1, fps));
     }
@@ -1752,7 +1842,25 @@ MuxResult muxH264ToMp4(
         }
     }
 
-    for (auto& track : audioTracks) finalizeAudioTimeline(track);
+    AudioContinuityStats audioContinuity;
+    std::string audioContinuityError;
+    for (auto& track : audioTracks) {
+        finalizeAudioTimeline(track);
+        if (!makeAudioTimelineContinuous(track, audioContinuity, audioContinuityError)) {
+            result.message = audioContinuityError.empty()
+                ? "AAC timeline normalization failed."
+                : audioContinuityError;
+            logMuxSaveTiming("total", totalStartedAt, "ok=false reason=aac_timeline_normalization");
+            return result;
+        }
+    }
+    logMuxSaveTiming(
+        "audio_timeline",
+        totalStartedAt,
+        "tracks=" + std::to_string(audioTracks.size()) +
+            " insertedSilenceSamples=" + std::to_string(audioContinuity.insertedSilenceSamples) +
+            " removedOverlaps=" + std::to_string(audioContinuity.removedOverlappingSamples) +
+            " maximumGap100ns=" + std::to_string(audioContinuity.maximumGap100ns));
     std::erase_if(audioTracks, [](const AacAudioTrack& track) { return track.samples.empty(); });
 
     videoSamples.front().info.keyframe = true;

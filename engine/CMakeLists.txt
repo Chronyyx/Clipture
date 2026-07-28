@@ -47,6 +47,7 @@ if(BUILD_TESTING)
     src/AacEncoderSession.cpp
     src/AudioReplayCoordinator.cpp
     src/H264PacketAnalyzer.cpp
+    src/FrameQueue.cpp
   )
   target_include_directories(clipture_packet_tests PRIVATE include)
   target_compile_features(clipture_packet_tests PRIVATE cxx_std_20)

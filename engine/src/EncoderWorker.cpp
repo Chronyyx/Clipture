@@ -1,7 +1,10 @@
 #include "clipture/EncoderWorker.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
+#include "clipture/MediaClock.hpp"
+#include "clipture/VideoTimeline.hpp"
 
 #include <Windows.h>
+#include <avrt.h>
 #include <d3d11.h>
 #include <d3d11_1.h>
 #include <ffnvcodec/nvEncodeAPI.h>
@@ -9,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <cstddef>
 #include <cstring>
 #include <deque>
@@ -232,8 +236,13 @@ EncodeDimensions fitEncodeDimensions(int width, int height, int capWidth, int ca
 
 class NvencSession {
 public:
-    explicit NvencSession(PacketRingBuffer& packetPool)
-        : packetPool_(packetPool) {}
+    NvencSession(
+        PacketRingBuffer& packetPool,
+        std::atomic<int>* externalInFlightCount,
+        std::atomic<int>* externalDropCount)
+        : packetPool_(packetPool),
+          externalInFlightCount_(externalInFlightCount),
+          externalDropCount_(externalDropCount) {}
 
     ~NvencSession() {
         destroy();
@@ -408,6 +417,9 @@ public:
             encodeConfig_.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
             encodeConfig_.rcParams.averageBitRate = static_cast<uint32_t>(std::max(1, bitrateMbps) * 1'000'000);
             encodeConfig_.rcParams.maxBitRate = encodeConfig_.rcParams.averageBitRate;
+            encodeConfig_.rcParams.enableLookahead = 0;
+            encodeConfig_.rcParams.lookaheadDepth = 0;
+            encodeConfig_.rcParams.zeroReorderDelay = 1;
             encodeConfig_.encodeCodecConfig.h264Config.idrPeriod = encodeConfig_.gopLength;
             encodeConfig_.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
 
@@ -455,6 +467,7 @@ public:
             fps_ = std::max(1, fps);
             bitrateMbps_ = std::max(1, bitrateMbps);
             initialized_ = true;
+            if (asyncEnabled_) startOutputThread();
             initFailureLogged_ = false;
             status = asyncEnabled_
                 ? "Direct NVENC H.264 async " + nvencPresetName(boundedPreset) + " session initialized."
@@ -482,14 +495,6 @@ public:
         return false;
     }
 
-    bool needsReconfigure(int outputWidth, int outputHeight, int fps, int bitrateMbps) const {
-        if (!initialized_) return false;
-        return requestedWidth_ != std::max(1, outputWidth) ||
-            requestedHeight_ != std::max(1, outputHeight) ||
-            fps_ != std::max(1, fps) ||
-            bitrateMbps_ != std::max(1, bitrateMbps);
-    }
-
     int outputWidth() const {
         return width_;
     }
@@ -498,129 +503,43 @@ public:
         return height_;
     }
 
-    bool canReconfigureTo(int outputWidth, int outputHeight) const {
-        const auto encodeSize = fitEncodeDimensions(outputWidth, outputHeight, h264CapWidth_, h264CapHeight_);
-        return initialized_ &&
-            outputWidth > 0 &&
-            outputHeight > 0 &&
-            encodeSize.width <= maxEncodeWidth_ &&
-            encodeSize.height <= maxEncodeHeight_;
-    }
-
-    bool reconfigure(
-        int outputWidth,
-        int outputHeight,
-        int fps,
-        int bitrateMbps,
-        std::vector<EncodedPacket>& packets,
-        std::string& status) {
-        if (!initialized_) return true;
-        outputWidth = std::max(1, outputWidth);
-        outputHeight = std::max(1, outputHeight);
-        fps = std::max(1, fps);
-        bitrateMbps = std::max(1, bitrateMbps);
-        if (!needsReconfigure(outputWidth, outputHeight, fps, bitrateMbps)) return true;
-        if (!canReconfigureTo(outputWidth, outputHeight)) {
-            status = "NVENC reconfigure needs a larger dynamic encode canvas.";
-            return false;
-        }
-        const int requestedWidth = outputWidth;
-        const int requestedHeight = outputHeight;
-        const auto encodeSize = fitEncodeDimensions(requestedWidth, requestedHeight, h264CapWidth_, h264CapHeight_);
-
-        if (!drainAll(packets, status)) {
-            return false;
-        }
-
-        encodeConfig_.gopLength = static_cast<uint32_t>(fps);
-        encodeConfig_.rcParams.averageBitRate = static_cast<uint32_t>(bitrateMbps * 1'000'000);
-        encodeConfig_.rcParams.maxBitRate = encodeConfig_.rcParams.averageBitRate;
-        encodeConfig_.encodeCodecConfig.h264Config.idrPeriod = encodeConfig_.gopLength;
-
-        initParams_.encodeWidth = static_cast<uint32_t>(encodeSize.width);
-        initParams_.encodeHeight = static_cast<uint32_t>(encodeSize.height);
-        initParams_.darWidth = initParams_.encodeWidth;
-        initParams_.darHeight = initParams_.encodeHeight;
-        initParams_.frameRateNum = static_cast<uint32_t>(fps);
-        initParams_.frameRateDen = 1;
-        initParams_.encodeConfig = &encodeConfig_;
-
-        NV_ENC_RECONFIGURE_PARAMS params {};
-        params.version = nvencStructVersionForApi(2, apiVersion_, true);
-        params.reInitEncodeParams = initParams_;
-        params.resetEncoder = 1;
-        params.forceIDR = 1;
-
-        const NVENCSTATUS nvStatus = funcs_.nvEncReconfigureEncoder(encoder_, &params);
-        if (nvStatus != NV_ENC_SUCCESS) {
-            status = "NvEncReconfigureEncoder failed: " + statusDetails(nvStatus);
-            return false;
-        }
-
-        scaledOutputView_.Reset();
-        scaledTexture_.Reset();
-        videoProcessor_.Reset();
-        videoProcessorEnumerator_.Reset();
-        requestedWidth_ = requestedWidth;
-        requestedHeight_ = requestedHeight;
-        width_ = encodeSize.width;
-        height_ = encodeSize.height;
-        fps_ = fps;
-        bitrateMbps_ = bitrateMbps;
-        frameIndex_ = 0;
-        status = "Direct NVENC reconfigured output to " + std::to_string(width_) + "x" + std::to_string(height_) + ".";
-        if (encodeSize.capped) {
-            status += " Output was fit to NVENC H.264 caps from " +
-                std::to_string(requestedWidth) + "x" + std::to_string(requestedHeight) + ".";
-        }
-        return true;
-    }
-
-
     bool encode(const CapturedFrame& frame, std::vector<EncodedPacket>& packets, std::string& status) {
         if (!initialized_) {
             status = "NVENC encode called before initialization.";
             return false;
         }
 
-        if (!drainReady(packets, status)) {
-            return false;
-        }
-        while (inFlightOrder_.size() >= outputSlots_.size()) {
-            bool drained = false;
-            if (!drainOne(packets, true, status, drained)) {
-                return false;
-            }
-            if (!drained) break;
-        }
-
-        CapturedFrame inputFrame = frame;
-        if (frame.width != width_ || frame.height != height_) {
-            auto scaledTexture = scaleFrameToOutput(frame, status);
-            if (!scaledTexture) {
-                return false;
-            }
-            inputFrame.texture = scaledTexture;
-            inputFrame.width = width_;
-            inputFrame.height = height_;
-        }
-
-        auto* registeredInput = registeredInputFor(inputFrame.texture.Get(), inputFrame.width, inputFrame.height, status);
-        if (!registeredInput) {
-            return false;
-        }
-        while (inputResourceInFlight(registeredInput->registeredResource)) {
-            bool drained = false;
-            if (!drainOne(packets, true, status, drained)) {
-                return false;
-            }
-            if (!drained) break;
-        }
+        if (!drainReady(packets, status)) return false;
 
         auto* slot = freeOutputSlot(packets, status);
         if (!slot) {
+            if (externalDropCount_) externalDropCount_->fetch_add(1, std::memory_order_relaxed);
+            status = "NVENC output pool is busy; dropping this frame without blocking capture.";
+            return true;
+        }
+
+        CapturedFrame inputFrame = frame;
+        auto encodeTexture = scaleFrameToOutput(frame, *slot, status);
+        if (!encodeTexture) {
+            releaseOutputSlotReservation(*slot);
             return false;
         }
+        inputFrame.texture = encodeTexture;
+        inputFrame.width = width_;
+        inputFrame.height = height_;
+
+        auto* registeredInput = registeredInputFor(inputFrame.texture.Get(), inputFrame.width, inputFrame.height, status);
+        if (!registeredInput) {
+            releaseOutputSlotReservation(*slot);
+            return false;
+        }
+        if (inputResourceInFlight(registeredInput->registeredResource)) {
+            releaseOutputSlotReservation(*slot);
+            if (externalDropCount_) externalDropCount_->fetch_add(1, std::memory_order_relaxed);
+            status = "NVENC input is still in flight; dropping this duplicate frame without blocking capture.";
+            return true;
+        }
+
         if (asyncEnabled_ && slot->completionEvent) {
             ResetEvent(slot->completionEvent);
         }
@@ -630,6 +549,7 @@ public:
         mapped.registeredResource = registeredInput->registeredResource;
         NVENCSTATUS nvStatus = funcs_.nvEncMapInputResource(encoder_, &mapped);
         if (nvStatus != NV_ENC_SUCCESS) {
+            releaseOutputSlotReservation(*slot);
             status = "NvEncMapInputResource failed: " + statusDetails(nvStatus);
             return false;
         }
@@ -645,21 +565,26 @@ public:
         pic.inputBuffer = mapped.mappedResource;
         pic.outputBitstream = slot->bitstreamBuffer;
         pic.completionEvent = asyncEnabled_ ? slot->completionEvent : nullptr;
-        pic.bufferFmt = mapped.mappedBufferFmt == NV_ENC_BUFFER_FORMAT_UNDEFINED ? NV_ENC_BUFFER_FORMAT_ARGB : mapped.mappedBufferFmt;
+        pic.bufferFmt = mapped.mappedBufferFmt == NV_ENC_BUFFER_FORMAT_UNDEFINED
+            ? registeredInput->bufferFormat
+            : mapped.mappedBufferFmt;
         pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
-        if (frameIndex_ % static_cast<uint32_t>(fps_) == 0) {
+        if (nextKeyframePts100ns_ == 0 || inputFrame.pts100ns >= nextKeyframePts100ns_) {
             pic.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
+            nextKeyframePts100ns_ = inputFrame.pts100ns + 10'000'000LL;
         }
 
         nvStatus = funcs_.nvEncEncodePicture(encoder_, &pic);
         if (nvStatus == NV_ENC_ERR_NEED_MORE_INPUT) {
             funcs_.nvEncUnmapInputResource(encoder_, mapped.mappedResource);
+            releaseOutputSlotReservation(*slot);
             ++frameIndex_;
             status = "Direct NVENC accepted input and is waiting for more frames.";
             return true;
         }
         if (nvStatus != NV_ENC_SUCCESS) {
             funcs_.nvEncUnmapInputResource(encoder_, mapped.mappedResource);
+            releaseOutputSlotReservation(*slot);
             status = "NvEncEncodePicture failed: " + statusDetails(nvStatus);
             return false;
         }
@@ -672,19 +597,29 @@ public:
         slot->frameEncodedHeight = inputFrame.height;
         slot->frameSourceWidth = frame.width;
         slot->frameSourceHeight = frame.height;
+        slot->captureEpoch = frame.captureEpoch;
+        slot->inputLease = inputFrame.textureLease;
         if (asyncEnabled_) {
-            slot->inFlight = true;
-            inFlightOrder_.push_back(slotIndex(slot));
+            {
+                std::lock_guard lock(outputMutex_);
+                inFlightOrder_.push_back(slotIndex(slot));
+                const int current = inFlightCount_.fetch_add(1) + 1;
+                if (externalInFlightCount_) externalInFlightCount_->store(current);
+            }
+            outputCv_.notify_one();
             ++frameIndex_;
             status = "Direct NVENC async pipeline is queueing H.264 frames.";
-            return drainReady(packets, status);
+            collectCompletedPackets(packets);
+            return true;
         }
 
         EncodedPacket packet;
         bool produced = false;
         if (!lockOutputSlot(*slot, packet, status, produced)) {
+            releaseOutputSlotReservation(*slot);
             return false;
         }
+        slot->inFlight = false;
         if (produced) {
             packets.push_back(std::move(packet));
         }
@@ -697,10 +632,15 @@ public:
         return drainAll(packets, status);
     }
 
+    int inFlightCount() const {
+        return inFlightCount_.load();
+    }
+
 private:
     struct RegisteredInput {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
         NV_ENC_REGISTERED_PTR registeredResource = nullptr;
+        NV_ENC_BUFFER_FORMAT bufferFormat = NV_ENC_BUFFER_FORMAT_UNDEFINED;
         int width = 0;
         int height = 0;
     };
@@ -718,15 +658,120 @@ private:
         int frameEncodedHeight = 0;
         int frameSourceWidth = 0;
         int frameSourceHeight = 0;
+        uint64_t captureEpoch = 0;
+        std::shared_ptr<void> inputLease;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> scaledTexture;
+        Microsoft::WRL::ComPtr<ID3D11VideoProcessorOutputView> scaledOutputView;
+        uint64_t scaledViewGeneration = 0;
     };
 
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> scaleFrameToOutput(const CapturedFrame& frame, std::string& status) {
+    void startOutputThread() {
+        if (outputThreadRunning_.exchange(true)) return;
+        outputFatal_.store(false);
+        outputThread_ = std::thread([this] {
+            while (true) {
+                std::size_t index = 0;
+                {
+                    std::unique_lock lock(outputMutex_);
+                    outputCv_.wait(lock, [this] {
+                        return !outputThreadRunning_.load() || !inFlightOrder_.empty();
+                    });
+                    if (inFlightOrder_.empty()) {
+                        if (!outputThreadRunning_) break;
+                        continue;
+                    }
+                    index = inFlightOrder_.front();
+                }
+
+                if (index >= outputSlots_.size()) {
+                    setOutputFailure("NVENC async drain failed: output slot index is invalid.");
+                    break;
+                }
+
+                auto& slot = outputSlots_[index];
+                const DWORD waitResult = WaitForSingleObject(slot.completionEvent, asyncDrainWaitTimeoutMs_);
+                if (waitResult == WAIT_TIMEOUT) {
+                    setOutputFailure(
+                        "NVENC async wait timed out after " +
+                        std::to_string(asyncDrainWaitTimeoutMs_) + " ms.");
+                    std::cerr << "[perf] nvenc_async_wait_timeout timeoutMs="
+                              << asyncDrainWaitTimeoutMs_ << std::endl;
+                    break;
+                }
+                if (waitResult != WAIT_OBJECT_0) {
+                    setOutputFailure("NVENC async wait failed.");
+                    break;
+                }
+
+                EncodedPacket packet;
+                std::string outputStatus;
+                bool produced = false;
+                if (!lockOutputSlot(slot, packet, outputStatus, produced)) {
+                    setOutputFailure(outputStatus);
+                    break;
+                }
+
+                {
+                    std::lock_guard lock(outputMutex_);
+                    if (!inFlightOrder_.empty() && inFlightOrder_.front() == index) {
+                        inFlightOrder_.pop_front();
+                    }
+                    slot.inFlight = false;
+                    const int remaining = inFlightCount_.fetch_sub(1) - 1;
+                    if (externalInFlightCount_) externalInFlightCount_->store(std::max(0, remaining));
+                    if (produced) completedPackets_.push_back(std::move(packet));
+                }
+                outputCv_.notify_all();
+            }
+            outputCv_.notify_all();
+        });
+    }
+
+    void setOutputFailure(std::string failure) {
+        {
+            std::lock_guard lock(outputMutex_);
+            outputFailure_ = std::move(failure);
+            outputFatal_.store(true);
+        }
+        outputCv_.notify_all();
+    }
+
+    void collectCompletedPackets(std::vector<EncodedPacket>& packets) {
+        std::lock_guard lock(outputMutex_);
+        for (auto& packet : completedPackets_) packets.push_back(std::move(packet));
+        completedPackets_.clear();
+    }
+
+    void stopOutputThread() {
+        if (!outputThreadRunning_.exchange(false)) return;
+        outputCv_.notify_all();
+        if (outputThread_.joinable()) outputThread_.join();
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> scaleFrameToOutput(
+        const CapturedFrame& frame,
+        OutputSlot& slot,
+        std::string& status) {
         if (!frame.texture || !device_ || width_ <= 0 || height_ <= 0) {
             status = "NVENC scale failed: invalid frame or output size.";
             return nullptr;
         }
         if (!ensureVideoScaler(frame.width, frame.height, status)) {
             return nullptr;
+        }
+        if (!ensureScaledOutput(slot, status)) {
+            return nullptr;
+        }
+
+        D3D11_TEXTURE2D_DESC scaledDesc {};
+        slot.scaledTexture->GetDesc(&scaledDesc);
+        Microsoft::WRL::ComPtr<ID3D11VideoContext1> videoContext1;
+        if (SUCCEEDED(videoContext_.As(&videoContext1)) && videoContext1) {
+            videoContext1->VideoProcessorSetOutputColorSpace1(
+                videoProcessor_.Get(),
+                scaledDesc.Format == DXGI_FORMAT_NV12
+                    ? DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709
+                    : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
         }
 
         Microsoft::WRL::ComPtr<ID3D11VideoProcessorInputView> inputView;
@@ -750,7 +795,7 @@ private:
         D3D11_VIDEO_PROCESSOR_STREAM stream {};
         stream.Enable = TRUE;
         stream.pInputSurface = inputView.Get();
-        hr = videoContext_->VideoProcessorBlt(videoProcessor_.Get(), scaledOutputView_.Get(), 0, 1, &stream);
+        hr = videoContext_->VideoProcessorBlt(videoProcessor_.Get(), slot.scaledOutputView.Get(), 0, 1, &stream);
         if (FAILED(hr)) {
             std::ostringstream message;
             message << "NVENC scale failed: VideoProcessorBlt HRESULT 0x" << std::hex << hr;
@@ -758,11 +803,11 @@ private:
             return nullptr;
         }
 
-        return scaledTexture_;
+        return slot.scaledTexture;
     }
 
     bool ensureVideoScaler(int inputWidth, int inputHeight, std::string& status) {
-        if (scaledTexture_ &&
+        if (videoProcessor_ &&
             scalerInputWidth_ == inputWidth &&
             scalerInputHeight_ == inputHeight &&
             scalerOutputWidth_ == width_ &&
@@ -818,51 +863,96 @@ private:
             return false;
         }
 
-        D3D11_TEXTURE2D_DESC textureDesc {};
-        textureDesc.Width = static_cast<UINT>(std::max(1, width_));
-        textureDesc.Height = static_cast<UINT>(std::max(1, height_));
-        textureDesc.MipLevels = 1;
-        textureDesc.ArraySize = 1;
-        textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        textureDesc.SampleDesc.Count = 1;
-        textureDesc.Usage = D3D11_USAGE_DEFAULT;
-        textureDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-
-        Microsoft::WRL::ComPtr<ID3D11Texture2D> scaledTexture;
-        hr = device_->CreateTexture2D(&textureDesc, nullptr, &scaledTexture);
-        if (FAILED(hr) || !scaledTexture) {
-            std::ostringstream message;
-            message << "NVENC scale failed: CreateTexture2D HRESULT 0x" << std::hex << hr;
-            status = message.str();
-            return false;
-        }
-
-        Microsoft::WRL::ComPtr<ID3D11VideoProcessorOutputView> outputView;
-        D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outputDesc {};
-        outputDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
-        outputDesc.Texture2D.MipSlice = 0;
-        hr = videoDevice_->CreateVideoProcessorOutputView(scaledTexture.Get(), enumerator.Get(), &outputDesc, &outputView);
-        if (FAILED(hr) || !outputView) {
-            std::ostringstream message;
-            message << "NVENC scale failed: CreateVideoProcessorOutputView HRESULT 0x" << std::hex << hr;
-            status = message.str();
-            return false;
-        }
-
         RECT sourceRect { 0, 0, std::max(1, inputWidth), std::max(1, inputHeight) };
         RECT destRect { 0, 0, std::max(1, width_), std::max(1, height_) };
         videoContext_->VideoProcessorSetStreamSourceRect(processor.Get(), 0, TRUE, &sourceRect);
         videoContext_->VideoProcessorSetStreamDestRect(processor.Get(), 0, TRUE, &destRect);
         videoContext_->VideoProcessorSetOutputTargetRect(processor.Get(), TRUE, &destRect);
+        Microsoft::WRL::ComPtr<ID3D11VideoContext1> videoContext1;
+        if (SUCCEEDED(videoContext_.As(&videoContext1)) && videoContext1) {
+            videoContext1->VideoProcessorSetStreamColorSpace1(
+                processor.Get(), 0, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+        }
 
         videoProcessorEnumerator_ = enumerator;
         videoProcessor_ = processor;
-        scaledTexture_ = scaledTexture;
-        scaledOutputView_ = outputView;
         scalerInputWidth_ = inputWidth;
         scalerInputHeight_ = inputHeight;
         scalerOutputWidth_ = width_;
         scalerOutputHeight_ = height_;
+        ++scalerGeneration_;
+        if (scalerGeneration_ == 0) ++scalerGeneration_;
+        return true;
+    }
+
+    bool ensureScaledOutput(OutputSlot& slot, std::string& status) {
+        if (slot.scaledTexture) {
+            D3D11_TEXTURE2D_DESC existing {};
+            slot.scaledTexture->GetDesc(&existing);
+            if (existing.Width == static_cast<UINT>(width_) &&
+                existing.Height == static_cast<UINT>(height_) &&
+                slot.scaledViewGeneration == scalerGeneration_) {
+                return true;
+            }
+            slot.scaledOutputView.Reset();
+            slot.scaledTexture.Reset();
+            slot.scaledViewGeneration = 0;
+        }
+
+        auto createOutput = [&](DXGI_FORMAT format) {
+            D3D11_TEXTURE2D_DESC textureDesc {};
+            textureDesc.Width = static_cast<UINT>(std::max(1, width_));
+            textureDesc.Height = static_cast<UINT>(std::max(1, height_));
+            textureDesc.MipLevels = 1;
+            textureDesc.ArraySize = 1;
+            textureDesc.Format = format;
+            textureDesc.SampleDesc.Count = 1;
+            textureDesc.Usage = D3D11_USAGE_DEFAULT;
+            textureDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
+            if (format == DXGI_FORMAT_B8G8R8A8_UNORM) {
+                textureDesc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+            }
+
+            HRESULT hr = device_->CreateTexture2D(&textureDesc, nullptr, &slot.scaledTexture);
+            if (FAILED(hr) || !slot.scaledTexture) return hr;
+
+            D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outputDesc {};
+            outputDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+            outputDesc.Texture2D.MipSlice = 0;
+            hr = videoDevice_->CreateVideoProcessorOutputView(
+                slot.scaledTexture.Get(),
+                videoProcessorEnumerator_.Get(),
+                &outputDesc,
+                &slot.scaledOutputView);
+            if (FAILED(hr) || !slot.scaledOutputView) {
+                slot.scaledOutputView.Reset();
+                slot.scaledTexture.Reset();
+                return hr;
+            }
+            slot.scaledViewGeneration = scalerGeneration_;
+            return S_OK;
+        };
+
+        HRESULT hr = createOutput(
+            preferNv12Input_ ? DXGI_FORMAT_NV12 : DXGI_FORMAT_B8G8R8A8_UNORM);
+        if (FAILED(hr) && preferNv12Input_) {
+            preferNv12Input_ = false;
+            hr = createOutput(DXGI_FORMAT_B8G8R8A8_UNORM);
+            if (SUCCEEDED(hr) && !bgraFallbackLogged_) {
+                std::cerr << "[encoder] NV12 video-processor output is unavailable; using BGRA NVENC input fallback."
+                          << std::endl;
+                bgraFallbackLogged_ = true;
+            }
+        }
+        if (FAILED(hr)) {
+            std::ostringstream message;
+            message << "NVENC scale failed: no compatible output surface, HRESULT 0x" << std::hex << hr;
+            status = message.str();
+            slot.scaledOutputView.Reset();
+            slot.scaledTexture.Reset();
+            slot.scaledViewGeneration = 0;
+            return false;
+        }
         return true;
     }
 
@@ -915,6 +1005,7 @@ private:
     }
 
     bool inputResourceInFlight(NV_ENC_REGISTERED_PTR registeredResource) const {
+        std::lock_guard lock(outputMutex_);
         for (const auto& slot : outputSlots_) {
             if (slot.inFlight && slot.mappedRegisteredResource == registeredResource && registeredResource) {
                 return true;
@@ -924,61 +1015,33 @@ private:
     }
 
     bool drainReady(std::vector<EncodedPacket>& packets, std::string& status) {
-        while (!inFlightOrder_.empty()) {
-            bool drained = false;
-            if (!drainOne(packets, false, status, drained)) {
-                return false;
-            }
-            if (!drained) return true;
+        if (!asyncEnabled_) return true;
+        collectCompletedPackets(packets);
+        if (outputFatal_.load()) {
+            std::lock_guard lock(outputMutex_);
+            status = outputFailure_.empty() ? "NVENC async output failed." : outputFailure_;
+            return false;
         }
         return true;
     }
 
     bool drainAll(std::vector<EncodedPacket>& packets, std::string& status) {
-        while (!inFlightOrder_.empty()) {
-            bool drained = false;
-            if (!drainOne(packets, true, status, drained)) {
-                return false;
-            }
-            if (!drained) return false;
-        }
-        return true;
-    }
-
-    bool drainOne(std::vector<EncodedPacket>& packets, bool wait, std::string& status, bool& drained) {
-        drained = false;
-        if (inFlightOrder_.empty()) return true;
-
-        const std::size_t index = inFlightOrder_.front();
-        if (index >= outputSlots_.size()) {
-            status = "NVENC async drain failed: output slot index is invalid.";
+        if (!asyncEnabled_) return true;
+        std::unique_lock lock(outputMutex_);
+        constexpr auto maximumDrainWait = std::chrono::milliseconds(
+            outputSlotCount_ * asyncDrainWaitTimeoutMs_ + 500);
+        const bool finished = outputCv_.wait_for(lock, maximumDrainWait, [this] {
+            return inFlightOrder_.empty() || outputFatal_.load();
+        });
+        for (auto& packet : completedPackets_) packets.push_back(std::move(packet));
+        completedPackets_.clear();
+        if (outputFatal_.load()) {
+            status = outputFailure_.empty() ? "NVENC async output failed." : outputFailure_;
             return false;
         }
-
-        auto& slot = outputSlots_[index];
-        if (asyncEnabled_) {
-            const DWORD waitResult = WaitForSingleObject(slot.completionEvent, wait ? asyncDrainWaitTimeoutMs_ : 0);
-            if (waitResult == WAIT_TIMEOUT) {
-                if (!wait) return true;
-                status = "NVENC async wait timed out after " + std::to_string(asyncDrainWaitTimeoutMs_) + " ms.";
-                std::cerr << "[perf] nvenc_async_wait_timeout timeoutMs=" << asyncDrainWaitTimeoutMs_ << std::endl;
-                return false;
-            }
-            if (waitResult != WAIT_OBJECT_0) {
-                status = "NVENC async wait failed.";
-                return false;
-            }
-        }
-
-        EncodedPacket packet;
-        bool produced = false;
-        if (!lockOutputSlot(slot, packet, status, produced)) {
+        if (!finished) {
+            status = "NVENC async drain did not finish within its bounded wait.";
             return false;
-        }
-        inFlightOrder_.pop_front();
-        drained = true;
-        if (produced) {
-            packets.push_back(std::move(packet));
         }
         return true;
     }
@@ -1008,6 +1071,7 @@ private:
         packet.encodedHeight = slot.frameEncodedHeight;
         packet.sourceWidth = slot.frameSourceWidth;
         packet.sourceHeight = slot.frameSourceHeight;
+        packet.encoderEpoch = static_cast<uint32_t>(slot.captureEpoch);
         packet.payload = packetPool_.acquirePayload(lock.bitstreamSizeInBytes);
         if (lock.bitstreamSizeInBytes > 0 && lock.bitstreamBufferPtr) {
             std::memcpy(mutablePayload(packet).data(), lock.bitstreamBufferPtr, lock.bitstreamSizeInBytes);
@@ -1017,16 +1081,20 @@ private:
         funcs_.nvEncUnlockBitstream(encoder_, slot.bitstreamBuffer);
         if (slot.mappedInput) {
             funcs_.nvEncUnmapInputResource(encoder_, slot.mappedInput);
-            slot.mappedInput = nullptr;
         }
-        slot.mappedRegisteredResource = nullptr;
-        slot.framePts100ns = 0;
-        slot.frameDuration100ns = 0;
-        slot.frameEncodedWidth = 0;
-        slot.frameEncodedHeight = 0;
-        slot.frameSourceWidth = 0;
-        slot.frameSourceHeight = 0;
-        slot.inFlight = false;
+        {
+            std::lock_guard outputLock(outputMutex_);
+            slot.mappedInput = nullptr;
+            slot.mappedRegisteredResource = nullptr;
+            slot.framePts100ns = 0;
+            slot.frameDuration100ns = 0;
+            slot.frameEncodedWidth = 0;
+            slot.frameEncodedHeight = 0;
+            slot.frameSourceWidth = 0;
+            slot.frameSourceHeight = 0;
+            slot.captureEpoch = 0;
+            slot.inputLease.reset();
+        }
         produced = !payloadEmpty(packet);
         status = asyncEnabled_
             ? "Direct NVENC async pipeline is outputting H.264 packets."
@@ -1035,28 +1103,34 @@ private:
     }
 
     OutputSlot* freeOutputSlot(std::vector<EncodedPacket>& packets, std::string& status) {
+        (void)packets;
         if (outputSlots_.empty()) {
             status = "NVENC output slot pool is empty.";
             return nullptr;
         }
 
+        std::lock_guard lock(outputMutex_);
+        if (outputFatal_.load()) {
+            status = outputFailure_.empty() ? "NVENC async output failed." : outputFailure_;
+            return nullptr;
+        }
         for (std::size_t attempt = 0; attempt < outputSlots_.size(); ++attempt) {
             const std::size_t index = (nextOutputSlot_ + attempt) % outputSlots_.size();
             if (!outputSlots_[index].inFlight) {
+                outputSlots_[index].inFlight = true;
                 nextOutputSlot_ = (index + 1) % outputSlots_.size();
                 return &outputSlots_[index];
             }
         }
+        status = "NVENC output slot pool is full.";
+        return nullptr;
+    }
 
-        bool drained = false;
-        if (!drainOne(packets, true, status, drained)) {
-            return nullptr;
-        }
-        if (!drained) {
-            status = "NVENC output slot pool is full.";
-            return nullptr;
-        }
-        return freeOutputSlot(packets, status);
+    void releaseOutputSlotReservation(OutputSlot& slot) {
+        std::lock_guard lock(outputMutex_);
+        slot.inFlight = false;
+        slot.inputLease.reset();
+        outputCv_.notify_all();
     }
 
     std::size_t slotIndex(const OutputSlot* slot) const {
@@ -1097,7 +1171,11 @@ private:
         registered.pitch = 0;
         registered.subResourceIndex = 0;
         registered.resourceToRegister = texture;
-        registered.bufferFormat = NV_ENC_BUFFER_FORMAT_ARGB;
+        D3D11_TEXTURE2D_DESC textureDesc {};
+        texture->GetDesc(&textureDesc);
+        registered.bufferFormat = textureDesc.Format == DXGI_FORMAT_NV12
+            ? NV_ENC_BUFFER_FORMAT_NV12
+            : NV_ENC_BUFFER_FORMAT_ARGB;
         registered.bufferUsage = NV_ENC_INPUT_IMAGE;
 
         const NVENCSTATUS nvStatus = funcs_.nvEncRegisterResource(encoder_, &registered);
@@ -1109,6 +1187,7 @@ private:
         RegisteredInput input {};
         input.texture = texture;
         input.registeredResource = registered.registeredResource;
+        input.bufferFormat = registered.bufferFormat;
         input.width = width;
         input.height = height;
         registeredInputs_.push_back(std::move(input));
@@ -1122,6 +1201,7 @@ private:
             std::string ignoredStatus;
             drainAll(ignoredPackets, ignoredStatus);
         }
+        stopOutputThread();
         if (encoder_) {
             for (auto& slot : outputSlots_) {
                 if (slot.mappedInput) {
@@ -1135,6 +1215,9 @@ private:
                 slot.frameEncodedHeight = 0;
                 slot.frameSourceWidth = 0;
                 slot.frameSourceHeight = 0;
+                slot.captureEpoch = 0;
+                slot.inputLease.reset();
+                slot.scaledViewGeneration = 0;
                 if (slot.eventRegistered) {
                     NV_ENC_EVENT_PARAMS eventParams {};
                     eventParams.version = nvencStructVersionForApi(2, apiVersion_);
@@ -1153,6 +1236,11 @@ private:
             }
             outputSlots_.clear();
             inFlightOrder_.clear();
+            completedPackets_.clear();
+            outputFailure_.clear();
+            outputFatal_.store(false);
+            inFlightCount_.store(0);
+            if (externalInFlightCount_) externalInFlightCount_->store(0);
         }
         if (encoder_) {
             for (auto& input : registeredInputs_) {
@@ -1167,8 +1255,6 @@ private:
             funcs_.nvEncDestroyEncoder(encoder_);
             encoder_ = nullptr;
         }
-        scaledOutputView_.Reset();
-        scaledTexture_.Reset();
         videoProcessor_.Reset();
         videoProcessorEnumerator_.Reset();
         videoContext_.Reset();
@@ -1192,7 +1278,11 @@ private:
         scalerInputHeight_ = 0;
         scalerOutputWidth_ = 0;
         scalerOutputHeight_ = 0;
+        scalerGeneration_ = 0;
+        preferNv12Input_ = true;
+        bgraFallbackLogged_ = false;
         frameIndex_ = 0;
+        nextKeyframePts100ns_ = 0;
         nextOutputSlot_ = 0;
     }
 
@@ -1214,9 +1304,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D11VideoContext> videoContext_;
     Microsoft::WRL::ComPtr<ID3D11VideoProcessorEnumerator> videoProcessorEnumerator_;
     Microsoft::WRL::ComPtr<ID3D11VideoProcessor> videoProcessor_;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> scaledTexture_;
-    Microsoft::WRL::ComPtr<ID3D11VideoProcessorOutputView> scaledOutputView_;
     PacketRingBuffer& packetPool_;
+    std::atomic<int>* externalInFlightCount_ = nullptr;
+    std::atomic<int>* externalDropCount_ = nullptr;
     void* encoder_ = nullptr;
     NV_ENC_CONFIG encodeConfig_ {};
     NV_ENC_INITIALIZE_PARAMS initParams_ {};
@@ -1224,6 +1314,14 @@ private:
     std::vector<RegisteredInput> registeredInputs_;
     std::vector<OutputSlot> outputSlots_;
     std::deque<std::size_t> inFlightOrder_;
+    std::vector<EncodedPacket> completedPackets_;
+    std::thread outputThread_;
+    mutable std::mutex outputMutex_;
+    std::condition_variable outputCv_;
+    std::atomic<bool> outputThreadRunning_ = false;
+    std::atomic<bool> outputFatal_ = false;
+    std::atomic<int> inFlightCount_ = 0;
+    std::string outputFailure_;
     bool asyncEnabled_ = false;
     bool initialized_ = false;
     bool initFailureLogged_ = false;
@@ -1242,7 +1340,11 @@ private:
     int scalerInputHeight_ = 0;
     int scalerOutputWidth_ = 0;
     int scalerOutputHeight_ = 0;
+    uint64_t scalerGeneration_ = 0;
+    bool preferNv12Input_ = true;
+    bool bgraFallbackLogged_ = false;
     uint32_t frameIndex_ = 0;
+    int64_t nextKeyframePts100ns_ = 0;
     std::size_t nextOutputSlot_ = 0;
     static constexpr std::size_t maxRegisteredInputs_ = 16;
     static constexpr std::size_t outputSlotCount_ = 4;
@@ -1266,23 +1368,35 @@ void EncoderWorker::start() {
     nvencRuntimeLoaded_ = module && GetProcAddress(module, "NvEncodeAPICreateInstance");
     if (module) FreeLibrary(module);
 
-    status_ = nvencRuntimeLoaded_
+    setStatus(nvencRuntimeLoaded_
         ? "NVENC runtime loaded; WGC frames are being handed to the encoder worker."
-        : "NVENC runtime was not found; encoder worker cannot produce H.264 packets.";
+        : "NVENC runtime was not found; encoder worker cannot produce H.264 packets.");
+    encodeThread_ = std::thread(&EncoderWorker::encodeLoop, this);
     thread_ = std::thread(&EncoderWorker::run, this);
 }
 
 void EncoderWorker::stop() {
     if (!running_.exchange(false)) return;
     frames_.stop();
+    submitCv_.notify_all();
     if (thread_.joinable()) thread_.join();
+    submitCv_.notify_all();
+    if (encodeThread_.joinable()) encodeThread_.join();
 }
 
 bool EncoderWorker::running() const {
     return running_;
 }
 
-void EncoderWorker::configure(int fps, int bitrateMbps, int targetWidth, int targetHeight, int maxEncodeWidth, int maxEncodeHeight, int nvencPreset) {
+void EncoderWorker::configure(
+    int fps,
+    int bitrateMbps,
+    int targetWidth,
+    int targetHeight,
+    int maxEncodeWidth,
+    int maxEncodeHeight,
+    int nvencPreset,
+    bool discardBufferedPackets) {
     const int nextFps = std::clamp(fps, 24, 60);
     const int nextBitrateMbps = std::clamp(bitrateMbps, 4, 120);
     const int nextTargetWidth = std::max(0, targetWidth);
@@ -1307,18 +1421,22 @@ void EncoderWorker::configure(int fps, int bitrateMbps, int targetWidth, int tar
     maxEncodeWidth_ = nextMaxEncodeWidth;
     maxEncodeHeight_ = nextMaxEncodeHeight;
     nvencPreset_ = nextPreset;
-    if (changed) ++configVersion_;
+    if (changed) {
+        const int nextVersion = configVersion_.fetch_add(1) + 1;
+        if (discardBufferedPackets) discardPacketsAtConfigVersion_.store(nextVersion);
+    }
 }
 
-void EncoderWorker::requireFreshFrame() {
+void EncoderWorker::requireFreshFrame(bool discardBufferedPackets) {
     frames_.clear();
-    ++freshFrameVersion_;
+    const int nextVersion = freshFrameVersion_.fetch_add(1) + 1;
+    if (discardBufferedPackets) discardPacketsAtFreshFrameVersion_.store(nextVersion);
 }
 
 void EncoderWorker::resetAutoOutputResolution() {
     autoOutputWidth_ = 0;
     autoOutputHeight_ = 0;
-    requireFreshFrame();
+    requireFreshFrame(true);
 }
 
 bool EncoderWorker::nvencRuntimeLoaded() const {
@@ -1334,7 +1452,24 @@ int EncoderWorker::framesEncoded() const {
 }
 
 int EncoderWorker::pendingFrames() const {
-    return std::max(0, framesAccepted_.load() - framesEncoded_.load());
+    std::lock_guard lock(submitMutex_);
+    return (pendingJob_ ? 1 : 0) + nvencInFlightFrames_.load();
+}
+
+int EncoderWorker::schedulerDroppedFrames() const {
+    return schedulerDroppedFrames_.load();
+}
+
+int EncoderWorker::encoderBackpressureDrops() const {
+    return encoderBackpressureDrops_.load();
+}
+
+int EncoderWorker::nvencInFlightFrames() const {
+    return nvencInFlightFrames_.load();
+}
+
+int64_t EncoderWorker::maximumSubmitLatency100ns() const {
+    return maximumSubmitLatency100ns_.load();
 }
 
 int EncoderWorker::sourceWidth() const {
@@ -1358,66 +1493,89 @@ bool EncoderWorker::scalingActive() const {
 }
 
 std::string EncoderWorker::status() const {
+    std::lock_guard lock(statusMutex_);
     return status_;
 }
 
-void EncoderWorker::run() {
-    auto session = std::make_unique<NvencSession>(packets_);
-    int activeConfigVersion = configVersion_.load();
-    int activeFreshFrameVersion = freshFrameVersion_.load();
-    auto pushPackets = [this](std::vector<EncodedPacket>& packets) {
-        for (auto& packet : packets) {
-            packets_.push(std::move(packet));
-            ++framesEncoded_;
-        }
-        packets.clear();
-    };
+void EncoderWorker::setStatus(std::string status) {
+    std::lock_guard lock(statusMutex_);
+    status_ = std::move(status);
+}
 
+void EncoderWorker::queueLatestJob(EncodeJob job) {
+    {
+        std::lock_guard lock(submitMutex_);
+        if (pendingJob_) ++encoderBackpressureDrops_;
+        pendingJob_ = std::move(job);
+    }
+    ++framesAccepted_;
+    submitCv_.notify_one();
+}
+
+void EncoderWorker::run() {
     std::optional<CapturedFrame> currentFrame;
     while (running_ && !currentFrame) {
         currentFrame = frames_.waitPop();
-        if (currentFrame) {
-            auto latest = frames_.consumeAllAndGetLatest();
-            if (latest) currentFrame = latest;
-            ++framesAccepted_;
-        }
+        if (auto latest = frames_.consumeAllAndGetLatest()) currentFrame = std::move(latest);
     }
-    
+
     if (!running_) return;
-    
-    auto startTick = std::chrono::steady_clock::now();
-    int64_t startPts100ns = currentFrame->pts100ns;
-    int64_t encodedFrameCount = 0;
+
+    DWORD taskIndex = 0;
+    HANDLE avrtHandle = AvSetMmThreadCharacteristicsW(L"Games", &taskIndex);
+    if (avrtHandle) AvSetMmThreadPriority(avrtHandle, AVRT_PRIORITY_HIGH);
+
+    int activeFps = std::clamp(targetFps_.load(), 24, 60);
+    int activeFreshFrameVersion = freshFrameVersion_.load();
+    int64_t frameSpacing100ns = 10'000'000LL / activeFps;
+    VideoTimeline timeline(currentFrame->pts100ns, activeFps);
+    auto interval = std::chrono::nanoseconds(frameSpacing100ns * 100);
+    auto nextWake = std::chrono::steady_clock::now() + interval;
 
     while (running_) {
         const int fps = std::clamp(targetFps_.load(), 24, 60);
-        const int64_t minFrameSpacing100ns = 10'000'000LL / std::max(1, fps);
-        const auto interval = std::chrono::nanoseconds(minFrameSpacing100ns * 100);
-
-        auto now = std::chrono::steady_clock::now();
-        auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(now - startTick).count();
-        int64_t targetFrameIndex = elapsedNs / interval.count();
-
-        // If targetFrameIndex jumped way ahead (e.g. system sleep), drop frames to catch up without death spiral
-        if (targetFrameIndex > encodedFrameCount + 300) {
-            encodedFrameCount = targetFrameIndex;
+        const int currentFreshFrameVersion = freshFrameVersion_.load();
+        if (fps != activeFps || currentFreshFrameVersion != activeFreshFrameVersion) {
+            {
+                std::lock_guard lock(submitMutex_);
+                pendingJob_.reset();
+            }
+            activeFps = fps;
+            activeFreshFrameVersion = currentFreshFrameVersion;
+            frameSpacing100ns = 10'000'000LL / activeFps;
+            interval = std::chrono::nanoseconds(frameSpacing100ns * 100);
+            currentFrame.reset();
+            while (running_ && !currentFrame) {
+                currentFrame = frames_.waitPop();
+                if (auto latest = frames_.consumeAllAndGetLatest()) currentFrame = std::move(latest);
+            }
+            if (!running_ || !currentFrame) break;
+            timeline.reset(currentFrame->pts100ns, activeFps);
+            nextWake = std::chrono::steady_clock::now() + interval;
+            continue;
         }
 
-        while (encodedFrameCount <= targetFrameIndex && running_) {
-            auto newFrame = frames_.consumeAllAndGetLatest();
-            if (newFrame) {
-                currentFrame = newFrame;
-                ++framesAccepted_;
-            }
+        std::this_thread::sleep_until(nextWake);
+        if (!running_) break;
 
-            if (!currentFrame) break;
+        const auto now = std::chrono::steady_clock::now();
+        const int64_t lateness100ns = now > nextWake
+            ? std::chrono::duration_cast<std::chrono::nanoseconds>(now - nextWake).count() / 100
+            : 0;
+        const auto timelineStep = timeline.advance(lateness100ns);
+        const int64_t skippedTicks = timelineStep.skippedTicks;
+        const int64_t tickPts100ns = timelineStep.pts100ns;
+        if (skippedTicks > 0) {
+            schedulerDroppedFrames_.fetch_add(static_cast<int>(std::min<int64_t>(skippedTicks, INT_MAX)));
+        }
 
+        if (auto newest = frames_.consumeLatestAtOrBefore(tickPts100ns + frameSpacing100ns / 2)) {
+            currentFrame = std::move(newest);
+        }
+        if (currentFrame) {
             CapturedFrame frameToEncode = *currentFrame;
-            frameToEncode.pts100ns = startPts100ns + (encodedFrameCount * minFrameSpacing100ns);
-            
-            // Encode and push this frame
-            const int bitrateMbps = std::clamp(targetBitrateMbps_.load(), 4, 120);
-            const int nvencPreset = std::clamp(nvencPreset_.load(), 1, 5);
+            frameToEncode.pts100ns = tickPts100ns;
+
             int outputWidth = targetWidth_.load();
             int outputHeight = targetHeight_.load();
             if (outputWidth <= 0 || outputHeight <= 0) {
@@ -1432,102 +1590,148 @@ void EncoderWorker::run() {
                 outputWidth = lockedWidth;
                 outputHeight = lockedHeight;
             }
-            const int maxEncodeWidth = std::max(maxEncodeWidth_.load(), outputWidth);
-            const int maxEncodeHeight = std::max(maxEncodeHeight_.load(), outputHeight);
+
             sourceWidth_ = frameToEncode.width;
             sourceHeight_ = frameToEncode.height;
             outputWidth_ = outputWidth;
             outputHeight_ = outputHeight;
             scalingActive_ = frameToEncode.width != outputWidth || frameToEncode.height != outputHeight;
-            const int currentConfigVersion = configVersion_.load();
-            const int currentFreshFrameVersion = freshFrameVersion_.load();
-            
-            if (currentConfigVersion != activeConfigVersion) {
-                std::vector<EncodedPacket> drainedPackets;
-                session->drainPending(drainedPackets, status_);
-                pushPackets(drainedPackets);
-                session = std::make_unique<NvencSession>(packets_);
-                activeConfigVersion = currentConfigVersion;
-            }
 
-            if (currentFreshFrameVersion != activeFreshFrameVersion) {
-                activeFreshFrameVersion = currentFreshFrameVersion;
-                session = std::make_unique<NvencSession>(packets_);
-                currentFrame.reset();
-                auto freshFrame = frames_.waitPop();
-                if (!running_) break;
-                if (freshFrame) {
-                    auto latest = frames_.consumeAllAndGetLatest();
-                    currentFrame = latest ? latest : freshFrame;
-                    ++framesAccepted_;
-                    const auto afterWait = std::chrono::steady_clock::now();
-                    const auto afterWaitElapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(afterWait - startTick).count();
-                    const int64_t afterWaitFrameIndex = afterWaitElapsedNs / interval.count();
-                    encodedFrameCount = std::max(encodedFrameCount + 1, afterWaitFrameIndex);
-                    continue;
-                }
-                break;
-            }
+            queueLatestJob(EncodeJob {
+                std::move(frameToEncode),
+                fps,
+                std::clamp(targetBitrateMbps_.load(), 4, 120),
+                outputWidth,
+                outputHeight,
+                std::max(maxEncodeWidth_.load(), outputWidth),
+                std::max(maxEncodeHeight_.load(), outputHeight),
+                std::clamp(nvencPreset_.load(), 1, 5),
+                configVersion_.load(),
+                currentFreshFrameVersion,
+            });
+        }
+        nextWake += interval * (skippedTicks + 1);
+    }
 
-            if (nvencRuntimeLoaded_ && session->initialize(
-                    frameToEncode.texture.Get(),
-                    frameToEncode.width,
-                    frameToEncode.height,
-                    outputWidth,
-                    outputHeight,
-                    maxEncodeWidth,
-                    maxEncodeHeight,
-                    fps,
-                    bitrateMbps,
-                    nvencPreset,
-                    status_)) {
-                std::vector<EncodedPacket> encodedPackets;
-                bool encoderReady = true;
-                if (session->needsReconfigure(outputWidth, outputHeight, fps, bitrateMbps) &&
-                    !session->reconfigure(outputWidth, outputHeight, fps, bitrateMbps, encodedPackets, status_)) {
-                    pushPackets(encodedPackets);
-                    session = std::make_unique<NvencSession>(packets_);
-                    encoderReady = session->initialize(
-                        frameToEncode.texture.Get(),
-                        frameToEncode.width,
-                        frameToEncode.height,
-                        outputWidth,
-                        outputHeight,
-                        std::max(maxEncodeWidth, outputWidth),
-                        std::max(maxEncodeHeight, outputHeight),
-                        fps,
-                        bitrateMbps,
-                        nvencPreset,
-                        status_);
-                }
-                if (!encoderReady) {
-                    ++encodedFrameCount;
-                    continue;
-                }
-                outputWidth_ = session->outputWidth();
-                outputHeight_ = session->outputHeight();
-                scalingActive_ = frameToEncode.width != session->outputWidth() || frameToEncode.height != session->outputHeight();
-                pushPackets(encodedPackets);
-                if (session->encode(frameToEncode, encodedPackets, status_)) {
-                    pushPackets(encodedPackets);
-                } else {
-                    pushPackets(encodedPackets);
-                    std::cerr << "[encoder] Resetting NVENC session after encode failure: " << status_ << std::endl;
-                    session = std::make_unique<NvencSession>(packets_);
-                }
-            }
-            encodedFrameCount++;
+    if (avrtHandle) AvRevertMmThreadCharacteristics(avrtHandle);
+}
+
+void EncoderWorker::encodeLoop() {
+    auto session = std::make_unique<NvencSession>(
+        packets_, &nvencInFlightFrames_, &encoderBackpressureDrops_);
+    int activeConfigVersion = -1;
+    int activeFreshFrameVersion = -1;
+    int appliedConfigDiscardVersion = 0;
+    int appliedDiscardVersion = 0;
+    uint64_t activeCaptureEpoch = 0;
+    auto pushPackets = [this](std::vector<EncodedPacket>& packets) {
+        for (auto& packet : packets) {
+            packets_.push(std::move(packet));
+            ++framesEncoded_;
+        }
+        packets.clear();
+    };
+
+    while (true) {
+        EncodeJob job;
+        {
+            std::unique_lock lock(submitMutex_);
+            submitCv_.wait(lock, [this] { return !running_.load() || pendingJob_.has_value(); });
+            if (!pendingJob_ && !running_) break;
+            if (!pendingJob_) continue;
+            job = std::move(*pendingJob_);
+            pendingJob_.reset();
         }
 
-        auto nextTick = startTick + std::chrono::nanoseconds((encodedFrameCount) * interval.count());
-        std::this_thread::sleep_until(nextTick);
+        const int64_t submitStarted100ns = monotonicNow100ns();
+        const bool freshEpochChanged = activeFreshFrameVersion >= 0 &&
+            job.freshFrameVersion != activeFreshFrameVersion;
+        const bool sessionChanged =
+            job.configVersion != activeConfigVersion ||
+            job.freshFrameVersion != activeFreshFrameVersion ||
+            job.frame.captureEpoch != activeCaptureEpoch;
+        if (sessionChanged) {
+            const int requestedConfigDiscardVersion = discardPacketsAtConfigVersion_.load();
+            const bool discardForConfig =
+                requestedConfigDiscardVersion > appliedConfigDiscardVersion &&
+                job.configVersion >= requestedConfigDiscardVersion;
+            if (discardForConfig) {
+                packets_.clear();
+                appliedConfigDiscardVersion = requestedConfigDiscardVersion;
+            }
+            const int requestedDiscardVersion = discardPacketsAtFreshFrameVersion_.load();
+            const bool discardForFreshFrame =
+                requestedDiscardVersion > appliedDiscardVersion &&
+                job.freshFrameVersion >= requestedDiscardVersion;
+            if (discardForFreshFrame) {
+                packets_.clear();
+                appliedDiscardVersion = requestedDiscardVersion;
+            }
+            std::vector<EncodedPacket> drainedPackets;
+            std::string drainStatus;
+            if (!freshEpochChanged && !discardForConfig && !discardForFreshFrame) {
+                session->drainPending(drainedPackets, drainStatus);
+                pushPackets(drainedPackets);
+            }
+            session = std::make_unique<NvencSession>(
+                packets_, &nvencInFlightFrames_, &encoderBackpressureDrops_);
+            nvencInFlightFrames_ = 0;
+            activeConfigVersion = job.configVersion;
+            activeFreshFrameVersion = job.freshFrameVersion;
+            activeCaptureEpoch = job.frame.captureEpoch;
+        }
 
-        // old loop body removed
+        std::string sessionStatus;
+        bool encoderInitialized = false;
+        bool encoded = false;
+        if (nvencRuntimeLoaded_ && session->initialize(
+                job.frame.texture.Get(),
+                job.frame.width,
+                job.frame.height,
+                job.targetWidth,
+                job.targetHeight,
+                job.maxEncodeWidth,
+                job.maxEncodeHeight,
+                job.fps,
+                job.bitrateMbps,
+                job.nvencPreset,
+                sessionStatus)) {
+            encoderInitialized = true;
+            outputWidth_ = session->outputWidth();
+            outputHeight_ = session->outputHeight();
+            scalingActive_ = job.frame.width != session->outputWidth() ||
+                job.frame.height != session->outputHeight();
+
+            std::vector<EncodedPacket> encodedPackets;
+            encoded = session->encode(job.frame, encodedPackets, sessionStatus);
+            nvencInFlightFrames_ = session->inFlightCount();
+            pushPackets(encodedPackets);
+        }
+
+        if (!sessionStatus.empty()) setStatus(sessionStatus);
+        if (encoderInitialized && !encoded) {
+            std::cerr << "[encoder] Resetting NVENC session after encode failure: " << sessionStatus << std::endl;
+            session = std::make_unique<NvencSession>(
+                packets_, &nvencInFlightFrames_, &encoderBackpressureDrops_);
+            nvencInFlightFrames_ = 0;
+            activeConfigVersion = -1;
+            activeFreshFrameVersion = -1;
+            activeCaptureEpoch = 0;
+        }
+
+        const int64_t submitLatency100ns = monotonicNow100ns() - submitStarted100ns;
+        int64_t previousMaximum = maximumSubmitLatency100ns_.load();
+        while (submitLatency100ns > previousMaximum &&
+               !maximumSubmitLatency100ns_.compare_exchange_weak(previousMaximum, submitLatency100ns)) {
+        }
     }
 
     std::vector<EncodedPacket> drainedPackets;
-    session->drainPending(drainedPackets, status_);
+    std::string drainStatus;
+    session->drainPending(drainedPackets, drainStatus);
     pushPackets(drainedPackets);
+    nvencInFlightFrames_ = 0;
+    if (!drainStatus.empty()) setStatus(drainStatus);
 }
 
 }  // namespace clipture

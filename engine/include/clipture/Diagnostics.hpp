@@ -31,6 +31,17 @@ struct Diagnostics {
     int bitrateMbps = 40;
     bool hardwareAcceleration = false;
     int droppedFrames = 0;
+    int captureOverflowDrops = 0;
+    int captureCoalescedDrops = 0;
+    int captureSlotDrops = 0;
+    int captureCallbackErrors = 0;
+    int schedulerDroppedFrames = 0;
+    int encoderBackpressureDrops = 0;
+    int nvencInFlightFrames = 0;
+    int64_t maximumCaptureGap100ns = 0;
+    int64_t maximumSubmitLatency100ns = 0;
+    uint64_t captureEpoch = 0;
+    std::string capturePressure = "healthy";
     bool nvencAvailable = false;
     bool engineRunning = false;
     bool d3d11Ready = false;

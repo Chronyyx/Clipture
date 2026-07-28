@@ -1,5 +1,6 @@
 #include "clipture/Engine.hpp"
 #include "clipture/CaptureSession.hpp"
+#include "clipture/MediaClock.hpp"
 #include "clipture/Mp4Muxer.hpp"
 #include "clipture/NativeRuntime.hpp"
 #include "clipture/ProcessSnapshot.hpp"
@@ -21,6 +22,7 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <limits>
 #include <sstream>
 #include <regex>
 #include <cstdlib>
@@ -65,12 +67,7 @@ std::string nowIdSuffix() {
 }
 
 int64_t now100ns() {
-    FILETIME fileTime {};
-    GetSystemTimePreciseAsFileTime(&fileTime);
-    ULARGE_INTEGER value {};
-    value.LowPart = fileTime.dwLowDateTime;
-    value.HighPart = fileTime.dwHighDateTime;
-    return static_cast<int64_t>(value.QuadPart);
+    return monotonicNow100ns();
 }
 
 std::string jsonEscape(const std::string& value) {
@@ -1074,7 +1071,8 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
             settings_.targetHeight,
             maxEncodeWidth,
             maxEncodeHeight,
-            settings_.nvencPreset);
+            settings_.nvencPreset,
+            videoOutputTargetChanged);
     }
     if (captureSession_) {
         captureSession_->setTargetFps(settings_.fps);
@@ -1084,7 +1082,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
                     videoPackets_.clear();
                     encoderWorker_->resetAutoOutputResolution();
                 } else {
-                    encoderWorker_->requireFreshFrame();
+                    encoderWorker_->requireFreshFrame(true);
                 }
             }
             const bool captureStarted = captureSession_->startMonitor(&frameQueue_, settings_.monitorId);
@@ -1322,11 +1320,20 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     SaveClipResult result;
     const auto totalStartedAt = SaveTimingClock::now();
     logEngineSaveTiming("start", totalStartedAt, "durationSeconds=" + std::to_string(request.durationSeconds));
-    const int saveStartDroppedFrames = frameQueue_.droppedFrames();
+    auto currentVideoDropCount = [this]() {
+        uint64_t total = static_cast<uint64_t>(std::max(0, frameQueue_.droppedFrames()));
+        if (captureSession_) total += captureSession_->ownedSlotDrops();
+        if (encoderWorker_) {
+            total += static_cast<uint64_t>(std::max(0, encoderWorker_->schedulerDroppedFrames()));
+            total += static_cast<uint64_t>(std::max(0, encoderWorker_->encoderBackpressureDrops()));
+        }
+        return static_cast<int>(std::min<uint64_t>(total, static_cast<uint64_t>(std::numeric_limits<int>::max())));
+    };
+    const int saveStartDroppedFrames = currentVideoDropCount();
     const int saveStartEncoderAccepted = encoderWorker_ ? encoderWorker_->framesAccepted() : 0;
     const int saveStartEncoderEncoded = encoderWorker_ ? encoderWorker_->framesEncoded() : 0;
     auto saveStutterDeltaDetails = [&]() {
-        const int currentDroppedFrames = frameQueue_.droppedFrames();
+        const int currentDroppedFrames = currentVideoDropCount();
         const int currentEncoderAccepted = encoderWorker_ ? encoderWorker_->framesAccepted() : 0;
         const int currentEncoderEncoded = encoderWorker_ ? encoderWorker_->framesEncoded() : 0;
         return " droppedFramesDelta=" + std::to_string(currentDroppedFrames - saveStartDroppedFrames) +
@@ -1337,13 +1344,13 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         return details + saveStutterDeltaDetails();
     };
     MuxWritePacing savePacing {
-        [this, saveStartDroppedFrames]() {
+        [this, saveStartDroppedFrames, currentVideoDropCount]() {
             MuxPressureSample sample;
             sample.frameQueueDepth = frameQueue_.size();
             sample.oldestFrameAge100ns = frameQueue_.oldestFrameAge100ns();
             sample.nvencPending = encoderWorker_ ? encoderWorker_->pendingFrames() : 0;
             sample.captureGap100ns = captureSession_ ? captureSession_->lastFrameInterval100ns() : 0;
-            sample.droppedFramesDelta = frameQueue_.droppedFrames() - saveStartDroppedFrames;
+            sample.droppedFramesDelta = currentVideoDropCount() - saveStartDroppedFrames;
             const int64_t frameInterval100ns = 10'000'000LL / std::max(1, diagnostics_.fps);
             if (sample.droppedFramesDelta > 0 ||
                 sample.frameQueueDepth >= 4 ||
@@ -1770,6 +1777,22 @@ void Engine::arm() {
 
 void Engine::refreshPacketCounts() {
     maybeResetAutoVideoResolution();
+    if (armed_ && captureSession_ && !captureSession_->running()) {
+        const int64_t currentTime100ns = now100ns();
+        if (currentTime100ns >= nextCaptureRestart100ns_) {
+            nextCaptureRestart100ns_ = currentTime100ns + 2LL * 10'000'000LL;
+            if (encoderWorker_) encoderWorker_->requireFreshFrame();
+            captureSession_->setTargetFps(settings_.fps);
+            const bool restarted = captureSession_->startMonitor(&frameQueue_, settings_.monitorId);
+            diagnostics_.captureReady = restarted;
+            if (restarted) {
+                nextCaptureRestart100ns_ = 0;
+                diagnostics_.resolution = captureSession_->resolution();
+                diagnostics_.display = captureSession_->displayName();
+                diagnostics_.hdrTonemapping = captureSession_->hdrTonemappingActive();
+            }
+        }
+    }
     diagnostics_.bufferedVideoPackets = static_cast<int>(videoPackets_.size());
     diagnostics_.bufferedAudioPackets = static_cast<int>(audioPackets_.size());
     diagnostics_.queuedFrames = static_cast<int>(frameQueue_.size());
@@ -1804,7 +1827,42 @@ void Engine::refreshPacketCounts() {
     if (audioCaptureWorker_) {
         diagnostics_.microphoneDevice = audioCaptureWorker_->microphoneStatus();
     }
-    diagnostics_.droppedFrames = frameQueue_.droppedFrames();
+    const auto queueStats = frameQueue_.stats();
+    const auto boundedCounter = [](uint64_t value) {
+        return static_cast<int>(std::min<uint64_t>(
+            value,
+            static_cast<uint64_t>(std::numeric_limits<int>::max())));
+    };
+    diagnostics_.captureOverflowDrops = boundedCounter(queueStats.overflowDrops);
+    diagnostics_.captureCoalescedDrops = boundedCounter(queueStats.coalescedDrops);
+    diagnostics_.captureSlotDrops = captureSession_ ? boundedCounter(captureSession_->ownedSlotDrops()) : 0;
+    diagnostics_.captureCallbackErrors = captureSession_ ? boundedCounter(captureSession_->callbackErrors()) : 0;
+    diagnostics_.maximumCaptureGap100ns = captureSession_ ? captureSession_->maximumFrameInterval100ns() : 0;
+    diagnostics_.captureEpoch = captureSession_ ? captureSession_->captureEpoch() : 0;
+    diagnostics_.schedulerDroppedFrames = encoderWorker_ ? encoderWorker_->schedulerDroppedFrames() : 0;
+    diagnostics_.encoderBackpressureDrops = encoderWorker_ ? encoderWorker_->encoderBackpressureDrops() : 0;
+    diagnostics_.nvencInFlightFrames = encoderWorker_ ? encoderWorker_->nvencInFlightFrames() : 0;
+    diagnostics_.maximumSubmitLatency100ns = encoderWorker_ ? encoderWorker_->maximumSubmitLatency100ns() : 0;
+    diagnostics_.droppedFrames = boundedCounter(
+        queueStats.overflowDrops +
+        queueStats.coalescedDrops +
+        static_cast<uint64_t>(std::max(0, diagnostics_.captureSlotDrops)) +
+        static_cast<uint64_t>(std::max(0, diagnostics_.schedulerDroppedFrames)) +
+        static_cast<uint64_t>(std::max(0, diagnostics_.encoderBackpressureDrops)));
+
+    const int64_t frameInterval100ns = 10'000'000LL / std::max(1, diagnostics_.fps);
+    const int64_t oldestFrameAge100ns = frameQueue_.oldestFrameAge100ns();
+    if (diagnostics_.queuedFrames >= 4 ||
+        oldestFrameAge100ns > frameInterval100ns * 4 ||
+        diagnostics_.nvencInFlightFrames >= 3) {
+        diagnostics_.capturePressure = "critical";
+    } else if (diagnostics_.queuedFrames >= 2 ||
+               oldestFrameAge100ns > frameInterval100ns * 2 ||
+               diagnostics_.nvencInFlightFrames >= 2) {
+        diagnostics_.capturePressure = "elevated";
+    } else {
+        diagnostics_.capturePressure = "healthy";
+    }
 }
 
 void Engine::maybeResetAutoVideoResolution() {

@@ -1,7 +1,10 @@
 #include "clipture/BoundedWrite.hpp"
+#include "clipture/AudioTimeline.hpp"
 #include "clipture/AudioPacketRouting.hpp"
 #include "clipture/AudioReplayCoordinator.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
+#include "clipture/FrameQueue.hpp"
+#include "clipture/VideoTimeline.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +79,84 @@ bool testBoundedWrites() {
     }
     return require(total == 11u * 1024u * 1024u + 17u && writes == 3,
                    "bounded writer should cover every byte in three requests");
+}
+
+bool testVideoTimelineNeverCatchesUpRetroactively() {
+    constexpr int fps = 60;
+    constexpr int64_t firstPts100ns = 50'000'000'000LL;
+    const int64_t spacing100ns = 10'000'000LL / fps;
+    const int64_t stalls100ns[] {
+        500'000LL,
+        5'000'000LL,
+        49'000'000LL,
+        55'000'000LL,
+        100'000'000LL,
+    };
+
+    for (const int64_t stall100ns : stalls100ns) {
+        clipture::VideoTimeline timeline(firstPts100ns, fps);
+        const auto initial = timeline.advance(0);
+        if (!require(initial.pts100ns == firstPts100ns && initial.skippedTicks == 0,
+                     "timeline should emit its first current tick once")) return false;
+
+        const auto afterStall = timeline.advance(stall100ns);
+        const int64_t expectedSkipped = stall100ns / spacing100ns;
+        if (!require(afterStall.skippedTicks == expectedSkipped,
+                     "timeline should account for every elapsed tick")) return false;
+        if (!require(afterStall.pts100ns == firstPts100ns + (expectedSkipped + 1) * spacing100ns,
+                     "stalled timeline should jump forward without catch-up packets")) return false;
+    }
+    if (!require(clipture::finalVideoSampleDuration100ns(spacing100ns, fps) == spacing100ns,
+                 "final video duration should use the packet duration after an earlier gap")) return false;
+    return require(clipture::finalVideoSampleDuration100ns(0, fps) == spacing100ns,
+                   "final video duration should use one frame as its fallback");
+}
+
+bool testAudioTimelineNeverRewinds() {
+    bool anchored = false;
+    int64_t nextPts100ns = 10'000'000;
+    clipture::alignAudioPtsForwardOnly(9'500'000, 100'000, anchored, nextPts100ns);
+    if (!require(anchored && nextPts100ns == 10'000'000,
+                 "audio clock must not rewind over committed fallback samples")) return false;
+
+    clipture::alignAudioPtsForwardOnly(10'150'000, 100'000, anchored, nextPts100ns);
+    if (!require(nextPts100ns == 10'000'000,
+                 "small audio clock jitter should not create a gap")) return false;
+
+    clipture::alignAudioPtsForwardOnly(10'300'000, 100'000, anchored, nextPts100ns);
+    return require(nextPts100ns == 10'300'000,
+                   "a real forward audio discontinuity should remain visible on the timeline");
+}
+
+bool testFrameQueueDropAccounting() {
+    clipture::FrameQueue queue(3);
+    for (uint64_t sequence = 1; sequence <= 5; ++sequence) {
+        clipture::CapturedFrame frame;
+        frame.sequence = sequence;
+        frame.pts100ns = static_cast<int64_t>(sequence) * 100;
+        queue.push(std::move(frame));
+    }
+
+    const auto afterPush = queue.stats();
+    if (!require(afterPush.overflowDrops == 2 && afterPush.maximumDepth == 3,
+                 "frame queue should count capacity overflow")) return false;
+    const auto latest = queue.consumeAllAndGetLatest();
+    if (!require(latest && latest->sequence == 5,
+                 "frame queue should preserve the newest frame")) return false;
+    const auto afterConsume = queue.stats();
+    if (!require(afterConsume.coalescedDrops == 2 && queue.droppedFrames() == 4,
+                 "frame queue should count latest-frame coalescing")) return false;
+
+    clipture::FrameQueue jitterQueue(4);
+    for (uint64_t sequence = 1; sequence <= 3; ++sequence) {
+        clipture::CapturedFrame frame;
+        frame.sequence = sequence;
+        frame.pts100ns = static_cast<int64_t>(sequence) * 100;
+        jitterQueue.push(std::move(frame));
+    }
+    const auto selected = jitterQueue.consumeLatestAtOrBefore(250);
+    return require(selected && selected->sequence == 2 && jitterQueue.size() == 1,
+                   "jitter selection should leave future frames queued");
 }
 
 bool testImmutableAudioRouting() {
@@ -185,6 +266,49 @@ bool testLiveAacCoordinator() {
     return require(silentAac.size() == 0, "silent logical tracks should not emit AAC samples");
 }
 
+bool testLiveAacTimelineStaysContinuousThroughSilence() {
+    clipture::PacketRingBuffer raw(60LL * 10'000'000LL);
+    clipture::PacketRingBuffer aac(60LL * 10'000'000LL);
+    clipture::AudioReplayCoordinator coordinator(raw, aac);
+    coordinator.updateRouting({ { "microphone-pcm", "microphone-pcm" } });
+    coordinator.start();
+
+    constexpr int64_t startPts = 15'000'000'000LL;
+    for (int block = 0; block < 200; ++block) {
+        const bool quiet = block >= 30 && block < 170;
+        coordinator.publish(makePcmPacket(
+            raw,
+            "microphone-pcm",
+            startPts + static_cast<int64_t>(block) * 100'000LL,
+            quiet ? 0 : 800));
+    }
+    coordinator.stop();
+
+    const auto encoded = aac.snapshot();
+    if (!require(encoded.size() >= 80, "AAC should continue through a long quiet interval after activation")) {
+        return false;
+    }
+    const uint32_t epoch = encoded.front().encoderEpoch;
+    int64_t previousPts = encoded.front().pts100ns;
+    for (std::size_t index = 1; index < encoded.size(); ++index) {
+        const auto& packet = encoded[index];
+        if (!require(packet.encoderEpoch == epoch, "silence must not split a live track into AAC epochs")) {
+            return false;
+        }
+        const int64_t expectedDuration =
+            (static_cast<int64_t>(encoded[index - 1].audioFrameCount) * 10'000'000LL) /
+            std::max(1, encoded[index - 1].sampleRate);
+        const int64_t gap = packet.pts100ns - previousPts;
+        if (!require(
+                std::abs(gap - expectedDuration) <= 50'000LL,
+                "live AAC timestamps should stay contiguous through silence")) {
+            return false;
+        }
+        previousPts = packet.pts100ns;
+    }
+    return true;
+}
+
 bool testConcurrentPublishDoesNotTriggerRepair() {
     clipture::PacketRingBuffer raw(60LL * 10'000'000LL);
     clipture::PacketRingBuffer aac(60LL * 10'000'000LL);
@@ -229,8 +353,12 @@ int main() {
     if (!testStartCodesAndFlags()) return 1;
     if (!testMalformedPackets()) return 1;
     if (!testBoundedWrites()) return 1;
+    if (!testVideoTimelineNeverCatchesUpRetroactively()) return 1;
+    if (!testAudioTimelineNeverRewinds()) return 1;
+    if (!testFrameQueueDropAccounting()) return 1;
     if (!testImmutableAudioRouting()) return 1;
     if (!testLiveAacCoordinator()) return 1;
+    if (!testLiveAacTimelineStaysContinuousThroughSilence()) return 1;
     if (!testConcurrentPublishDoesNotTriggerRepair()) return 1;
     std::cout << "Packet architecture tests passed.\n";
     return 0;

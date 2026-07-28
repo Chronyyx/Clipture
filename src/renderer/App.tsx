@@ -25,6 +25,17 @@ const defaultDiagnostics: EngineDiagnostics = {
   bitrateMbps: 40,
   hardwareAcceleration: false,
     droppedFrames: 0,
+    captureOverflowDrops: 0,
+    captureCoalescedDrops: 0,
+    captureSlotDrops: 0,
+    captureCallbackErrors: 0,
+    schedulerDroppedFrames: 0,
+    encoderBackpressureDrops: 0,
+    nvencInFlightFrames: 0,
+    maximumCaptureGap100ns: 0,
+    maximumSubmitLatency100ns: 0,
+    captureEpoch: 0,
+    capturePressure: "healthy",
     nvencAvailable: false,
     engineRunning: false,
     d3d11Ready: false,
@@ -1070,6 +1081,9 @@ type MixedAudioChunkRequest = {
   controller: AbortController;
 };
 
+const mixedAudioScheduleLookaheadSeconds = 0.5;
+const mixedAudioSchedulerIntervalMs = 100;
+
 function acceleratorFromKeyboardEvent(event: KeyboardEvent) {
   const ignoredKeys = new Set(["Control", "Shift", "Alt", "Meta", "OS"]);
   if (ignoredKeys.has(event.key)) return "";
@@ -1299,30 +1313,40 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
 
     const ctx = ensureAudioContext();
     const gain = gainNodeRef.current;
-    if (!gain) return;
+    if (!gain || ctx.state !== "running") return;
 
     const playbackRate = Math.max(0.1, Math.abs(video.playbackRate || 1));
     const videoTime = video.currentTime;
-    const chunkEnd = chunk.start + chunk.buffer.duration;
+    const chunkSeconds = Math.max(1, mixedAudioChunkSeconds || 8);
+    const nominalChunkEnd = duration > 0
+      ? Math.min(duration, chunk.start + chunkSeconds)
+      : chunk.start + chunkSeconds;
+    const chunkEnd = Math.min(chunk.start + chunk.buffer.duration, nominalChunkEnd);
     if (videoTime >= chunkEnd - 0.05) return;
 
     const offset = Math.max(0, Math.min(chunk.buffer.duration - 0.05, videoTime - chunk.start));
     const secondsUntilChunk = Math.max(0, (chunk.start - videoTime) / playbackRate);
+    if (secondsUntilChunk > mixedAudioScheduleLookaheadSeconds) return;
+    const sourceDuration = Math.max(0.01, chunkEnd - Math.max(videoTime, chunk.start));
     const source = ctx.createBufferSource();
     source.buffer = chunk.buffer;
     source.playbackRate.value = playbackRate;
     source.connect(gain);
     const scheduledNodes = [source];
     source.onended = () => {
-      if (mixedScheduledChunksRef.current.get(chunkIndex) === scheduledNodes) {
-        mixedScheduledChunksRef.current.delete(chunkIndex);
+      try {
+        source.disconnect();
+      } catch {
+        // The playback generation cleanup may already have disconnected it.
       }
+      // Keep the completed entry until playback passes this chunk. Removing it
+      // here lets a small AudioContext/video clock skew schedule the same tail again.
     };
 
     mixedScheduledChunksRef.current.set(chunkIndex, scheduledNodes);
     chunk.lastUsedAt = performance.now();
     try {
-      source.start(ctx.currentTime + secondsUntilChunk + 0.035, offset);
+      source.start(ctx.currentTime + secondsUntilChunk, offset, sourceDuration);
     } catch (error) {
       if (mixedScheduledChunksRef.current.get(chunkIndex) === scheduledNodes) {
         mixedScheduledChunksRef.current.delete(chunkIndex);
@@ -1347,10 +1371,14 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     const firstChunk = Math.max(0, Math.floor(Math.max(0, time - 0.25) / chunkSeconds));
     const lastChunk = Math.max(firstChunk, Math.floor((time + 16) / chunkSeconds));
 
+    let prefetch = Promise.resolve();
     for (let chunkIndex = firstChunk; chunkIndex <= lastChunk; chunkIndex += 1) {
-      void loadMixedChunk(chunkIndex, generation).then(() => scheduleMixedChunk(chunkIndex, generation));
       scheduleMixedChunk(chunkIndex, generation);
+      prefetch = prefetch
+        .then(() => loadMixedChunk(chunkIndex, generation))
+        .then(() => scheduleMixedChunk(chunkIndex, generation));
     }
+    void prefetch;
 
     cleanupMixedChunks(time);
   };
@@ -1457,7 +1485,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
 
     const tick = () => ensureMixedBuffered();
     tick();
-    mixedTimerRef.current = window.setInterval(tick, 500);
+    mixedTimerRef.current = window.setInterval(tick, mixedAudioSchedulerIntervalMs);
 
     return () => {
       if (mixedTimerRef.current) {
@@ -2946,7 +2974,18 @@ function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
     ["Audio captured", String(diagnostics.audioCapturedPackets)],
     ["Video packets", String(diagnostics.bufferedVideoPackets)],
     ["Audio packets", String(diagnostics.bufferedAudioPackets)],
-    ["Dropped frames", String(diagnostics.droppedFrames)]
+    ["Dropped frames", String(diagnostics.droppedFrames)],
+    ["Capture overflow", String(diagnostics.captureOverflowDrops)],
+    ["Capture coalesced", String(diagnostics.captureCoalescedDrops)],
+    ["Owned-slot drops", String(diagnostics.captureSlotDrops)],
+    ["Capture callback errors", String(diagnostics.captureCallbackErrors)],
+    ["Scheduler skips", String(diagnostics.schedulerDroppedFrames)],
+    ["Encoder backpressure", String(diagnostics.encoderBackpressureDrops)],
+    ["NVENC in flight", String(diagnostics.nvencInFlightFrames)],
+    ["Maximum capture gap", `${(diagnostics.maximumCaptureGap100ns / 10_000).toFixed(1)} ms`],
+    ["Maximum submit latency", `${(diagnostics.maximumSubmitLatency100ns / 10_000).toFixed(1)} ms`],
+    ["Capture epoch", String(diagnostics.captureEpoch)],
+    ["Capture pressure", diagnostics.capturePressure]
   ];
 
   return (

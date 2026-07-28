@@ -39,7 +39,6 @@ struct AudioReplayCoordinator::Impl {
         int64_t newestEnd100ns = 0;
         int64_t nextBlockPts100ns = 0;
         int64_t committedPts100ns = 0;
-        int silentBlocks = 0;
         uint32_t epoch = 1;
         std::vector<EncodedPacket> pending;
         std::vector<float> mixScratch;
@@ -162,7 +161,6 @@ struct AudioReplayCoordinator::Impl {
         }
         track.encoder.reset();
         ++track.epoch;
-        track.silentBlocks = 0;
         return true;
     }
 
@@ -232,10 +230,8 @@ struct AudioReplayCoordinator::Impl {
             if (track.batchFrames >= targetBatchFrames && !flushBatch(track)) return false;
         }
 
-        track.silentBlocks = audible ? 0 : track.silentBlocks + 1;
         track.nextBlockPts100ns = blockEnd;
         track.committedPts100ns = blockEnd;
-        if (track.silentBlocks >= 20 && track.encoder && !finishEpoch(track)) return false;
         return true;
     }
 

@@ -22,6 +22,10 @@ public:
     bool running() const;
     int capturedFrames() const;
     int64_t lastFrameInterval100ns() const;
+    int64_t maximumFrameInterval100ns() const;
+    uint64_t ownedSlotDrops() const;
+    uint64_t callbackErrors() const;
+    uint64_t captureEpoch() const;
     std::string resolution() const;
     std::string displayName() const;
     bool hdrTonemappingActive() const;

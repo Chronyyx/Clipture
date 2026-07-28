@@ -92,6 +92,7 @@ private:
     std::vector<std::string> activeAppAudioSources_;
     std::map<std::string, std::string> activeAppAudioTrackAliases_;
     int64_t pendingAutoVideoResolutionReset100ns_ = 0;
+    int64_t nextCaptureRestart100ns_ = 0;
     
     std::atomic<bool> gameDetectionRunning_{false};
     std::thread gameDetectionThread_;

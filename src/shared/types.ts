@@ -18,6 +18,17 @@ export interface EngineDiagnostics {
   bitrateMbps: number;
   hardwareAcceleration: boolean;
   droppedFrames: number;
+  captureOverflowDrops: number;
+  captureCoalescedDrops: number;
+  captureSlotDrops: number;
+  captureCallbackErrors: number;
+  schedulerDroppedFrames: number;
+  encoderBackpressureDrops: number;
+  nvencInFlightFrames: number;
+  maximumCaptureGap100ns: number;
+  maximumSubmitLatency100ns: number;
+  captureEpoch: number;
+  capturePressure: "healthy" | "elevated" | "critical";
   nvencAvailable: boolean;
   engineRunning: boolean;
   d3d11Ready: boolean;

@@ -4,9 +4,15 @@ Clipture is a Windows replay-buffer application built around low-latency NVIDIA 
 
 ## Current Release
 
-Version `1.1.2` is a bugfix release for the custom Windows titlebar drag area.
+Version `1.1.3` is a bugfix release for audio timeline stability and repeated playback audio.
 
-## What's New in 1.1.2
+## What's New in 1.1.3
+
+- Keeps live AAC timelines continuous through quiet periods to prevent repeated audio in saved clips.
+- Normalizes rare AAC gaps and overlaps before MP4 muxing so audio timestamps remain monotonic.
+- Removes the temporary mixed-video diagnostic export control.
+
+## 1.1.2 Highlights
 
 - Bugfix: restores dragging from the very top of the app without covering the Clipture icon or window controls.
 

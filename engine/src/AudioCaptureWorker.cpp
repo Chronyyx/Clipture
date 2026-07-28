@@ -1,4 +1,6 @@
 #include "clipture/AudioCaptureWorker.hpp"
+#include "clipture/AudioTimeline.hpp"
+#include "clipture/MediaClock.hpp"
 #include "clipture/AudioReplayCoordinator.hpp"
 #include "clipture/ProcessSnapshot.hpp"
 
@@ -395,12 +397,20 @@ DWORD findProcessIdByName(const std::string& processName) {
 }
 
 int64_t now100ns() {
-    FILETIME fileTime {};
-    GetSystemTimePreciseAsFileTime(&fileTime);
-    ULARGE_INTEGER value {};
-    value.LowPart = fileTime.dwLowDateTime;
-    value.HighPart = fileTime.dwHighDateTime;
-    return static_cast<int64_t>(value.QuadPart);
+    return mediaNow100ns();
+}
+
+void alignAudioPtsToWasapiClock(
+    UINT64 qpcPosition100ns,
+    DWORD flags,
+    int64_t packetDuration100ns,
+    bool& clockAnchored,
+    int64_t& nextPts100ns) {
+    if (qpcPosition100ns == 0 || (flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) != 0) return;
+    const int64_t capturedPts100ns = mediaTimeFromSystemRelative100ns(
+        static_cast<int64_t>(qpcPosition100ns));
+    alignAudioPtsForwardOnly(
+        capturedPts100ns, packetDuration100ns, clockAnchored, nextPts100ns);
 }
 
 bool isFloatFormat(const WAVEFORMATEX* format) {
@@ -878,6 +888,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
         HANDLE avrtHandle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
         audioClient->Start();
         status_ = "WASAPI system and microphone capture are running.";
+        bool audioClockAnchored = false;
         const int outputChannelsForSilence = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
         const UINT32 catchUpFrames = std::max<UINT32>(1, mixFormat->nSamplesPerSec / 100);
         const int64_t catchUpDuration100ns = static_cast<int64_t>((10'000'000.0 * catchUpFrames) / mixFormat->nSamplesPerSec);
@@ -908,7 +919,18 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                 BYTE* data = nullptr;
                 UINT32 frames = 0;
                 DWORD flags = 0;
-                if (FAILED(captureClient->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
+                UINT64 devicePosition = 0;
+                UINT64 qpcPosition100ns = 0;
+                if (FAILED(captureClient->GetBuffer(
+                        &data, &frames, &flags, &devicePosition, &qpcPosition100ns))) break;
+                const int64_t capturePacketDuration100ns = static_cast<int64_t>(
+                    (10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
+                alignAudioPtsToWasapiClock(
+                    qpcPosition100ns,
+                    flags,
+                    capturePacketDuration100ns,
+                    audioClockAnchored,
+                    nextPts100ns);
 
                 int outputChannels = 0;
                 const int estimatedChannels = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
@@ -1132,6 +1154,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
     audioClient->Start();
     status_ = "WASAPI system and microphone capture are running.";
     int64_t nextPts100ns = now100ns();
+    bool audioClockAnchored = false;
     const int outputChannelsForSilence = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
 
     float currentGateGain = 1.0f;
@@ -1145,7 +1168,18 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
             BYTE* data = nullptr;
             UINT32 frames = 0;
             DWORD flags = 0;
-            if (FAILED(captureClient->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
+            UINT64 devicePosition = 0;
+            UINT64 qpcPosition100ns = 0;
+            if (FAILED(captureClient->GetBuffer(
+                    &data, &frames, &flags, &devicePosition, &qpcPosition100ns))) break;
+            const int64_t capturePacketDuration100ns = static_cast<int64_t>(
+                (10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
+            alignAudioPtsToWasapiClock(
+                qpcPosition100ns,
+                flags,
+                capturePacketDuration100ns,
+                audioClockAnchored,
+                nextPts100ns);
 
             int outputChannels = 0;
             const int estimatedChannels = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
@@ -1427,6 +1461,7 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
     HANDLE avrtHandle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
     audioClient->Start();
     int64_t nextPts100ns = now100ns();
+    bool audioClockAnchored = false;
     const int outputChannelsForSilence = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
 
     std::cerr << "[audio] Process loopback capture RUNNING for " << captureName
@@ -1441,7 +1476,18 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
             BYTE* data = nullptr;
             UINT32 frames = 0;
             DWORD flags = 0;
-            if (FAILED(captureClient->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
+            UINT64 devicePosition = 0;
+            UINT64 qpcPosition100ns = 0;
+            if (FAILED(captureClient->GetBuffer(
+                    &data, &frames, &flags, &devicePosition, &qpcPosition100ns))) break;
+            const int64_t capturePacketDuration100ns = static_cast<int64_t>(
+                (10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
+            alignAudioPtsToWasapiClock(
+                qpcPosition100ns,
+                flags,
+                capturePacketDuration100ns,
+                audioClockAnchored,
+                nextPts100ns);
 
             int outputChannels = 0;
             const int estimatedChannels = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));

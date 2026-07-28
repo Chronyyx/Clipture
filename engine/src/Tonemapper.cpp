@@ -1,6 +1,7 @@
 #include "clipture/Tonemapper.hpp"
 #include <d3dcompiler.h>
-#include <iostream>
+#include <algorithm>
+#include <iterator>
 
 namespace clipture {
 
@@ -140,10 +141,10 @@ bool Tonemapper::Process(
 
     D3D11_TEXTURE2D_DESC inDesc;
     inputFloat16->GetDesc(&inDesc);
-    bool recreatedInputView = false;
-    if (!cachedInputSRV_ ||
-        cachedInputTexture_.Get() != inputFloat16.Get() ||
-        !sameTextureDesc(cachedInputDesc_, inDesc)) {
+    auto inputViewIt = std::find_if(inputViews_.begin(), inputViews_.end(), [&](const InputViewCacheEntry& entry) {
+        return entry.texture.Get() == inputFloat16.Get() && sameTextureDesc(entry.desc, inDesc);
+    });
+    if (inputViewIt == inputViews_.end()) {
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.Format = inDesc.Format;
         srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
@@ -155,18 +156,17 @@ bool Tonemapper::Process(
             errorMsg = "CreateShaderResourceView failed: " + std::to_string(hr);
             return false;
         }
-        cachedInputTexture_ = inputFloat16;
-        cachedInputSRV_ = inputSRV;
-        cachedInputDesc_ = inDesc;
-        recreatedInputView = true;
+        if (inputViews_.size() >= 8) inputViews_.erase(inputViews_.begin());
+        inputViews_.push_back({ inputFloat16, inputSRV, inDesc });
+        inputViewIt = std::prev(inputViews_.end());
     }
 
     D3D11_TEXTURE2D_DESC outDesc;
     outputUnorm8->GetDesc(&outDesc);
-    bool recreatedOutputView = false;
-    if (!cachedOutputUAV_ ||
-        cachedOutputTexture_.Get() != outputUnorm8.Get() ||
-        !sameTextureDesc(cachedOutputDesc_, outDesc)) {
+    auto outputViewIt = std::find_if(outputViews_.begin(), outputViews_.end(), [&](const OutputViewCacheEntry& entry) {
+        return entry.texture.Get() == outputUnorm8.Get() && sameTextureDesc(entry.desc, outDesc);
+    });
+    if (outputViewIt == outputViews_.end()) {
         D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
         uavDesc.Format = outDesc.Format;
         uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
@@ -177,27 +177,18 @@ bool Tonemapper::Process(
             errorMsg = "CreateUnorderedAccessView failed: " + std::to_string(hr);
             return false;
         }
-        cachedOutputTexture_ = outputUnorm8;
-        cachedOutputUAV_ = outputUAV;
-        cachedOutputDesc_ = outDesc;
-        recreatedOutputView = true;
-    }
-
-    if (recreatedInputView || recreatedOutputView) {
-        std::cerr << "[perf] tonemapper_views"
-                  << " inputRecreated=" << (recreatedInputView ? "true" : "false")
-                  << " outputRecreated=" << (recreatedOutputView ? "true" : "false")
-                  << " size=" << outDesc.Width << "x" << outDesc.Height
-                  << std::endl;
+        if (outputViews_.size() >= 8) outputViews_.erase(outputViews_.begin());
+        outputViews_.push_back({ outputUnorm8, outputUAV, outDesc });
+        outputViewIt = std::prev(outputViews_.end());
     }
 
     // Dispatch compute shader
     context_->CSSetShader(computeShader_.Get(), nullptr, 0);
     
-    ID3D11ShaderResourceView* srvs[] = { cachedInputSRV_.Get() };
+    ID3D11ShaderResourceView* srvs[] = { inputViewIt->view.Get() };
     context_->CSSetShaderResources(0, 1, srvs);
     
-    ID3D11UnorderedAccessView* uavs[] = { cachedOutputUAV_.Get() };
+    ID3D11UnorderedAccessView* uavs[] = { outputViewIt->view.Get() };
     context_->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
     // Calculate thread groups (8x8 threads per group)
@@ -213,6 +204,11 @@ bool Tonemapper::Process(
     context_->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
 
     return true;
+}
+
+void Tonemapper::ResetViewCache() {
+    inputViews_.clear();
+    outputViews_.clear();
 }
 
 } // namespace clipture
