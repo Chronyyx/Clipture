@@ -1,14 +1,22 @@
 #include "clipture/BoundedWrite.hpp"
 #include "clipture/AudioTimeline.hpp"
 #include "clipture/AudioPacketRouting.hpp"
+#include "clipture/AudioProcessSpec.hpp"
 #include "clipture/AudioReplayCoordinator.hpp"
+#include "clipture/CaptureBackendPolicy.hpp"
+#include "clipture/DesktopDuplicationHelpers.hpp"
+#include "clipture/DesktopPointerShape.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
+#include "clipture/FixedRateFrameSampler.hpp"
 #include "clipture/FrameQueue.hpp"
+#include "clipture/MediaClock.hpp"
+#include "clipture/ProcessSnapshot.hpp"
 #include "clipture/VideoTimeline.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <array>
 #include <algorithm>
 #include <iostream>
 #include <memory>
@@ -81,31 +89,232 @@ bool testBoundedWrites() {
                    "bounded writer should cover every byte in three requests");
 }
 
-bool testVideoTimelineNeverCatchesUpRetroactively() {
+bool testRefreshRateSamplerMaintainsTargetCadence() {
+    constexpr int targetFps = 60;
+    constexpr int durationSeconds = 120;
+    constexpr int64_t basePts100ns = 50'000'000'000LL;
+    struct SourceRate {
+        int numerator;
+        int denominator;
+    };
+    const SourceRate sourceRates[] {
+        { 60, 1 },
+        { 60'000, 1'001 },
+        { 75, 1 },
+        { 120, 1 },
+        { 1439, 10 },
+        { 143855, 1000 },
+        { 144, 1 },
+        { 165, 1 },
+        { 210, 1 },
+        { 240, 1 },
+    };
+    for (const auto sourceRate : sourceRates) {
+        clipture::FixedRateFrameSampler sampler;
+        int sampled = 0;
+        int64_t previousSelectedPts100ns = 0;
+        const int64_t sourceFrameCount =
+            static_cast<int64_t>(sourceRate.numerator) * durationSeconds / sourceRate.denominator;
+        for (int64_t sourceFrame = 0; sourceFrame <= sourceFrameCount; ++sourceFrame) {
+            const int64_t pts100ns = basePts100ns +
+                sourceFrame * 10'000'000LL * sourceRate.denominator / sourceRate.numerator;
+            if (!sampler.shouldSample(pts100ns, targetFps)) continue;
+            ++sampled;
+            const int64_t selectedOffset100ns = sampler.selectedPts100ns() - basePts100ns;
+            const uint64_t targetTick = static_cast<uint64_t>(
+                (selectedOffset100ns * targetFps + 9'999'999LL) / 10'000'000LL);
+            const int64_t expectedSelectedPts100ns = basePts100ns + static_cast<int64_t>(
+                targetTick * 10'000'000ULL / targetFps);
+            if (!require(
+                    sampler.selectedPts100ns() == expectedSelectedPts100ns &&
+                    sampler.selectedPts100ns() > previousSelectedPts100ns &&
+                    sampler.selectedPts100ns() <= pts100ns,
+                    "selected capture timestamps must stay on one exact target-rate phase")) {
+                return false;
+            }
+            previousSelectedPts100ns = sampler.selectedPts100ns();
+        }
+        const int64_t lastElapsed100ns =
+            sourceFrameCount * 10'000'000LL * sourceRate.denominator / sourceRate.numerator;
+        const int64_t targetSamples = lastElapsed100ns * targetFps / 10'000'000LL + 1;
+        const int64_t expectedSamples = std::min(sourceFrameCount + 1, targetSamples);
+        if (!require(sampled == expectedSamples,
+                     "fixed-rate sampler must not alias integer or fractional display rates below 60 FPS")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool testJitteredRefreshSamplerMaintainsCadence() {
+    constexpr int targetFps = 60;
+    constexpr int64_t basePts100ns = 80'000'000'000LL;
+    constexpr int64_t duration100ns = 1'200'000'000LL;
+    constexpr std::array<int64_t, 10> sourceIntervals100ns {
+        45'000, 49'000, 47'000, 52'000, 43'000,
+        61'000, 46'000, 55'000, 44'000, 50'000,
+    };
+    clipture::FixedRateFrameSampler sampler;
+    int64_t pts100ns = basePts100ns;
+    uint64_t sourceFrame = 0;
+    uint64_t sampled = 0;
+    while (pts100ns <= basePts100ns + duration100ns) {
+        if (sampler.shouldSample(pts100ns, targetFps)) ++sampled;
+        pts100ns += sourceIntervals100ns[sourceFrame % sourceIntervals100ns.size()];
+        ++sourceFrame;
+    }
+    const int64_t covered100ns = pts100ns - sourceIntervals100ns[(sourceFrame - 1) % sourceIntervals100ns.size()] - basePts100ns;
+    const uint64_t expected = static_cast<uint64_t>(covered100ns * targetFps / 10'000'000LL + 1);
+    return require(sampled == expected,
+                   "timestamp-driven sampling must remain phase-locked under high-refresh jitter and VRR-like intervals");
+}
+
+bool testCaptureBackendPolicyAndDxgiHelpers() {
+    bool valid = false;
+    if (!require(
+            clipture::parseCaptureBackendPreference("dxgi", valid) == clipture::CaptureBackendPreference::Dxgi && valid,
+            "DXGI backend override should parse")) return false;
+    if (!require(
+            clipture::parseCaptureBackendPreference("invalid", valid) == clipture::CaptureBackendPreference::Auto && !valid,
+            "invalid backend override should safely resolve to auto")) return false;
+
+    const auto sdr = clipture::decideCaptureBackend(
+        clipture::CaptureBackendPreference::Auto, false, true, false);
+    const auto hdr = clipture::decideCaptureBackend(
+        clipture::CaptureBackendPreference::Auto, true, true, false);
+    const auto rotated = clipture::decideCaptureBackend(
+        clipture::CaptureBackendPreference::Auto, false, false, false);
+    const auto quarantined = clipture::decideCaptureBackend(
+        clipture::CaptureBackendPreference::Auto, false, true, true);
+    const auto forcedHdr = clipture::decideCaptureBackend(
+        clipture::CaptureBackendPreference::Dxgi, true, true, false);
+    if (!require(sdr.kind == clipture::CaptureBackendKind::Dxgi && sdr.supported,
+                 "auto SDR capture should prefer Desktop Duplication")) return false;
+    if (!require(hdr.kind == clipture::CaptureBackendKind::Dxgi && rotated.kind == clipture::CaptureBackendKind::Wgc,
+                 "HDR should use DXGI while rotated capture remains on WGC")) return false;
+    if (!require(quarantined.kind == clipture::CaptureBackendKind::Wgc,
+                 "a quarantined DXGI output should not oscillate back during the session")) return false;
+    if (!require(forcedHdr.supported && forcedHdr.kind == clipture::CaptureBackendKind::Dxgi,
+                 "forced DXGI should support the validated FP16 HDR path")) return false;
+    if (!require(
+            clipture::dxgiCaptureFormatSupported(DXGI_FORMAT_R16G16B16A16_FLOAT, true) &&
+            !clipture::dxgiCaptureFormatSupported(DXGI_FORMAT_R10G10B10A2_UNORM, true) &&
+            clipture::dxgiCaptureFormatSupported(DXGI_FORMAT_B8G8R8A8_UNORM, false),
+            "DXGI must accept only formats with a validated conversion path")) return false;
+
+    DXGI_OUTDUPL_FRAME_INFO frameInfo {};
+    frameInfo.LastPresentTime.QuadPart = 100;
+    frameInfo.LastMouseUpdateTime.QuadPart = 120;
+    frameInfo.AccumulatedFrames = 4;
+    if (!require(clipture::dxgiEffectiveTimestampTicks(frameInfo) == 120,
+                 "pointer-only timing should participate in the effective DXGI timestamp")) return false;
+    frameInfo.LastPresentTime.QuadPart = 0;
+    if (!require(clipture::dxgiEffectiveTimestampTicks(frameInfo) == 120,
+                 "a pointer-only update should retain its QPC timestamp")) return false;
+    if (!require(clipture::dxgiAccumulatedFramesBeyondFirst(frameInfo.AccumulatedFrames) == 3,
+                 "DXGI accumulation accounting should exclude the current acquired frame")) return false;
+    if (!require(
+            clipture::captureTimestampIsStrictlyNew(100, 101) &&
+            !clipture::captureTimestampIsStrictlyNew(100, 100) &&
+            !clipture::captureTimestampIsStrictlyNew(100, 99),
+            "capture timestamps must never move backward or repeat")) return false;
+    if (!require(clipture::detail::qpcTicksTo100ns(10'000, 10'000) == 10'000'000,
+                 "QPC ticks should convert exactly to the shared 100 ns clock")) return false;
+
+    int recoveryDelayTotal = 0;
+    for (const int delay : clipture::kDxgiRecoveryDelaysMs) recoveryDelayTotal += delay;
+    return require(recoveryDelayTotal == 1900,
+                   "DXGI recovery must remain bounded before automatic WGC fallback");
+}
+
+bool testDesktopPointerDecodingAndClipping() {
+    clipture::DecodedDesktopPointerShape decoded;
+    std::string error;
+
+    DXGI_OUTDUPL_POINTER_SHAPE_INFO colorInfo {};
+    colorInfo.Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR;
+    colorInfo.Width = 1;
+    colorInfo.Height = 1;
+    colorInfo.Pitch = 4;
+    const std::array<std::byte, 4> colorBytes {
+        std::byte { 1 }, std::byte { 2 }, std::byte { 3 }, std::byte { 128 },
+    };
+    if (!require(clipture::decodeDesktopPointerShape(colorInfo, colorBytes, decoded, error),
+                 "ARGB desktop pointer should decode")) return false;
+    if (!require(
+            decoded.width == 1 && decoded.height == 1 &&
+            decoded.rgbaOperationPixels[0] == 3 &&
+            decoded.rgbaOperationPixels[1] == 2 &&
+            decoded.rgbaOperationPixels[2] == 1 &&
+            (decoded.rgbaOperationPixels[3] >> 8) ==
+                static_cast<uint16_t>(clipture::DesktopPointerPixelMode::Alpha) &&
+            (decoded.rgbaOperationPixels[3] & 0xFF) == 128,
+            "color pointer channels and alpha operation should remain exact")) return false;
+
+    DXGI_OUTDUPL_POINTER_SHAPE_INFO maskedInfo {};
+    maskedInfo.Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR;
+    maskedInfo.Width = 2;
+    maskedInfo.Height = 1;
+    maskedInfo.Pitch = 8;
+    const std::array<std::byte, 8> maskedBytes {
+        std::byte { 10 }, std::byte { 20 }, std::byte { 30 }, std::byte { 0 },
+        std::byte { 1 }, std::byte { 2 }, std::byte { 3 }, std::byte { 255 },
+    };
+    if (!require(clipture::decodeDesktopPointerShape(maskedInfo, maskedBytes, decoded, error),
+                 "masked-color desktop pointer should decode")) return false;
+    if (!require(
+            (decoded.rgbaOperationPixels[3] >> 8) ==
+                static_cast<uint16_t>(clipture::DesktopPointerPixelMode::Replace) &&
+            (decoded.rgbaOperationPixels[7] >> 8) ==
+                static_cast<uint16_t>(clipture::DesktopPointerPixelMode::Xor),
+            "masked-color replace and XOR pixels should remain distinct")) return false;
+
+    DXGI_OUTDUPL_POINTER_SHAPE_INFO monoInfo {};
+    monoInfo.Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME;
+    monoInfo.Width = 2;
+    monoInfo.Height = 4;
+    monoInfo.Pitch = 1;
+    const std::array<std::byte, 4> monoBytes {
+        std::byte { 0x80 }, std::byte { 0x40 },
+        std::byte { 0x40 }, std::byte { 0x80 },
+    };
+    if (!require(clipture::decodeDesktopPointerShape(monoInfo, monoBytes, decoded, error),
+                 "monochrome AND/XOR desktop pointer should decode")) return false;
+    if (!require(decoded.width == 2 && decoded.height == 2,
+                 "monochrome pointer height should exclude the second XOR mask plane")) return false;
+
+    const auto clipped = clipture::clipDesktopPointer(POINT { -3, -2 }, 10, 8, 100, 100);
+    if (!require(
+            clipped && clipped.destinationX == 0 && clipped.destinationY == 0 &&
+            clipped.sourceX == 3 && clipped.sourceY == 2 &&
+            clipped.width == 7 && clipped.height == 6,
+            "partially offscreen desktop pointers should preserve source offsets")) return false;
+    const auto outside = clipture::clipDesktopPointer(POINT { 120, 120 }, 10, 10, 100, 100);
+    if (!require(!outside, "fully offscreen desktop pointers should not render")) return false;
+
+    colorInfo.Pitch = 3;
+    return require(!clipture::decodeDesktopPointerShape(colorInfo, colorBytes, decoded, error),
+                   "malformed pointer pitch should fail without reading outside the shape buffer");
+}
+
+bool testVideoTimelineCatchesUpWithoutUnboundedBursts() {
     constexpr int fps = 60;
     constexpr int64_t firstPts100ns = 50'000'000'000LL;
     const int64_t spacing100ns = 10'000'000LL / fps;
-    const int64_t stalls100ns[] {
-        500'000LL,
-        5'000'000LL,
-        49'000'000LL,
-        55'000'000LL,
-        100'000'000LL,
-    };
+    clipture::VideoTimeline timeline(firstPts100ns, fps);
+    const auto initial = timeline.advance(0);
+    if (!require(initial.pts100ns == firstPts100ns && initial.dueTicks == 1 && initial.skippedTicks == 0,
+                 "timeline should emit its first current tick once")) return false;
 
-    for (const int64_t stall100ns : stalls100ns) {
-        clipture::VideoTimeline timeline(firstPts100ns, fps);
-        const auto initial = timeline.advance(0);
-        if (!require(initial.pts100ns == firstPts100ns && initial.skippedTicks == 0,
-                     "timeline should emit its first current tick once")) return false;
+    const auto transientStall = timeline.advance(spacing100ns * 5);
+    if (!require(transientStall.dueTicks == 6 && transientStall.skippedTicks == 0,
+                 "transient scheduler stalls should preserve every output tick")) return false;
+    if (!require(transientStall.pts100ns == firstPts100ns + spacing100ns,
+                 "catch-up should begin at the next uncommitted timestamp")) return false;
 
-        const auto afterStall = timeline.advance(stall100ns);
-        const int64_t expectedSkipped = stall100ns / spacing100ns;
-        if (!require(afterStall.skippedTicks == expectedSkipped,
-                     "timeline should account for every elapsed tick")) return false;
-        if (!require(afterStall.pts100ns == firstPts100ns + (expectedSkipped + 1) * spacing100ns,
-                     "stalled timeline should jump forward without catch-up packets")) return false;
-    }
+    const auto longStall = timeline.advance(spacing100ns * 20, 8);
+    if (!require(longStall.dueTicks == 8 && longStall.skippedTicks == 13,
+                 "long suspension recovery must remain bounded")) return false;
     if (!require(clipture::finalVideoSampleDuration100ns(spacing100ns, fps) == spacing100ns,
                  "final video duration should use the packet duration after an earlier gap")) return false;
     return require(clipture::finalVideoSampleDuration100ns(0, fps) == spacing100ns,
@@ -188,6 +397,35 @@ bool testImmutableAudioRouting() {
     std::fill(later.payload->begin(), later.payload->end(), std::byte { 0 });
     clipture::prepareAudioReplayPacket(later, changedRoutes);
     return require(!later.audible, "silent PCM should be marked for track omission");
+}
+
+bool testPidAudioProcessSpecsAndTreeCollapse() {
+    const auto gameSpec = clipture::makePidAudioProcessSpec(
+        clipture::AudioProcessKind::Game,
+        101,
+        "Game-Win64-Shipping.exe");
+    const auto parsedGame = clipture::parseAudioProcessSpec(gameSpec);
+    if (!require(parsedGame.kind == clipture::AudioProcessKind::Game, "game PID source should preserve its kind")) return false;
+    if (!require(parsedGame.pidSpecific && parsedGame.processId == 101, "game PID source should preserve its process ID")) return false;
+    if (!require(parsedGame.processName == "Game-Win64-Shipping.exe", "game PID source should preserve its executable")) return false;
+    if (!require(
+            clipture::audioProcessSourceId(gameSpec) == "game:Game-Win64-Shipping.exe",
+            "game PID packets should use the stable game source ID")) {
+        return false;
+    }
+
+    const std::vector<clipture::RunningProcessInfo> processes {
+        { 100, 10, "Launcher.exe", "launcher.exe" },
+        { 101, 100, "Game.exe", "game.exe" },
+        { 102, 101, "AudioHelper.exe", "audiohelper.exe" },
+        { 200, 10, "VoiceHelper.exe", "voicehelper.exe" }
+    };
+    const auto roots = clipture::collapseProcessTreeRoots(processes, { 101, 200, 100, 102 });
+    if (!require(roots.size() == 2, "overlapping game process trees should collapse to one root")) return false;
+    if (!require(std::find(roots.begin(), roots.end(), DWORD { 100 }) != roots.end(), "the highest game ancestor should own its tree")) return false;
+    return require(
+        std::find(roots.begin(), roots.end(), DWORD { 200 }) != roots.end(),
+        "an independent audio helper should remain a separate capture root");
 }
 
 clipture::EncodedPacket makePcmPacket(
@@ -353,10 +591,15 @@ int main() {
     if (!testStartCodesAndFlags()) return 1;
     if (!testMalformedPackets()) return 1;
     if (!testBoundedWrites()) return 1;
-    if (!testVideoTimelineNeverCatchesUpRetroactively()) return 1;
+    if (!testRefreshRateSamplerMaintainsTargetCadence()) return 1;
+    if (!testJitteredRefreshSamplerMaintainsCadence()) return 1;
+    if (!testCaptureBackendPolicyAndDxgiHelpers()) return 1;
+    if (!testDesktopPointerDecodingAndClipping()) return 1;
+    if (!testVideoTimelineCatchesUpWithoutUnboundedBursts()) return 1;
     if (!testAudioTimelineNeverRewinds()) return 1;
     if (!testFrameQueueDropAccounting()) return 1;
     if (!testImmutableAudioRouting()) return 1;
+    if (!testPidAudioProcessSpecsAndTreeCollapse()) return 1;
     if (!testLiveAacCoordinator()) return 1;
     if (!testLiveAacTimelineStaysContinuousThroughSilence()) return 1;
     if (!testConcurrentPublishDoesNotTriggerRepair()) return 1;

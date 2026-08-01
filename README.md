@@ -4,9 +4,19 @@ Clipture is a Windows replay-buffer application built around low-latency NVIDIA 
 
 ## Current Release
 
-Version `1.1.3` is a bugfix release for audio timeline stability and repeated playback audio.
+Version `1.1.4` is a capture-stability and save-performance release focused on smoother high-refresh-rate recording and predictable clip finalization.
 
-## What's New in 1.1.3
+## What's New in 1.1.4
+
+- Adds a phase-locked target-FPS capture sampler so 144 Hz and 210 Hz displays do not alias below the requested 60 FPS.
+- Introduces a dedicated DXGI Desktop Duplication backend with Windows.Graphics.Capture fallback, recovery diagnostics, and consistent cursor handling.
+- Pipelines NVENC submission and asynchronous output draining with bounded queues, direct native-size BGRA input when supported, and detailed frame-loss diagnostics.
+- Preserves real capture timing through the MP4 timeline instead of shortening clips when a frame deadline is missed.
+- Separates software encoder backlog from normal NVENC in-flight work when pacing saves.
+- Caps critical save pacing to one millisecond per bounded write, preventing sustained pressure from turning a normal save into a long recovery loop.
+- Improves startup behavior and development launching so stale packaged binaries do not interfere with local builds.
+
+## 1.1.3 Highlights
 
 - Keeps live AAC timelines continuous through quiet periods to prevent repeated audio in saved clips.
 - Normalizes rare AAC gaps and overlaps before MP4 muxing so audio timestamps remain monotonic.
@@ -36,7 +46,7 @@ Version `1.1.3` is a bugfix release for audio timeline stability and repeated pl
 
 ## Features
 
-- Windows.Graphics.Capture with D3D11 textures.
+- DXGI Desktop Duplication capture with automatic Windows.Graphics.Capture fallback.
 - Direct NVIDIA NVENC H.264 encoding with runtime API compatibility checks.
 - Configurable 24, 30, or 60 FPS capture and up to ten minutes of replay history.
 - System, microphone, detected game/app, and explicit per-app audio capture.
@@ -55,8 +65,10 @@ Version `1.1.3` is a bugfix release for audio timeline stability and repeated pl
 
 ```text
 Video
-Windows.Graphics.Capture
+DXGI Desktop Duplication (WGC fallback)
   -> D3D11 texture
+  -> phase-locked target-FPS sampler
+  -> bounded pipelined BGRA-to-NV12 conversion
   -> NVENC H.264
   -> shared packet payload + cached NAL metadata
   -> RAM video ring
@@ -150,7 +162,15 @@ Run an already-built Electron application directly:
 npm.cmd run start:dev
 ```
 
-`npm.cmd start` performs a complete engine/UI build and creates the unpacked package before launching it. That build workload can temporarily use substantial CPU, disk, and memory and should not be used to judge installed-app startup performance.
+Build the engine and UI, then run Electron directly:
+
+```powershell
+npm.cmd start
+```
+
+`npm.cmd start` does not rewrite `release/win-unpacked`, so a running packaged or tray instance cannot lock development startup. Use `npm.cmd run start:packaged` only when testing the unpacked packaged application itself; exit any copy running from `release/win-unpacked` before rebuilding that directory.
+
+Development builds can temporarily use substantial CPU, disk, and memory and should not be used to judge installed-app startup performance.
 
 Installed startup with `--hidden` opens Clipture in the tray while the native capture engine begins filling the replay buffer.
 
@@ -178,4 +198,4 @@ Run a native engine smoke test with:
 '{"id":1,"type":"configure","fps":30,"bitrateMbps":40,"clipLengthSeconds":30,"monitorId":"primary"}' | .\build\engine\Release\clipture_engine.exe
 ```
 
-If diagnostics reports `CreateForMonitor failed: HRESULT 0x80070424`, Windows rejected monitor capture creation before frames could arrive. Clipture reports this as degraded capture instead of silently treating the engine as armed.
+Diagnostics reports the requested and active capture backends, measured display refresh rate, fresh-frame rate, repeats, queue drops, and encoder-stage latency. If DXGI Desktop Duplication cannot start or recover, automatic mode quarantines it for that monitor and falls back to Windows.Graphics.Capture. A forced WGC failure such as `CreateForMonitor failed: HRESULT 0x80070424` is reported as degraded capture instead of silently treating the engine as armed.

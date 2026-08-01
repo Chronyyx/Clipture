@@ -632,6 +632,13 @@ struct AudioContinuityStats {
     int64_t maximumGap100ns = 0;
 };
 
+struct AudioClipAlignmentStats {
+    std::size_t droppedLeadingSamples = 0;
+    std::size_t droppedTrailingSamples = 0;
+    uint64_t droppedLeadingFrames = 0;
+    int64_t maximumStartDelay100ns = 0;
+};
+
 struct ReusableSilenceSample {
     PacketPayloadPtr payload;
     uint32_t frameCount = 1024;
@@ -757,6 +764,74 @@ bool makeAudioTimelineContinuous(
         verifiedNextPts100ns = sample.pts100ns + sampleDuration100ns(sample);
     }
     return true;
+}
+
+void alignAudioTrackToVideo(
+    AacAudioTrack& track,
+    int64_t videoStartPts100ns,
+    uint64_t movieDuration100ns,
+    AudioClipAlignmentStats& stats) {
+    if (track.samples.empty()) return;
+
+    const int sampleRate = std::max(1, track.sampleRate);
+    const int64_t originalStartPts100ns = track.samples.front().pts100ns;
+    const int64_t leadingDuration100ns = std::max<int64_t>(
+        0,
+        videoStartPts100ns - originalStartPts100ns);
+    const uint64_t leadingFrames =
+        (static_cast<uint64_t>(leadingDuration100ns) * static_cast<uint64_t>(sampleRate) + 9'999'999ULL) /
+        10'000'000ULL;
+    const uint64_t framesToDiscard = leadingFrames + static_cast<uint64_t>(
+        std::max<int32_t>(0, track.samples.front().primingFrames));
+
+    uint64_t discardedFrames = 0;
+    std::size_t discardedSamples = 0;
+    while (discardedSamples < track.samples.size() && discardedFrames < framesToDiscard) {
+        discardedFrames += std::max<uint32_t>(
+            1,
+            track.samples[discardedSamples].encodedFrameCount);
+        ++discardedSamples;
+    }
+    if (discardedSamples > 0) {
+        track.samples.erase(
+            track.samples.begin(),
+            track.samples.begin() + static_cast<std::ptrdiff_t>(discardedSamples));
+        stats.droppedLeadingSamples += discardedSamples;
+        stats.droppedLeadingFrames += discardedFrames;
+    }
+    if (track.samples.empty()) return;
+
+    // MP4 edit lists that seek into the first AAC sample expose the discarded
+    // packets with negative timestamps. Chromium rejects those files outright.
+    // Starting on the next complete AAC frame costs at most one frame of silence
+    // (about 21 ms at 48 kHz) and keeps every demuxed timestamp non-negative.
+    track.samples.front().primingFrames = 0;
+    track.primingFrames = 0;
+    track.samples.front().pts100ns = std::max(
+        videoStartPts100ns,
+        track.samples.front().pts100ns);
+
+    const int64_t maximumMovieDuration = static_cast<int64_t>(
+        std::min<uint64_t>(movieDuration100ns, static_cast<uint64_t>(std::numeric_limits<int64_t>::max())));
+    const int64_t videoEndPts100ns = videoStartPts100ns > std::numeric_limits<int64_t>::max() - maximumMovieDuration
+        ? std::numeric_limits<int64_t>::max()
+        : videoStartPts100ns + maximumMovieDuration;
+    const auto trailing = std::lower_bound(
+        track.samples.begin(),
+        track.samples.end(),
+        videoEndPts100ns,
+        [](const OwnedSample& sample, int64_t endPts100ns) {
+            return sample.pts100ns < endPts100ns;
+        });
+    stats.droppedTrailingSamples += static_cast<std::size_t>(
+        std::distance(trailing, track.samples.end()));
+    track.samples.erase(trailing, track.samples.end());
+    if (track.samples.empty()) return;
+
+    track.firstPts100ns = track.samples.front().pts100ns;
+    stats.maximumStartDelay100ns = std::max(
+        stats.maximumStartDelay100ns,
+        std::max<int64_t>(0, track.firstPts100ns - videoStartPts100ns));
 }
 
 bool startCodeAt(std::span<const std::byte> data, std::size_t offset, std::size_t& size) {
@@ -998,27 +1073,21 @@ Bytes makeAudioEdts(
     for (const auto& sample : track.samples) {
         mediaDurationFrames += std::max<uint32_t>(1, sample.encodedFrameCount);
     }
-    const int64_t relativeStart100ns = track.samples.front().pts100ns - videoStartPts100ns;
-    const uint64_t presentationStart100ns = relativeStart100ns > 0
-        ? std::min<uint64_t>(static_cast<uint64_t>(relativeStart100ns), movieDuration100ns)
-        : 0;
+    const int64_t relativeStart100ns = std::max<int64_t>(
+        0,
+        track.samples.front().pts100ns - videoStartPts100ns);
+    const uint64_t presentationStart100ns = std::min<uint64_t>(
+        static_cast<uint64_t>(relativeStart100ns),
+        movieDuration100ns);
     if (presentationStart100ns > 0) edits.push_back({ presentationStart100ns, -1 });
 
-    uint64_t trimmedFrames = static_cast<uint64_t>(
-        std::max<int32_t>(0, track.samples.front().primingFrames));
-    if (relativeStart100ns < 0) {
-        trimmedFrames += static_cast<uint64_t>(
-            ((-relativeStart100ns) * sampleRate + 9'999'999LL) / 10'000'000LL);
-    }
-
     uint64_t presentationCursor100ns = presentationStart100ns;
-    if (trimmedFrames < mediaDurationFrames && presentationCursor100ns < movieDuration100ns) {
-        const uint64_t playableFrames = mediaDurationFrames - trimmedFrames;
+    if (mediaDurationFrames > 0 && presentationCursor100ns < movieDuration100ns) {
         const uint64_t playableDuration100ns = std::min(
-            (playableFrames * 10'000'000ULL) / static_cast<uint64_t>(sampleRate),
+            (mediaDurationFrames * 10'000'000ULL) / static_cast<uint64_t>(sampleRate),
             movieDuration100ns - presentationCursor100ns);
         if (playableDuration100ns > 0) {
-            edits.push_back({ playableDuration100ns, static_cast<int64_t>(trimmedFrames) });
+            edits.push_back({ playableDuration100ns, 0 });
             presentationCursor100ns += playableDuration100ns;
         }
     }
@@ -1503,9 +1572,10 @@ public:
 
     void flush() {
         if (buffer_.empty()) return;
+        prepareForWrite();
         out_.write(std::span<const std::byte>(buffer_.data(), buffer_.size()));
         buffer_.clear();
-        noteFlush();
+        ++flushes_;
     }
 
     std::size_t flushCount() const {
@@ -1521,37 +1591,53 @@ public:
     }
 
     std::size_t yieldCount() const { return yields_; }
+    std::size_t recoveryWaitCount() const { return recoveryWaits_; }
+    std::size_t recoveryWaitMs() const { return recoveryWaitMs_; }
     std::size_t pressureTransitions() const { return pressureTransitions_; }
     int64_t maximumQueueAge100ns() const { return maximumQueueAge100ns_; }
-    int maximumNvencPending() const { return maximumNvencPending_; }
+    int maximumEncoderQueueDepth() const { return maximumEncoderQueueDepth_; }
+    int maximumNvencInFlight() const { return maximumNvencInFlight_; }
     int64_t maximumCaptureGap100ns() const { return maximumCaptureGap100ns_; }
+    int64_t maximumCapturePublicationAge100ns() const { return maximumCapturePublicationAge100ns_; }
 
 private:
-    void noteFlush() {
-        ++flushes_;
-        if (!samplePressure_) return;
+    MuxPressureSample observePressure() {
         const auto sample = samplePressure_();
         maximumQueueAge100ns_ = std::max(maximumQueueAge100ns_, sample.oldestFrameAge100ns);
-        maximumNvencPending_ = std::max(maximumNvencPending_, sample.nvencPending);
+        maximumEncoderQueueDepth_ = std::max(maximumEncoderQueueDepth_, sample.encoderQueueDepth);
+        maximumNvencInFlight_ = std::max(maximumNvencInFlight_, sample.nvencInFlight);
         maximumCaptureGap100ns_ = std::max(maximumCaptureGap100ns_, sample.captureGap100ns);
-
-        auto requested = sample.level;
-        const auto now = std::chrono::steady_clock::now();
-        if (requested == MuxPressureLevel::Healthy && pressure_ != MuxPressureLevel::Healthy) {
-            if (healthySince_.time_since_epoch().count() == 0) healthySince_ = now;
-            if (now - healthySince_ < std::chrono::milliseconds(250)) requested = pressure_;
-        } else if (requested != MuxPressureLevel::Healthy) {
-            healthySince_ = {};
-        }
-        if (requested != pressure_) {
-            pressure_ = requested;
+        maximumCapturePublicationAge100ns_ = std::max(
+            maximumCapturePublicationAge100ns_,
+            sample.capturePublicationAge100ns);
+        if (sample.level != pressure_) {
+            pressure_ = sample.level;
             ++pressureTransitions_;
         }
-        if (pressure_ == MuxPressureLevel::Critical) {
-            Sleep(1);
-            ++sleeps_;
-            ++sleepMs_;
-        } else if (pressure_ == MuxPressureLevel::Elevated) {
+        return sample;
+    }
+
+    void prepareForWrite() {
+        if (!samplePressure_) return;
+        auto sample = observePressure();
+        if (sample.level == MuxPressureLevel::Elevated) {
+            SwitchToThread();
+            ++yields_;
+            return;
+        }
+        if (sample.level != MuxPressureLevel::Critical) return;
+
+        ++recoveryWaits_;
+        const auto waitStartedAt = std::chrono::steady_clock::now();
+        Sleep(1);
+        ++sleeps_;
+        ++sleepMs_;
+        sample = observePressure();
+        recoveryWaitMs_ += static_cast<std::size_t>(std::max<int64_t>(
+            0,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - waitStartedAt).count()));
+        if (sample.level == MuxPressureLevel::Elevated) {
             SwitchToThread();
             ++yields_;
         }
@@ -1565,12 +1651,15 @@ private:
     std::size_t sleeps_ = 0;
     std::size_t sleepMs_ = 0;
     std::size_t yields_ = 0;
+    std::size_t recoveryWaits_ = 0;
+    std::size_t recoveryWaitMs_ = 0;
     std::size_t pressureTransitions_ = 0;
     int64_t maximumQueueAge100ns_ = 0;
-    int maximumNvencPending_ = 0;
+    int maximumEncoderQueueDepth_ = 0;
+    int maximumNvencInFlight_ = 0;
     int64_t maximumCaptureGap100ns_ = 0;
+    int64_t maximumCapturePublicationAge100ns_ = 0;
     MuxPressureLevel pressure_ = MuxPressureLevel::Healthy;
-    std::chrono::steady_clock::time_point healthySince_ {};
 };
 
 void writeU32(BufferedByteWriter& out, uint32_t value) {
@@ -1777,10 +1866,18 @@ MuxResult muxH264ToMp4(
     const uint64_t plannedVideoDuration100ns = samplesDuration(videoSamples);
     const uint32_t targetFrameDuration100ns = static_cast<uint32_t>(10'000'000LL / std::max(1, fps));
     uint32_t maxSampleDuration100ns = 0;
-    std::size_t longFrameGaps = 0;
+    std::size_t gapEvents = 0;
+    uint64_t missingFrameSlots = 0;
     for (const auto& sample : videoSamples) {
         maxSampleDuration100ns = std::max(maxSampleDuration100ns, sample.info.duration);
-        if (sample.info.duration > targetFrameDuration100ns * 2u) ++longFrameGaps;
+        const uint64_t roundedTicks =
+            (static_cast<uint64_t>(sample.info.duration) + targetFrameDuration100ns / 2u) /
+            targetFrameDuration100ns;
+        const uint64_t missing = roundedTicks > 1 ? roundedTicks - 1 : 0;
+        if (missing > 0) {
+            ++gapEvents;
+            missingFrameSlots += missing;
+        }
     }
     logMuxSaveTiming(
         "duration_plan",
@@ -1788,7 +1885,8 @@ MuxResult muxH264ToMp4(
         "videoSamples=" + std::to_string(videoSamples.size()) +
             " plannedDuration100ns=" + std::to_string(plannedVideoDuration100ns) +
             " maxSampleDuration100ns=" + std::to_string(maxSampleDuration100ns) +
-            " longFrameGaps=" + std::to_string(longFrameGaps));
+            " gapEvents=" + std::to_string(gapEvents) +
+            " missingFrameSlots=" + std::to_string(missingFrameSlots));
 
     if (!pcmAudioTracks.empty()) {
         const auto aacStartedAt = SaveTimingClock::now();
@@ -1843,7 +1941,11 @@ MuxResult muxH264ToMp4(
     }
 
     AudioContinuityStats audioContinuity;
+    AudioClipAlignmentStats audioAlignment;
     std::string audioContinuityError;
+    const int64_t videoStartPts100ns = videoSamples.front().packet
+        ? videoSamples.front().packet->pts100ns
+        : 0;
     for (auto& track : audioTracks) {
         finalizeAudioTimeline(track);
         if (!makeAudioTimelineContinuous(track, audioContinuity, audioContinuityError)) {
@@ -1853,6 +1955,11 @@ MuxResult muxH264ToMp4(
             logMuxSaveTiming("total", totalStartedAt, "ok=false reason=aac_timeline_normalization");
             return result;
         }
+        alignAudioTrackToVideo(
+            track,
+            videoStartPts100ns,
+            plannedVideoDuration100ns,
+            audioAlignment);
     }
     logMuxSaveTiming(
         "audio_timeline",
@@ -1860,7 +1967,11 @@ MuxResult muxH264ToMp4(
         "tracks=" + std::to_string(audioTracks.size()) +
             " insertedSilenceSamples=" + std::to_string(audioContinuity.insertedSilenceSamples) +
             " removedOverlaps=" + std::to_string(audioContinuity.removedOverlappingSamples) +
-            " maximumGap100ns=" + std::to_string(audioContinuity.maximumGap100ns));
+            " maximumGap100ns=" + std::to_string(audioContinuity.maximumGap100ns) +
+            " droppedLeadingSamples=" + std::to_string(audioAlignment.droppedLeadingSamples) +
+            " droppedLeadingFrames=" + std::to_string(audioAlignment.droppedLeadingFrames) +
+            " droppedTrailingSamples=" + std::to_string(audioAlignment.droppedTrailingSamples) +
+            " maximumStartDelay100ns=" + std::to_string(audioAlignment.maximumStartDelay100ns));
     std::erase_if(audioTracks, [](const AacAudioTrack& track) { return track.samples.empty(); });
 
     videoSamples.front().info.keyframe = true;
@@ -1923,7 +2034,8 @@ MuxResult muxH264ToMp4(
             " finalBytes=" + std::to_string(finalFileSize) +
             " lowIoPriority=" + std::string(out.lowPriorityApplied() ? "true" : "false"));
 
-    BufferedByteWriter bufferedOut(out, Win32FileWriter::maxWriteBytes, std::move(pacing.samplePressure));
+    constexpr std::size_t liveSaveChunkBytes = 512u * 1024u;
+    BufferedByteWriter bufferedOut(out, liveSaveChunkBytes, std::move(pacing.samplePressure));
     const auto videoWriteStartedAt = SaveTimingClock::now();
     uint64_t videoWrittenBytes = 0;
     for (const auto& sample : videoSamples) {
@@ -1948,10 +2060,15 @@ MuxResult muxH264ToMp4(
             " paceYields=" + std::to_string(bufferedOut.yieldCount()) +
             " paceSleeps=" + std::to_string(videoSleeps) +
             " paceSleepMs=" + std::to_string(videoSleepMs) +
+            " recoveryWaits=" + std::to_string(bufferedOut.recoveryWaitCount()) +
+            " recoveryWaitMs=" + std::to_string(bufferedOut.recoveryWaitMs()) +
             " pressureTransitions=" + std::to_string(bufferedOut.pressureTransitions()) +
             " maxQueueAge100ns=" + std::to_string(bufferedOut.maximumQueueAge100ns()) +
-            " maxNvencPending=" + std::to_string(bufferedOut.maximumNvencPending()) +
-            " maxCaptureGap100ns=" + std::to_string(bufferedOut.maximumCaptureGap100ns()));
+            " maxEncoderQueueDepth=" + std::to_string(bufferedOut.maximumEncoderQueueDepth()) +
+            " maxNvencInFlight=" + std::to_string(bufferedOut.maximumNvencInFlight()) +
+            " maxCaptureGap100ns=" + std::to_string(bufferedOut.maximumCaptureGap100ns()) +
+            " maxCapturePublicationAge100ns=" + std::to_string(
+                bufferedOut.maximumCapturePublicationAge100ns()));
 
     const auto audioWriteStartedAt = SaveTimingClock::now();
     const auto audioFlushesBefore = bufferedOut.flushCount();

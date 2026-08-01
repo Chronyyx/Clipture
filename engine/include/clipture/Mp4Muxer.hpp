@@ -24,8 +24,10 @@ struct MuxPressureSample {
     MuxPressureLevel level = MuxPressureLevel::Healthy;
     std::size_t frameQueueDepth = 0;
     int64_t oldestFrameAge100ns = 0;
-    int nvencPending = 0;
+    int encoderQueueDepth = 0;
+    int nvencInFlight = 0;
     int64_t captureGap100ns = 0;
+    int64_t capturePublicationAge100ns = 0;
     int droppedFramesDelta = 0;
 };
 

@@ -3,8 +3,9 @@ import type { OpenDialogOptions } from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
-import { appendFileSync, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { readdir as readdirAsync, stat as statAsync, rm as rmAsync } from "node:fs/promises";
+import { Transform } from "node:stream";
 import { format } from "node:util";
 import { basename, dirname, extname, join, parse, normalize } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -127,10 +128,14 @@ function logSaveTimingLine(line: string): void {
   appendSaveTimingLog(line);
 }
 
+let engineStderrTimingRemainder = "";
+
 function logEngineStderr(chunk: Buffer): void {
   const text = chunk.toString();
   console.error(`[engine] ${text}`);
-  for (const line of text.split(/\r?\n/)) {
+  const lines = `${engineStderrTimingRemainder}${text}`.split(/\r?\n/);
+  engineStderrTimingRemainder = lines.pop() ?? "";
+  for (const line of lines) {
     if (line.includes("[save-timing]")) appendSaveTimingLog(`[engine] ${line}`);
   }
 }
@@ -235,6 +240,28 @@ class EngineClient {
   private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private lastDiagnostics: EngineDiagnostics = {
     captureApi: "Windows.Graphics.Capture",
+    requestedCaptureBackend: "auto",
+    activeCaptureBackend: "none",
+    captureFallbackReason: "",
+    displayRefreshNumerator: 0,
+    displayRefreshDenominator: 1,
+    displayRefreshHz: 0,
+    captureAcquiredUpdates: 0,
+    captureDesktopPresents: 0,
+    capturePointerUpdates: 0,
+    capturePublishedFrames: 0,
+    captureAccumulatedFrames: 0,
+    captureAccumulationEvents: 0,
+    captureSamplerRejections: 0,
+    captureNonMonotonicTimestamps: 0,
+    captureAcquireTimeouts: 0,
+    captureAccessLosses: 0,
+    captureRecreationAttempts: 0,
+    captureRecreationSuccesses: 0,
+    captureFallbacks: 0,
+    desktopPresentFps: 0,
+    publishedFreshFps: 0,
+    encodedRepeatRatio: 0,
     activeEncoder: "Unavailable",
     encoderMode: "Unavailable",
     gpu: "Engine not running",
@@ -253,13 +280,26 @@ class EngineClient {
     droppedFrames: 0,
     captureOverflowDrops: 0,
     captureCoalescedDrops: 0,
+    sourceFramesSuperseded: 0,
     captureSlotDrops: 0,
     captureCallbackErrors: 0,
     schedulerDroppedFrames: 0,
+    schedulerRepeatedFrames: 0,
+    encoderQueueDrops: 0,
+    nvencSurfaceDrops: 0,
+    nvencInputDrops: 0,
     encoderBackpressureDrops: 0,
     nvencInFlightFrames: 0,
     maximumCaptureGap100ns: 0,
     maximumSubmitLatency100ns: 0,
+    averageScaleLatency100ns: 0,
+    maximumScaleLatency100ns: 0,
+    averageInputMapLatency100ns: 0,
+    maximumInputMapLatency100ns: 0,
+    averageNvencCallLatency100ns: 0,
+    maximumNvencCallLatency100ns: 0,
+    averageOutputDrainLatency100ns: 0,
+    maximumOutputDrainLatency100ns: 0,
     captureEpoch: 0,
     capturePressure: "healthy",
     nvencAvailable: false,
@@ -288,6 +328,7 @@ class EngineClient {
       return;
     }
 
+    engineStderrTimingRemainder = "";
     this.child = spawn(enginePath, [], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     this.child.stdout.on("data", (chunk: Buffer) => this.readStdout(chunk));
     this.child.stderr.on("data", (chunk: Buffer) => logEngineStderr(chunk));
@@ -897,6 +938,241 @@ function sendMixedAudioChunk(
   });
 }
 
+type Mp4BoxView = {
+  type: string;
+  start: number;
+  end: number;
+  headerSize: number;
+  payloadStart: number;
+};
+
+type PlaybackBytePatch = {
+  offset: number;
+  bytes: Buffer;
+};
+
+type CachedPlaybackPatches = {
+  signature: string;
+  patches: PlaybackBytePatch[];
+};
+
+const playbackPatchCache = new Map<string, CachedPlaybackPatches>();
+const playbackPatchCacheLimit = 64;
+const maximumMoovBytesToPatch = 32 * 1024 * 1024;
+
+function bufferedMp4Box(data: Buffer, start: number, limit: number): Mp4BoxView | undefined {
+  if (start < 0 || start + 8 > limit || limit > data.length) return undefined;
+  let size = Number(data.readUInt32BE(start));
+  const type = data.toString("ascii", start + 4, start + 8);
+  let headerSize = 8;
+  if (size === 1) {
+    if (start + 16 > limit) return undefined;
+    const largeSize = data.readBigUInt64BE(start + 8);
+    if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return undefined;
+    size = Number(largeSize);
+    headerSize = 16;
+  } else if (size === 0) {
+    size = limit - start;
+  }
+  if (size < headerSize || start + size > limit) return undefined;
+  return { type, start, end: start + size, headerSize, payloadStart: start + headerSize };
+}
+
+function childMp4Boxes(data: Buffer, start: number, end: number): Mp4BoxView[] {
+  const boxes: Mp4BoxView[] = [];
+  let cursor = start;
+  while (cursor + 8 <= end) {
+    const box = bufferedMp4Box(data, cursor, end);
+    if (!box) break;
+    boxes.push(box);
+    if (box.end <= cursor) break;
+    cursor = box.end;
+  }
+  return boxes;
+}
+
+function fileMp4Box(
+  descriptor: number,
+  start: number,
+  fileSize: number,
+  header: Buffer
+): Mp4BoxView | undefined {
+  if (start < 0 || start + 8 > fileSize) return undefined;
+  header.fill(0);
+  if (readSync(descriptor, header, 0, 8, start) !== 8) return undefined;
+  let size = Number(header.readUInt32BE(0));
+  const type = header.toString("ascii", 4, 8);
+  let headerSize = 8;
+  if (size === 1) {
+    if (start + 16 > fileSize || readSync(descriptor, header, 8, 8, start + 8) !== 8) return undefined;
+    const largeSize = header.readBigUInt64BE(8);
+    if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return undefined;
+    size = Number(largeSize);
+    headerSize = 16;
+  } else if (size === 0) {
+    size = fileSize - start;
+  }
+  if (size < headerSize || start + size > fileSize) return undefined;
+  return { type, start, end: start + size, headerSize, payloadStart: start + headerSize };
+}
+
+function readFileSlice(descriptor: number, start: number, length: number): Buffer | undefined {
+  const data = Buffer.alloc(length);
+  let offset = 0;
+  while (offset < length) {
+    const count = readSync(descriptor, data, offset, length - offset, start + offset);
+    if (count <= 0) return undefined;
+    offset += count;
+  }
+  return data;
+}
+
+function findAudioEditListPatches(filePath: string, fileSize: number): PlaybackBytePatch[] {
+  if (!/[.](mp4|m4v|mov)$/i.test(filePath)) return [];
+
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(filePath, "r");
+    const header = Buffer.alloc(16);
+    let cursor = 0;
+    let moov: Mp4BoxView | undefined;
+    while (cursor + 8 <= fileSize) {
+      const box = fileMp4Box(descriptor, cursor, fileSize, header);
+      if (!box) return [];
+      if (box.type === "moov") {
+        moov = box;
+        break;
+      }
+      cursor = box.end;
+    }
+    if (!moov || moov.end - moov.start > maximumMoovBytesToPatch) return [];
+
+    const moovData = readFileSlice(descriptor, moov.start, moov.end - moov.start);
+    if (!moovData) return [];
+    const root = bufferedMp4Box(moovData, 0, moovData.length);
+    if (!root || root.type !== "moov") return [];
+
+    const patches: PlaybackBytePatch[] = [];
+    for (const trak of childMp4Boxes(moovData, root.payloadStart, root.end).filter((box) => box.type === "trak")) {
+      const trakChildren = childMp4Boxes(moovData, trak.payloadStart, trak.end);
+      const mdia = trakChildren.find((box) => box.type === "mdia");
+      const edts = trakChildren.find((box) => box.type === "edts");
+      if (!mdia || !edts) continue;
+
+      const hdlr = childMp4Boxes(moovData, mdia.payloadStart, mdia.end)
+        .find((box) => box.type === "hdlr");
+      if (!hdlr || hdlr.payloadStart + 12 > hdlr.end) continue;
+      if (moovData.toString("ascii", hdlr.payloadStart + 8, hdlr.payloadStart + 12) !== "soun") continue;
+
+      const elst = childMp4Boxes(moovData, edts.payloadStart, edts.end)
+        .find((box) => box.type === "elst");
+      if (!elst || elst.payloadStart + 8 > elst.end) continue;
+      const version = moovData[elst.payloadStart];
+      const entryCount = moovData.readUInt32BE(elst.payloadStart + 4);
+      let entryOffset = elst.payloadStart + 8;
+      for (let index = 0; index < entryCount; index += 1) {
+        const entrySize = version === 1 ? 20 : 12;
+        const mediaTimeOffset = entryOffset + (version === 1 ? 8 : 4);
+        const mediaTimeSize = version === 1 ? 8 : 4;
+        if (entryOffset + entrySize > elst.end) break;
+        const mediaTime = version === 1
+          ? moovData.readBigInt64BE(mediaTimeOffset)
+          : BigInt(moovData.readInt32BE(mediaTimeOffset));
+        if (mediaTime > 0) {
+          patches.push({
+            offset: moov.start + mediaTimeOffset,
+            bytes: Buffer.alloc(mediaTimeSize)
+          });
+        }
+        entryOffset += entrySize;
+      }
+    }
+    return patches;
+  } catch {
+    return [];
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function audioEditListPlaybackPatches(filePath: string): PlaybackBytePatch[] {
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(filePath);
+  } catch {
+    return [];
+  }
+  const cacheKey = normalize(filePath).toLowerCase();
+  const signature = `${stats.size}:${stats.mtimeMs}`;
+  const cached = playbackPatchCache.get(cacheKey);
+  if (cached?.signature === signature) {
+    playbackPatchCache.delete(cacheKey);
+    playbackPatchCache.set(cacheKey, cached);
+    return cached.patches;
+  }
+
+  const patches = findAudioEditListPatches(filePath, stats.size);
+  playbackPatchCache.set(cacheKey, { signature, patches });
+  while (playbackPatchCache.size > playbackPatchCacheLimit) {
+    const oldestKey = playbackPatchCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    playbackPatchCache.delete(oldestKey);
+  }
+  return patches;
+}
+
+function pipePatchedFileRange(
+  res: import("node:http").ServerResponse,
+  filePath: string,
+  start: number,
+  end: number
+): void {
+  const stream = createReadStream(filePath, { start, end });
+  const patches = audioEditListPlaybackPatches(filePath)
+    .filter((patch) => patch.offset < end + 1 && patch.offset + patch.bytes.length > start);
+  if (patches.length === 0) {
+    res.on("close", () => stream.destroy());
+    stream.on("error", () => {
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    });
+    stream.pipe(res);
+    return;
+  }
+
+  let absoluteOffset = start;
+  const patcher = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const chunkStart = absoluteOffset;
+      const chunkEnd = chunkStart + bytes.length;
+      for (const patch of patches) {
+        const overlapStart = Math.max(chunkStart, patch.offset);
+        const overlapEnd = Math.min(chunkEnd, patch.offset + patch.bytes.length);
+        if (overlapStart >= overlapEnd) continue;
+        patch.bytes.copy(
+          bytes,
+          overlapStart - chunkStart,
+          overlapStart - patch.offset,
+          overlapEnd - patch.offset);
+      }
+      absoluteOffset = chunkEnd;
+      callback(null, bytes);
+    }
+  });
+  res.on("close", () => {
+    stream.destroy();
+    patcher.destroy();
+  });
+  const onError = () => {
+    if (!res.headersSent) res.writeHead(500);
+    res.end();
+  };
+  stream.on("error", onError);
+  patcher.on("error", onError);
+  stream.pipe(patcher).pipe(res);
+}
+
 function sendFileRange(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, filePath: string): void {
   if (!existsSync(filePath)) {
     res.writeHead(404).end();
@@ -912,13 +1188,7 @@ function sendFileRange(req: import("node:http").IncomingMessage, res: import("no
       return;
     }
     res.writeHead(200, headers({ "Content-Length": size }));
-    const stream = createReadStream(filePath);
-    res.on("close", () => stream.destroy());
-    stream.on("error", () => {
-      if (!res.headersSent) res.writeHead(500);
-      res.end();
-    });
-    stream.pipe(res);
+    pipePatchedFileRange(res, filePath, 0, Math.max(0, size - 1));
     return;
   }
 
@@ -950,13 +1220,7 @@ function sendFileRange(req: import("node:http").IncomingMessage, res: import("no
     "Content-Range": `bytes ${start}-${end}/${size}`,
     "Content-Length": end - start + 1
   }));
-  const stream = createReadStream(filePath, { start, end });
-  res.on("close", () => stream.destroy());
-  stream.on("error", () => {
-    if (!res.headersSent) res.writeHead(500);
-    res.end();
-  });
-  stream.pipe(res);
+  pipePatchedFileRange(res, filePath, start, end);
 }
 
 function setupPreviewServer() {
@@ -1897,8 +2161,9 @@ async function clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise
   if (!existsSync(filePath)) return { url: "", mixed: false, message: "Clip file was not found." };
 
   const selectedAudioIndexes = selectedPlaybackAudioIndexes(audioTracks);
+  const requiresPatchedAudioTimeline = audioEditListPlaybackPatches(filePath).length > 0;
 
-  if (selectedAudioIndexes.length <= 1) {
+  if (selectedAudioIndexes.length === 0 || (selectedAudioIndexes.length === 1 && !requiresPatchedAudioTimeline)) {
     return {
       url: playbackPayloadUrl("/clip", { filePath }),
       mixed: false,

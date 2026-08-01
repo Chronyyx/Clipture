@@ -75,6 +75,7 @@ struct EncodedPacket {
     uint32_t audioFrameCount = 0;
     int32_t audioPrimingFrames = 0;
     uint32_t encoderEpoch = 0;
+    uint64_t sourceFrameSequence = 0;
     H264PacketLayout h264;
     PacketPayloadPtr payload;
 };

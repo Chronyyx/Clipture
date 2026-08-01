@@ -1,5 +1,7 @@
 #pragma once
 
+#include "clipture/AudioProcessSpec.hpp"
+
 #include <Windows.h>
 #include <TlHelp32.h>
 
@@ -86,13 +88,7 @@ public:
 
 private:
     static std::string captureProcessName(std::string sourceSpec) {
-        if (sourceSpec.rfind("app-pid:", 0) == 0) {
-            const auto nameStart = sourceSpec.find(':', 8);
-            return nameStart == std::string::npos ? std::string{} : sourceSpec.substr(nameStart + 1);
-        }
-        if (sourceSpec.rfind("game:", 0) == 0) return sourceSpec.substr(5);
-        if (sourceSpec.rfind("app:", 0) == 0) return sourceSpec.substr(4);
-        return sourceSpec;
+        return audioProcessName(sourceSpec);
     }
 
     static std::string lowerAscii(std::string value) {
@@ -114,5 +110,62 @@ private:
     std::vector<RunningProcessInfo> entries_;
     bool valid_ = false;
 };
+
+inline const RunningProcessInfo* findProcessInfo(
+    const std::vector<RunningProcessInfo>& entries,
+    DWORD processId) {
+    if (processId == 0) return nullptr;
+    const auto found = std::find_if(entries.begin(), entries.end(), [&](const RunningProcessInfo& entry) {
+        return entry.processId == processId;
+    });
+    return found == entries.end() ? nullptr : &*found;
+}
+
+inline const RunningProcessInfo* findProcessInfo(
+    const RunningProcessSnapshot& snapshot,
+    DWORD processId) {
+    return findProcessInfo(snapshot.entries(), processId);
+}
+
+inline bool processHasAncestor(
+    const std::vector<RunningProcessInfo>& entries,
+    DWORD childProcessId,
+    DWORD ancestorProcessId) {
+    if (childProcessId == 0 || ancestorProcessId == 0 || childProcessId == ancestorProcessId) return false;
+    DWORD current = childProcessId;
+    for (int depth = 0; depth < 24; ++depth) {
+        const auto* info = findProcessInfo(entries, current);
+        if (!info || info->parentProcessId == 0 || info->parentProcessId == current) return false;
+        if (info->parentProcessId == ancestorProcessId) return true;
+        current = info->parentProcessId;
+    }
+    return false;
+}
+
+inline bool processHasAncestor(
+    const RunningProcessSnapshot& snapshot,
+    DWORD childProcessId,
+    DWORD ancestorProcessId) {
+    return processHasAncestor(snapshot.entries(), childProcessId, ancestorProcessId);
+}
+
+inline std::vector<DWORD> collapseProcessTreeRoots(
+    const std::vector<RunningProcessInfo>& entries,
+    const std::vector<DWORD>& candidateProcessIds) {
+    std::vector<DWORD> roots;
+    for (const DWORD processId : candidateProcessIds) {
+        if (processId == 0 || std::find(roots.begin(), roots.end(), processId) != roots.end()) continue;
+        const bool alreadyCovered = std::any_of(roots.begin(), roots.end(), [&](DWORD rootProcessId) {
+            return processHasAncestor(entries, processId, rootProcessId);
+        });
+        if (alreadyCovered) continue;
+
+        std::erase_if(roots, [&](DWORD rootProcessId) {
+            return processHasAncestor(entries, rootProcessId, processId);
+        });
+        roots.push_back(processId);
+    }
+    return roots;
+}
 
 }  // namespace clipture

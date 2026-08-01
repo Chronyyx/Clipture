@@ -1,4 +1,5 @@
 #include "clipture/AudioCaptureWorker.hpp"
+#include "clipture/AudioProcessSpec.hpp"
 #include "clipture/AudioTimeline.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/AudioReplayCoordinator.hpp"
@@ -30,11 +31,6 @@
 
 namespace clipture {
 namespace {
-
-struct CaptureProcessSpec {
-    std::string processName;
-    DWORD processId = 0;
-};
 
 class ActivateCompletionHandler :
     public Microsoft::WRL::RuntimeClass<
@@ -357,39 +353,11 @@ ResolvedMicDevice resolveMicrophoneDevice(IMMDeviceEnumerator* enumerator, const
 }
 
 std::string captureProcessName(const std::string& sourceSpec) {
-    if (sourceSpec.rfind("app-pid:", 0) == 0) {
-        const auto nameStart = sourceSpec.find(':', 8);
-        return nameStart == std::string::npos ? std::string{} : sourceSpec.substr(nameStart + 1);
-    }
-    if (sourceSpec.rfind("game:", 0) == 0) return sourceSpec.substr(5);
-    if (sourceSpec.rfind("app:", 0) == 0) return sourceSpec.substr(4);
-    return sourceSpec;
+    return audioProcessName(sourceSpec);
 }
 
 std::string sourceIdForProcessSpec(const std::string& sourceSpec) {
-    if (sourceSpec.rfind("app-pid:", 0) == 0) return "app:" + captureProcessName(sourceSpec);
-    if (sourceSpec.rfind("game:", 0) == 0) return sourceSpec;
-    if (sourceSpec.rfind("app:", 0) == 0) return sourceSpec;
-    return "app:" + sourceSpec;
-}
-
-CaptureProcessSpec parseCaptureProcessSpec(const std::string& sourceSpec) {
-    if (sourceSpec.rfind("app-pid:", 0) == 0) {
-        const auto pidStart = std::string("app-pid:").size();
-        const auto pidEnd = sourceSpec.find(':', pidStart);
-        if (pidEnd != std::string::npos) {
-            try {
-                const auto parsed = std::stoul(sourceSpec.substr(pidStart, pidEnd - pidStart));
-                return {
-                    sourceSpec.substr(pidEnd + 1),
-                    static_cast<DWORD>(parsed)
-                };
-            } catch (...) {
-                return { captureProcessName(sourceSpec), 0 };
-            }
-        }
-    }
-    return { captureProcessName(sourceSpec), 0 };
+    return audioProcessSourceId(sourceSpec);
 }
 
 DWORD findProcessIdByName(const std::string& processName) {
@@ -588,6 +556,7 @@ void AudioCaptureWorker::configureAppSources(const std::vector<std::string>& pro
     filtered.erase(std::unique(filtered.begin(), filtered.end()), filtered.end());
 
     std::vector<std::thread> removedThreads;
+    std::vector<std::string> added;
     {
         std::lock_guard lock(configMutex_);
         if (filtered == appProcessNames_) return;
@@ -599,7 +568,6 @@ void AudioCaptureWorker::configureAppSources(const std::vector<std::string>& pro
             filtered.begin(),
             filtered.end(),
             std::back_inserter(removed));
-        std::vector<std::string> added;
         std::set_difference(
             filtered.begin(),
             filtered.end(),
@@ -622,14 +590,25 @@ void AudioCaptureWorker::configureAppSources(const std::vector<std::string>& pro
                 }
                 appThreads_.erase(it);
             }
-            for (const auto& processName : added) {
-                startAppCaptureThreadLocked(processName);
-            }
         }
     }
 
     for (auto& thread : removedThreads) {
         if (thread.joinable()) thread.join();
+    }
+
+    // Process-loopback capture includes the target's entire child tree. Finish
+    // old targets before replacements start so a reconfiguration cannot briefly
+    // publish the same game audio from both overlapping trees.
+    {
+        std::lock_guard lock(configMutex_);
+        if (running_ && appCaptureEnabled_) {
+            for (const auto& processName : added) {
+                if (std::binary_search(appProcessNames_.begin(), appProcessNames_.end(), processName)) {
+                    startAppCaptureThreadLocked(processName);
+                }
+            }
+        }
     }
 }
 
@@ -1345,7 +1324,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
 }
 
 void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processName, std::shared_ptr<std::atomic<bool>> stopRequested) {
-    const auto captureSpec = parseCaptureProcessSpec(processName);
+    const auto captureSpec = parseAudioProcessSpec(processName);
     const std::string captureName = captureSpec.processName;
     const std::string sourceId = sourceIdForProcessSpec(processName);
     std::cerr << "[audio] Process loopback thread started for: " << captureName << " as " << sourceId << std::endl;

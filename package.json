@@ -1,12 +1,12 @@
 {
   "name": "clipture",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "private": true,
   "description": "NVENC-first Windows clipping app with Electron UI and native C++ capture engine.",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {
-    "dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 node scripts/run-electron.cjs .\"",
     "build": "npm run build:engine && npm run build:ui",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:ui": "npm run build:electron && tsc --noEmit && vite build",
@@ -14,8 +14,9 @@
     "pack:win": "npm run build && electron-builder --win --x64 --dir",
     "dist:win": "npm run build && electron-builder --win --x64",
     "typecheck": "tsc --noEmit",
-    "start:dev": "electron .",
-    "start": "npm run pack:win && .\\release\\win-unpacked\\Clipture.exe"
+    "start:dev": "node scripts/run-electron.cjs .",
+    "start:packaged": "npm run pack:win && .\\release\\win-unpacked\\Clipture.exe",
+    "start": "npm run build && node scripts/run-electron.cjs ."
   },
   "dependencies": {
     "electron-updater": "^6.8.9",

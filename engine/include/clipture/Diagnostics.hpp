@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,6 +16,28 @@ enum class EncoderName {
 
 struct Diagnostics {
     std::string captureApi = "Windows.Graphics.Capture";
+    std::string requestedCaptureBackend = "auto";
+    std::string activeCaptureBackend = "none";
+    std::string captureFallbackReason;
+    uint32_t displayRefreshNumerator = 0;
+    uint32_t displayRefreshDenominator = 1;
+    double displayRefreshHz = 0.0;
+    uint64_t captureAcquiredUpdates = 0;
+    uint64_t captureDesktopPresents = 0;
+    uint64_t capturePointerUpdates = 0;
+    uint64_t capturePublishedFrames = 0;
+    uint64_t captureAccumulatedFrames = 0;
+    uint64_t captureAccumulationEvents = 0;
+    uint64_t captureSamplerRejections = 0;
+    uint64_t captureNonMonotonicTimestamps = 0;
+    uint64_t captureAcquireTimeouts = 0;
+    uint64_t captureAccessLosses = 0;
+    uint64_t captureRecreationAttempts = 0;
+    uint64_t captureRecreationSuccesses = 0;
+    uint64_t captureFallbacks = 0;
+    double desktopPresentFps = 0.0;
+    double publishedFreshFps = 0.0;
+    double encodedRepeatRatio = 0.0;
     EncoderName activeEncoder = EncoderName::Unavailable;
     std::string encoderMode = "Unavailable";
     std::string gpu = "Unknown";
@@ -33,13 +56,26 @@ struct Diagnostics {
     int droppedFrames = 0;
     int captureOverflowDrops = 0;
     int captureCoalescedDrops = 0;
+    int sourceFramesSuperseded = 0;
     int captureSlotDrops = 0;
     int captureCallbackErrors = 0;
     int schedulerDroppedFrames = 0;
+    int schedulerRepeatedFrames = 0;
+    int encoderQueueDrops = 0;
+    int nvencSurfaceDrops = 0;
+    int nvencInputDrops = 0;
     int encoderBackpressureDrops = 0;
     int nvencInFlightFrames = 0;
     int64_t maximumCaptureGap100ns = 0;
     int64_t maximumSubmitLatency100ns = 0;
+    int64_t averageScaleLatency100ns = 0;
+    int64_t maximumScaleLatency100ns = 0;
+    int64_t averageInputMapLatency100ns = 0;
+    int64_t maximumInputMapLatency100ns = 0;
+    int64_t averageNvencCallLatency100ns = 0;
+    int64_t maximumNvencCallLatency100ns = 0;
+    int64_t averageOutputDrainLatency100ns = 0;
+    int64_t maximumOutputDrainLatency100ns = 0;
     uint64_t captureEpoch = 0;
     std::string capturePressure = "healthy";
     bool nvencAvailable = false;

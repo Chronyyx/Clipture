@@ -10,7 +10,11 @@ add_executable(clipture_engine
   src/AacEncoderSession.cpp
   src/AudioCaptureWorker.cpp
   src/AudioReplayCoordinator.cpp
+  src/CaptureBackend.cpp
   src/CaptureSession.cpp
+  src/DesktopDuplicationBackend.cpp
+  src/DesktopPointerCompositor.cpp
+  src/DesktopPointerShape.cpp
   src/Diagnostics.cpp
   src/EncoderWorker.cpp
   src/Engine.cpp
@@ -19,6 +23,7 @@ add_executable(clipture_engine
   src/Mp4Muxer.cpp
   src/NativeRuntime.cpp
   src/Tonemapper.cpp
+  src/WgcCaptureBackend.cpp
   third_party/rnnoise/src/celt_lpc.c
   third_party/rnnoise/src/denoise.c
   third_party/rnnoise/src/kiss_fft.c
@@ -46,6 +51,7 @@ if(BUILD_TESTING)
     tests/PacketArchitectureTests.cpp
     src/AacEncoderSession.cpp
     src/AudioReplayCoordinator.cpp
+    src/DesktopPointerShape.cpp
     src/H264PacketAnalyzer.cpp
     src/FrameQueue.cpp
   )

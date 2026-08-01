@@ -6,8 +6,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <thread>
 
@@ -39,11 +39,24 @@ public:
     bool nvencRuntimeLoaded() const;
     int framesAccepted() const;
     int framesEncoded() const;
-    int pendingFrames() const;
+    int queuedEncodeFrames() const;
     int schedulerDroppedFrames() const;
+    int schedulerRepeatedFrames() const;
+    int encoderQueueDrops() const;
+    int nvencSurfaceDrops() const;
+    int nvencInputDrops() const;
     int encoderBackpressureDrops() const;
     int nvencInFlightFrames() const;
+    int effectiveNvencPreset() const;
     int64_t maximumSubmitLatency100ns() const;
+    int64_t averageScaleLatency100ns() const;
+    int64_t maximumScaleLatency100ns() const;
+    int64_t averageInputMapLatency100ns() const;
+    int64_t maximumInputMapLatency100ns() const;
+    int64_t averageNvencCallLatency100ns() const;
+    int64_t maximumNvencCallLatency100ns() const;
+    int64_t averageOutputDrainLatency100ns() const;
+    int64_t maximumOutputDrainLatency100ns() const;
     int sourceWidth() const;
     int sourceHeight() const;
     int outputWidth() const;
@@ -67,7 +80,7 @@ private:
 
     void run();
     void encodeLoop();
-    void queueLatestJob(EncodeJob job);
+    bool queueJob(EncodeJob job);
     void setStatus(std::string status);
 
     FrameQueue& frames_;
@@ -76,16 +89,32 @@ private:
     std::thread encodeThread_;
     mutable std::mutex submitMutex_;
     std::condition_variable submitCv_;
-    std::optional<EncodeJob> pendingJob_;
+    std::deque<EncodeJob> pendingJobs_;
+    uint64_t lastObservedSourceSequence_ = 0;
+    uint64_t lastDequeuedSourceSequence_ = 0;
     mutable std::mutex statusMutex_;
     std::atomic<bool> running_ = false;
     std::atomic<bool> nvencRuntimeLoaded_ = false;
     std::atomic<int> framesAccepted_ = 0;
     std::atomic<int> framesEncoded_ = 0;
     std::atomic<int> schedulerDroppedFrames_ = 0;
+    std::atomic<int> schedulerRepeatedFrames_ = 0;
+    std::atomic<int> encoderQueueDrops_ = 0;
+    std::atomic<int> nvencSurfaceDrops_ = 0;
+    std::atomic<int> nvencInputDrops_ = 0;
     std::atomic<int> encoderBackpressureDrops_ = 0;
     std::atomic<int> nvencInFlightFrames_ = 0;
+    std::atomic<int> nvencPreparedFrames_ = 0;
     std::atomic<int64_t> maximumSubmitLatency100ns_ = 0;
+    std::atomic<uint64_t> profiledSubmissions_ = 0;
+    std::atomic<int64_t> totalScaleLatency100ns_ = 0;
+    std::atomic<int64_t> maximumScaleLatency100ns_ = 0;
+    std::atomic<int64_t> totalInputMapLatency100ns_ = 0;
+    std::atomic<int64_t> maximumInputMapLatency100ns_ = 0;
+    std::atomic<int64_t> totalNvencCallLatency100ns_ = 0;
+    std::atomic<int64_t> maximumNvencCallLatency100ns_ = 0;
+    std::atomic<int64_t> totalOutputDrainLatency100ns_ = 0;
+    std::atomic<int64_t> maximumOutputDrainLatency100ns_ = 0;
     std::atomic<int> targetFps_ = 30;
     std::atomic<int> targetBitrateMbps_ = 40;
     std::atomic<int> targetWidth_ = 0;
@@ -104,6 +133,8 @@ private:
     std::atomic<int> discardPacketsAtConfigVersion_ = 0;
     std::atomic<int> freshFrameVersion_ = 0;
     std::atomic<int> discardPacketsAtFreshFrameVersion_ = 0;
+    static constexpr std::size_t maximumPendingJobs_ = 8;
+    static constexpr std::size_t pendingFreshFrameReserve_ = 2;
     std::string status_ = "Encoder worker has not started.";
 };
 

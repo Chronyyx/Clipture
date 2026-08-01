@@ -1,9 +1,12 @@
 #include "clipture/Tonemapper.hpp"
 #include <d3dcompiler.h>
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 
 namespace clipture {
+
+constexpr std::size_t kMaximumCachedTonemapperViews = 24;
 
 const char* TonemapShaderCode = R"(
 Texture2D<float4> InputTexture : register(t0);
@@ -31,12 +34,12 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     if (L > 0.0f) {
         float T = 0.75f; // Threshold: 75% of SDR brightness is perfectly preserved
         float L_new = L;
-        
+
         if (L > T) {
             // Smooth exponential roll-off for HDR highlights
             L_new = T + (1.0f - T) * (1.0f - exp(-(L - T) / (1.0f - T)));
         }
-        
+
         // Re-apply to the RGB ratios to preserve perfectly accurate hues
         scaledColor = scaledColor * (L_new / L);
     }
@@ -156,7 +159,7 @@ bool Tonemapper::Process(
             errorMsg = "CreateShaderResourceView failed: " + std::to_string(hr);
             return false;
         }
-        if (inputViews_.size() >= 8) inputViews_.erase(inputViews_.begin());
+        if (inputViews_.size() >= kMaximumCachedTonemapperViews) inputViews_.erase(inputViews_.begin());
         inputViews_.push_back({ inputFloat16, inputSRV, inDesc });
         inputViewIt = std::prev(inputViews_.end());
     }
@@ -177,7 +180,7 @@ bool Tonemapper::Process(
             errorMsg = "CreateUnorderedAccessView failed: " + std::to_string(hr);
             return false;
         }
-        if (outputViews_.size() >= 8) outputViews_.erase(outputViews_.begin());
+        if (outputViews_.size() >= kMaximumCachedTonemapperViews) outputViews_.erase(outputViews_.begin());
         outputViews_.push_back({ outputUnorm8, outputUAV, outDesc });
         outputViewIt = std::prev(outputViews_.end());
     }
