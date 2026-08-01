@@ -1,5 +1,7 @@
 #pragma once
 
+#include "clipture/LatencyWindow.hpp"
+
 #include <memory>
 #include <cstdint>
 #include <string>
@@ -30,6 +32,11 @@ struct CaptureRuntimeStats {
     uint64_t fallbackCount = 0;
     double desktopPresentFps = 0.0;
     double publishedFreshFps = 0.0;
+    double recentPublishedFreshFps = 0.0;
+    LatencyWindowSnapshot acquireWaitLatency;
+    LatencyWindowSnapshot framePreparationLatency;
+    LatencyWindowSnapshot cursorCompositeLatency;
+    LatencyWindowSnapshot frameProcessingLatency;
 };
 
 class CaptureSession {

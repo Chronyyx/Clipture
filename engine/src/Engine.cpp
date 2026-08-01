@@ -1515,6 +1515,9 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         const auto captureStats = captureSession_
             ? captureSession_->runtimeStats()
             : CaptureRuntimeStats {};
+        const auto encoderRecent = encoderWorker_
+            ? encoderWorker_->recentPerformance()
+            : EncoderRecentPerformance {};
         logEngineSaveTiming(
             "video_timeline",
             videoTimelineStartedAt,
@@ -1532,6 +1535,9 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                 " captureBackend=\"" + jsonEscape(captureStats.activeBackend) + "\"" +
                 " desktopPresentFps=" + fixedNumber(captureStats.desktopPresentFps) +
                 " publishedFreshFps=" + fixedNumber(captureStats.publishedFreshFps) +
+                " recentPublishedFreshFps=" + fixedNumber(captureStats.recentPublishedFreshFps) +
+                " recentEncoderInputFps=" + fixedNumber(encoderRecent.inputFps) +
+                " recentEncoderOutputFps=" + fixedNumber(encoderRecent.outputFps) +
                 " capturePublicationAge100ns=" + std::to_string(
                     captureSession_ ? captureSession_->lastPublishedAge100ns() : 0) +
                 " hdrTonemapping=" + std::string(
@@ -1558,6 +1564,25 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                     encoderWorker_ ? encoderWorker_->averageOutputDrainLatency100ns() : 0) +
                 " maximumOutputDrainLatency100ns=" + std::to_string(
                     encoderWorker_ ? encoderWorker_->maximumOutputDrainLatency100ns() : 0) +
+                " capturePreparationP95_100ns=" + std::to_string(
+                    captureStats.framePreparationLatency.p95_100ns) +
+                " captureProcessingP95_100ns=" + std::to_string(
+                    captureStats.frameProcessingLatency.p95_100ns) +
+                " inputPreparationP95_100ns=" + std::to_string(
+                    encoderRecent.inputPreparation.p95_100ns) +
+                " inputMapP95_100ns=" + std::to_string(encoderRecent.inputMap.p95_100ns) +
+                " nvencCallP95_100ns=" + std::to_string(encoderRecent.encodeCall.p95_100ns) +
+                " outputEventWaitP95_100ns=" + std::to_string(
+                    encoderRecent.outputEventWait.p95_100ns) +
+                " outputLockP95_100ns=" + std::to_string(encoderRecent.outputLock.p95_100ns) +
+                " outputCopyP95_100ns=" + std::to_string(encoderRecent.outputCopy.p95_100ns) +
+                " outputUnmapP95_100ns=" + std::to_string(encoderRecent.outputUnmap.p95_100ns) +
+                " nvencZeroCopyFrames=" + std::to_string(
+                    encoderWorker_ ? encoderWorker_->nvencZeroCopyFrames() : 0) +
+                " nvencCopyFallbackFrames=" + std::to_string(
+                    encoderWorker_ ? encoderWorker_->nvencCopyFallbackFrames() : 0) +
+                " nvencConvertedFrames=" + std::to_string(
+                    encoderWorker_ ? encoderWorker_->nvencConvertedFrames() : 0) +
                 " maximumSubmitLatency100ns=" + std::to_string(
                     encoderWorker_ ? encoderWorker_->maximumSubmitLatency100ns() : 0));
     }
@@ -1992,6 +2017,13 @@ void Engine::refreshPacketCounts() {
     diagnostics_.captureFallbacks = captureStats.fallbackCount;
     diagnostics_.desktopPresentFps = captureStats.desktopPresentFps;
     diagnostics_.publishedFreshFps = captureStats.publishedFreshFps;
+    diagnostics_.recentPublishedFreshFps = captureStats.recentPublishedFreshFps;
+    diagnostics_.recentCaptureAcquireP95_100ns = captureStats.acquireWaitLatency.p95_100ns;
+    diagnostics_.recentCapturePreparationP50_100ns = captureStats.framePreparationLatency.p50_100ns;
+    diagnostics_.recentCapturePreparationP95_100ns = captureStats.framePreparationLatency.p95_100ns;
+    diagnostics_.recentCaptureCursorP95_100ns = captureStats.cursorCompositeLatency.p95_100ns;
+    diagnostics_.recentCaptureProcessingP50_100ns = captureStats.frameProcessingLatency.p50_100ns;
+    diagnostics_.recentCaptureProcessingP95_100ns = captureStats.frameProcessingLatency.p95_100ns;
 
     const auto queueStats = frameQueue_.stats();
     const auto boundedCounter = [](uint64_t value) {
@@ -2028,6 +2060,25 @@ void Engine::refreshPacketCounts() {
     diagnostics_.maximumNvencCallLatency100ns = encoderWorker_ ? encoderWorker_->maximumNvencCallLatency100ns() : 0;
     diagnostics_.averageOutputDrainLatency100ns = encoderWorker_ ? encoderWorker_->averageOutputDrainLatency100ns() : 0;
     diagnostics_.maximumOutputDrainLatency100ns = encoderWorker_ ? encoderWorker_->maximumOutputDrainLatency100ns() : 0;
+    const auto encoderRecent = encoderWorker_
+        ? encoderWorker_->recentPerformance()
+        : EncoderRecentPerformance {};
+    diagnostics_.recentEncoderInputFps = encoderRecent.inputFps;
+    diagnostics_.recentEncoderOutputFps = encoderRecent.outputFps;
+    diagnostics_.recentInputPreparationP50_100ns = encoderRecent.inputPreparation.p50_100ns;
+    diagnostics_.recentInputPreparationP95_100ns = encoderRecent.inputPreparation.p95_100ns;
+    diagnostics_.recentInputMapP50_100ns = encoderRecent.inputMap.p50_100ns;
+    diagnostics_.recentInputMapP95_100ns = encoderRecent.inputMap.p95_100ns;
+    diagnostics_.recentNvencCallP50_100ns = encoderRecent.encodeCall.p50_100ns;
+    diagnostics_.recentNvencCallP95_100ns = encoderRecent.encodeCall.p95_100ns;
+    diagnostics_.recentOutputEventWaitP50_100ns = encoderRecent.outputEventWait.p50_100ns;
+    diagnostics_.recentOutputEventWaitP95_100ns = encoderRecent.outputEventWait.p95_100ns;
+    diagnostics_.recentOutputLockP95_100ns = encoderRecent.outputLock.p95_100ns;
+    diagnostics_.recentOutputCopyP95_100ns = encoderRecent.outputCopy.p95_100ns;
+    diagnostics_.recentOutputUnmapP95_100ns = encoderRecent.outputUnmap.p95_100ns;
+    diagnostics_.nvencZeroCopyFrames = encoderWorker_ ? encoderWorker_->nvencZeroCopyFrames() : 0;
+    diagnostics_.nvencCopyFallbackFrames = encoderWorker_ ? encoderWorker_->nvencCopyFallbackFrames() : 0;
+    diagnostics_.nvencConvertedFrames = encoderWorker_ ? encoderWorker_->nvencConvertedFrames() : 0;
     diagnostics_.droppedFrames = boundedCounter(
         queueStats.overflowDrops +
         static_cast<uint64_t>(std::max(0, diagnostics_.captureSlotDrops)) +

@@ -7,6 +7,7 @@
 #include "clipture/DesktopDuplicationHelpers.hpp"
 #include "clipture/DesktopPointerShape.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
+#include "clipture/LatencyWindow.hpp"
 #include "clipture/FixedRateFrameSampler.hpp"
 #include "clipture/FrameQueue.hpp"
 #include "clipture/MediaClock.hpp"
@@ -87,6 +88,34 @@ bool testBoundedWrites() {
     }
     return require(total == 11u * 1024u * 1024u + 17u && writes == 3,
                    "bounded writer should cover every byte in three requests");
+}
+
+bool testLatencyWindowIsBoundedAndRecent() {
+    clipture::LatencyWindow<8> window;
+    for (int64_t sample = 1; sample <= 8; ++sample) {
+        window.record(9 + sample, sample);
+    }
+    const auto complete = window.snapshot(17, 100);
+    if (!require(complete.samples == 8, "latency window should retain its bounded sample set")) return false;
+    if (!require(
+            complete.average100ns == 4 && complete.p50_100ns == 5 &&
+                complete.p95_100ns == 8 && complete.maximum100ns == 8,
+            "latency window should calculate deterministic aggregate values")) {
+        return false;
+    }
+
+    window.record(20, 9);
+    const auto recent = window.snapshot(20, 5);
+    if (!require(recent.samples == 4, "latency window should exclude samples outside its horizon")) return false;
+    if (!require(
+            recent.average100ns == 7 && recent.p50_100ns == 8 &&
+                recent.p95_100ns == 9 && recent.maximum100ns == 9,
+            "latency window should report percentiles from only recent samples")) {
+        return false;
+    }
+
+    window.clear();
+    return require(window.snapshot(20, 100).samples == 0, "clearing latency telemetry should remove samples");
 }
 
 bool testRefreshRateSamplerMaintainsTargetCadence() {
@@ -591,6 +620,7 @@ int main() {
     if (!testStartCodesAndFlags()) return 1;
     if (!testMalformedPackets()) return 1;
     if (!testBoundedWrites()) return 1;
+    if (!testLatencyWindowIsBoundedAndRecent()) return 1;
     if (!testRefreshRateSamplerMaintainsTargetCadence()) return 1;
     if (!testJitteredRefreshSamplerMaintainsCadence()) return 1;
     if (!testCaptureBackendPolicyAndDxgiHelpers()) return 1;

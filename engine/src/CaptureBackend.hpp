@@ -70,6 +70,10 @@ struct CaptureSharedState {
     std::atomic<bool> hdrTonemappingActive = false;
     std::atomic<void*> activeMonitor = nullptr;
     std::atomic<FrameQueue*> frameQueue = nullptr;
+    LatencyWindow<> acquireWaitLatency;
+    LatencyWindow<> framePreparationLatency;
+    LatencyWindow<> cursorCompositeLatency;
+    LatencyWindow<> frameProcessingLatency;
 
     mutable std::mutex stateMutex;
     std::string resolution = "Native monitor";
@@ -128,7 +132,8 @@ private:
     std::mutex mutex_;
     std::vector<std::shared_ptr<Slot>> slots_;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture_;
+    std::vector<Microsoft::WRL::ComPtr<ID3D11Texture2D>> hdrInputTextures_;
+    std::size_t nextHdrInputTexture_ = 0;
     D3D11_TEXTURE2D_DESC desc_ {};
 };
 

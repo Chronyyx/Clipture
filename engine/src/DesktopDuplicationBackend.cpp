@@ -283,6 +283,7 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
         DXGI_OUTDUPL_FRAME_INFO frameInfo {};
         Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
         AcquiredDesktopFrame acquiredFrame(state.duplication.Get());
+        const int64_t acquireStarted100ns = monotonicNow100ns();
         const HRESULT acquireHr = state.duplication->AcquireNextFrame(8, &frameInfo, &desktopResource);
         if (acquireHr == DXGI_ERROR_WAIT_TIMEOUT) {
             ++state.shared->acquireTimeouts;
@@ -302,6 +303,8 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             return BackendOutcome::RequestFallback;
         }
         acquiredFrame.markAcquired();
+        const int64_t acquired100ns = monotonicNow100ns();
+        state.shared->acquireWaitLatency.record(acquired100ns, acquired100ns - acquireStarted100ns);
 
         ++state.shared->acquiredUpdates;
         const uint64_t accumulatedBeyondFirst = dxgiAccumulatedFramesBeyondFirst(frameInfo.AccumulatedFrames);
@@ -336,6 +339,7 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
         const int64_t sourceTimestamp100ns = mediaTimeFromSystemRelative100ns(systemRelative100ns);
         int64_t outputTimestamp100ns = 0;
         if (!state.shared->selectFrameTimestamp(sourceTimestamp100ns, outputTimestamp100ns)) continue;
+        const int64_t frameProcessingStarted100ns = monotonicNow100ns();
 
         Microsoft::WRL::ComPtr<ID3D11Texture2D> desktopTexture;
         HRESULT hr = desktopResource.As(&desktopTexture);
@@ -373,6 +377,7 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
         }
 
         ID3D11Texture2D* pointerBackground = desktopTexture.Get();
+        const int64_t framePreparationStarted100ns = monotonicNow100ns();
         if (state.hdrCapture) {
             if (!owned.hdrInputTexture || !state.tonemapper) {
                 ++state.shared->callbackErrors;
@@ -392,6 +397,11 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
         } else {
             state.d3dContext->CopyResource(owned.texture.Get(), desktopTexture.Get());
         }
+        const int64_t framePrepared100ns = monotonicNow100ns();
+        state.shared->framePreparationLatency.record(
+            framePrepared100ns,
+            framePrepared100ns - framePreparationStarted100ns);
+        const int64_t cursorCompositeStarted100ns = monotonicNow100ns();
         if (!state.pointerCompositor->composite(
                 pointerBackground,
                 owned.renderTargetView.Get(),
@@ -402,6 +412,10 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             state.shared->setFallbackReason(pointerError);
             return BackendOutcome::RequestFallback;
         }
+        const int64_t cursorComposited100ns = monotonicNow100ns();
+        state.shared->cursorCompositeLatency.record(
+            cursorComposited100ns,
+            cursorComposited100ns - cursorCompositeStarted100ns);
 
         state.shared->publish(
             std::move(owned.texture),
@@ -409,8 +423,15 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             outputTimestamp100ns,
             static_cast<int>(state.width),
             static_cast<int>(state.height));
+        const int64_t frameProcessed100ns = monotonicNow100ns();
+        state.shared->frameProcessingLatency.record(
+            frameProcessed100ns,
+            frameProcessed100ns - frameProcessingStarted100ns);
         acquiredFrame.release();
-        SwitchToThread();
+        if (auto* queue = state.shared->frameQueue.load(std::memory_order_acquire);
+            queue && queue->size() >= 2) {
+            SwitchToThread();
+        }
     }
     return BackendOutcome::Stopped;
 }

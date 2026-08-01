@@ -1,6 +1,7 @@
 #pragma once
 
 #include "clipture/FrameQueue.hpp"
+#include "clipture/LatencyWindow.hpp"
 #include "clipture/PacketRingBuffer.hpp"
 
 #include <atomic>
@@ -12,6 +13,18 @@
 #include <thread>
 
 namespace clipture {
+
+struct EncoderRecentPerformance {
+    double inputFps = 0.0;
+    double outputFps = 0.0;
+    LatencyWindowSnapshot inputPreparation;
+    LatencyWindowSnapshot inputMap;
+    LatencyWindowSnapshot encodeCall;
+    LatencyWindowSnapshot outputEventWait;
+    LatencyWindowSnapshot outputLock;
+    LatencyWindowSnapshot outputCopy;
+    LatencyWindowSnapshot outputUnmap;
+};
 
 class EncoderWorker {
 public:
@@ -47,6 +60,9 @@ public:
     int nvencInputDrops() const;
     int encoderBackpressureDrops() const;
     int nvencInFlightFrames() const;
+    uint64_t nvencZeroCopyFrames() const;
+    uint64_t nvencCopyFallbackFrames() const;
+    uint64_t nvencConvertedFrames() const;
     int effectiveNvencPreset() const;
     int64_t maximumSubmitLatency100ns() const;
     int64_t averageScaleLatency100ns() const;
@@ -57,6 +73,7 @@ public:
     int64_t maximumNvencCallLatency100ns() const;
     int64_t averageOutputDrainLatency100ns() const;
     int64_t maximumOutputDrainLatency100ns() const;
+    EncoderRecentPerformance recentPerformance() const;
     int sourceWidth() const;
     int sourceHeight() const;
     int outputWidth() const;
@@ -105,6 +122,9 @@ private:
     std::atomic<int> encoderBackpressureDrops_ = 0;
     std::atomic<int> nvencInFlightFrames_ = 0;
     std::atomic<int> nvencPreparedFrames_ = 0;
+    std::atomic<uint64_t> nvencZeroCopyFrames_ = 0;
+    std::atomic<uint64_t> nvencCopyFallbackFrames_ = 0;
+    std::atomic<uint64_t> nvencConvertedFrames_ = 0;
     std::atomic<int64_t> maximumSubmitLatency100ns_ = 0;
     std::atomic<uint64_t> profiledSubmissions_ = 0;
     std::atomic<int64_t> totalScaleLatency100ns_ = 0;
@@ -115,6 +135,14 @@ private:
     std::atomic<int64_t> maximumNvencCallLatency100ns_ = 0;
     std::atomic<int64_t> totalOutputDrainLatency100ns_ = 0;
     std::atomic<int64_t> maximumOutputDrainLatency100ns_ = 0;
+    std::atomic<int64_t> performanceStarted100ns_ = 0;
+    LatencyWindow<> recentInputPreparationLatency_;
+    LatencyWindow<> recentInputMapLatency_;
+    LatencyWindow<> recentNvencCallLatency_;
+    LatencyWindow<> recentOutputEventWaitLatency_;
+    LatencyWindow<> recentOutputLockLatency_;
+    LatencyWindow<> recentOutputCopyLatency_;
+    LatencyWindow<> recentOutputUnmapLatency_;
     std::atomic<int> targetFps_ = 30;
     std::atomic<int> targetBitrateMbps_ = 40;
     std::atomic<int> targetWidth_ = 0;

@@ -4,9 +4,18 @@ Clipture is a Windows replay-buffer application built around low-latency NVIDIA 
 
 ## Current Release
 
-Version `1.1.4` is a capture-stability and save-performance release focused on smoother high-refresh-rate recording and predictable clip finalization.
+Version `1.1.5` is a high-refresh capture stability update focused on protecting fresh desktop frames under NVENC pressure and making capture bottlenecks measurable.
 
-## What's New in 1.1.4
+## What's New in 1.1.5
+
+- Preserves room for fresh desktop updates in the encoder queue so repeated CFR ticks cannot crowd out newly captured frames.
+- Uses direct native-size BGRA input when safe, with encoder-owned copy and conversion fallbacks tracked separately.
+- Adds rolling capture and NVENC latency diagnostics, including recent fresh-frame, encoder-input, and encoder-output rates.
+- Reports p50/p95 timing for capture preparation, cursor composition, input mapping, NVENC calls, output waits, bitstream copies, and resource cleanup.
+- Reuses a bounded HDR input texture pool and hardens Windows.Graphics.Capture startup and apartment cleanup.
+- Keeps the tested eight-job queue and two-slot fresh-frame reserve that restored stable high-refresh capture behavior.
+
+## 1.1.4 Highlights
 
 - Adds a phase-locked target-FPS capture sampler so 144 Hz and 210 Hz displays do not alias below the requested 60 FPS.
 - Introduces a dedicated DXGI Desktop Duplication backend with Windows.Graphics.Capture fallback, recovery diagnostics, and consistent cursor handling.

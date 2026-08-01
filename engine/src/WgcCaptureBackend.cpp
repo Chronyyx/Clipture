@@ -50,6 +50,8 @@ struct WgcCaptureBackend::Impl {
     std::string failureReason;
     std::atomic<bool> failed = false;
     std::atomic<bool> started = false;
+    bool apartmentInitialized = false;
+    DWORD apartmentThreadId = 0;
 
     Impl(std::shared_ptr<CaptureSharedState> nextShared, SelectedOutput nextOutput)
         : shared(std::move(nextShared)), output(std::move(nextOutput)), texturePool(shared) {}
@@ -79,6 +81,8 @@ BackendStartResult WgcCaptureBackend::start() {
     auto& state = *impl_;
     try {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        state.apartmentInitialized = true;
+        state.apartmentThreadId = GetCurrentThreadId();
         HRESULT hr = createD3dDeviceForOutput(state.output.adapter.Get(), state.d3dDevice, state.d3dContext);
         if (FAILED(hr)) return { false, "D3D11 device creation for WGC failed: " + hresultHex(hr) };
 
@@ -91,7 +95,17 @@ BackendStartResult WgcCaptureBackend::start() {
         if (FAILED(hr)) return { false, "CreateDirect3D11DeviceFromDXGIDevice failed: " + hresultHex(hr) };
         state.direct3DDevice = inspectableDevice.as<IDirect3DDevice>();
 
-        auto interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+        winrt::hresult_error factoryError;
+        auto interop = winrt::try_get_activation_factory<
+            GraphicsCaptureItem,
+            IGraphicsCaptureItemInterop>(factoryError);
+        if (!interop) {
+            return {
+                false,
+                "Could not activate Windows.Graphics.Capture interop: " +
+                    hresultHex(factoryError.code())
+            };
+        }
         winrt::com_ptr<ABI::Windows::Graphics::Capture::IGraphicsCaptureItem> abiItem;
         hr = interop->CreateForMonitor(
             state.output.desc.Monitor,
@@ -171,6 +185,7 @@ BackendStartResult WgcCaptureBackend::start() {
                 int64_t outputTimestamp100ns = 0;
                 if (!callbackState.shared->selectFrameTimestamp(
                         sourceTimestamp100ns, outputTimestamp100ns)) return;
+                const int64_t frameProcessingStarted100ns = monotonicNow100ns();
 
                 auto access = frame.Surface().template as<
                     ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
@@ -204,6 +219,7 @@ BackendStartResult WgcCaptureBackend::start() {
                     static_cast<UINT>(size.Height),
                     1,
                 };
+                const int64_t framePreparationStarted100ns = monotonicNow100ns();
                 if (needsTonemapping) {
                     if (!owned.hdrInputTexture) return;
                     callbackState.d3dContext->CopySubresourceRegion(
@@ -218,6 +234,10 @@ BackendStartResult WgcCaptureBackend::start() {
                     callbackState.d3dContext->CopySubresourceRegion(
                         owned.texture.Get(), 0, 0, 0, 0, sourceTexture.Get(), 0, &sourceBox);
                 }
+                const int64_t framePrepared100ns = monotonicNow100ns();
+                callbackState.shared->framePreparationLatency.record(
+                    framePrepared100ns,
+                    framePrepared100ns - framePreparationStarted100ns);
 
                 callbackState.shared->publish(
                     std::move(owned.texture),
@@ -225,6 +245,10 @@ BackendStartResult WgcCaptureBackend::start() {
                     outputTimestamp100ns,
                     size.Width,
                     size.Height);
+                const int64_t frameProcessed100ns = monotonicNow100ns();
+                callbackState.shared->frameProcessingLatency.record(
+                    frameProcessed100ns,
+                    frameProcessed100ns - frameProcessingStarted100ns);
             } catch (const winrt::hresult_error& error) {
                 ++callbackState.shared->callbackErrors;
                 callbackState.fail("WGC frame callback failed: " + narrow(error.message().c_str()));
@@ -307,6 +331,11 @@ void WgcCaptureBackend::stop() {
         state.d3dDevice.Reset();
     }
     state.shared->hdrTonemappingActive.store(false, std::memory_order_relaxed);
+    if (state.apartmentInitialized && state.apartmentThreadId == GetCurrentThreadId()) {
+        winrt::uninit_apartment();
+        state.apartmentInitialized = false;
+        state.apartmentThreadId = 0;
+    }
 }
 
 }  // namespace clipture::capture

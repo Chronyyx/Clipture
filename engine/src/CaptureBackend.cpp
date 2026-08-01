@@ -288,6 +288,10 @@ void CaptureSharedState::resetForStart(
     lastPublishedSteady100ns.store(0);
     hdrTonemappingActive.store(false);
     running.store(false);
+    acquireWaitLatency.clear();
+    framePreparationLatency.clear();
+    cursorCompositeLatency.clear();
+    frameProcessingLatency.clear();
     {
         std::lock_guard samplerLock(samplerMutex);
         sampler.reset();
@@ -312,6 +316,10 @@ void CaptureSharedState::beginEpoch(bool clearQueue) {
     lastFramePts100ns.store(0, std::memory_order_relaxed);
     lastFrameInterval100ns.store(0, std::memory_order_relaxed);
     lastPublishedSteady100ns.store(0, std::memory_order_relaxed);
+    acquireWaitLatency.clear();
+    framePreparationLatency.clear();
+    cursorCompositeLatency.clear();
+    frameProcessingLatency.clear();
     {
         std::lock_guard samplerLock(samplerMutex);
         sampler.reset();
@@ -435,12 +443,23 @@ CaptureRuntimeStats CaptureSharedState::snapshot() const {
         presentBaseline = activeBackendPresentBaseline;
         publishedBaseline = activeBackendPublishedBaseline;
     }
-    const int64_t elapsed100ns = startedAt100ns > 0 ? monotonicNow100ns() - startedAt100ns : 0;
+    const int64_t now100ns = monotonicNow100ns();
+    const int64_t elapsed100ns = startedAt100ns > 0 ? now100ns - startedAt100ns : 0;
     if (elapsed100ns > 0) {
         result.desktopPresentFps = static_cast<double>(result.desktopPresents - presentBaseline) * 10'000'000.0 /
             static_cast<double>(elapsed100ns);
         result.publishedFreshFps = static_cast<double>(result.publishedFrames - publishedBaseline) * 10'000'000.0 /
             static_cast<double>(elapsed100ns);
+    }
+    result.acquireWaitLatency = acquireWaitLatency.snapshot(now100ns);
+    result.framePreparationLatency = framePreparationLatency.snapshot(now100ns);
+    result.cursorCompositeLatency = cursorCompositeLatency.snapshot(now100ns);
+    result.frameProcessingLatency = frameProcessingLatency.snapshot(now100ns);
+    const int64_t recentWindow100ns = std::min<int64_t>(elapsed100ns, 50'000'000LL);
+    if (recentWindow100ns > 0) {
+        result.recentPublishedFreshFps =
+            static_cast<double>(result.frameProcessingLatency.samples) * 10'000'000.0 /
+            static_cast<double>(recentWindow100ns);
     }
     return result;
 }
@@ -468,7 +487,8 @@ CaptureTexture CaptureTexturePool::acquire(
     if (needsNewGeneration) {
         slots_.clear();
         device_ = device;
-        hdrInputTexture_.Reset();
+        hdrInputTextures_.clear();
+        nextHdrInputTexture_ = 0;
         desc_ = {};
         desc_.Width = width;
         desc_.Height = height;
@@ -502,11 +522,18 @@ CaptureTexture CaptureTexturePool::acquire(
             D3D11_TEXTURE2D_DESC hdrDesc = desc_;
             hdrDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
             hdrDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            const HRESULT hr = device->CreateTexture2D(&hdrDesc, nullptr, &hdrInputTexture_);
-            if (FAILED(hr) || !hdrInputTexture_) {
-                error = "CreateTexture2D for HDR capture staging failed: " + hresultHex(hr);
-                slots_.clear();
-                return {};
+            constexpr std::size_t hdrInputCount = 3;
+            hdrInputTextures_.reserve(hdrInputCount);
+            for (std::size_t index = 0; index < hdrInputCount; ++index) {
+                Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture;
+                const HRESULT hr = device->CreateTexture2D(&hdrDesc, nullptr, &hdrInputTexture);
+                if (FAILED(hr) || !hdrInputTexture) {
+                    error = "CreateTexture2D for HDR capture staging failed: " + hresultHex(hr);
+                    slots_.clear();
+                    hdrInputTextures_.clear();
+                    return {};
+                }
+                hdrInputTextures_.push_back(std::move(hdrInputTexture));
             }
         }
     }
@@ -517,7 +544,12 @@ CaptureTexture CaptureTexturePool::acquire(
         auto lease = std::shared_ptr<void>(slot.get(), [slot](void*) {
             slot->leased.store(false, std::memory_order_release);
         });
-        return { slot->texture, hdrInputTexture_, slot->renderTargetView, std::move(lease) };
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture;
+        if (!hdrInputTextures_.empty()) {
+            hdrInputTexture = hdrInputTextures_[nextHdrInputTexture_];
+            nextHdrInputTexture_ = (nextHdrInputTexture_ + 1) % hdrInputTextures_.size();
+        }
+        return { slot->texture, std::move(hdrInputTexture), slot->renderTargetView, std::move(lease) };
     }
     ++shared_->ownedSlotDrops;
     return {};
@@ -527,7 +559,8 @@ void CaptureTexturePool::reset() {
     std::lock_guard lock(mutex_);
     slots_.clear();
     device_.Reset();
-    hdrInputTexture_.Reset();
+    hdrInputTextures_.clear();
+    nextHdrInputTexture_ = 0;
     desc_ = {};
 }
 
