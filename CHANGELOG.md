@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.2.1] - 2026-08-02
+
+### Performance
+
+- Pipeline more converted NVENC input surfaces ahead as quality presets increase, giving P3 and higher enough conversion lead time to sustain the requested frame rate under game GPU load.
+- Use non-blocking bitstream locks after asynchronous NVENC completion events, with bounded retries for transient driver contention instead of stalling encoder submissions.
+
+### Audio Reliability
+
+- Keep configured separate-app audio supervisors alive when an application is closed, launched late, or restarted, and automatically rebind capture to the new process.
+- Select the root covering the largest matching process tree so Chromium-style applications include their helper audio processes while retaining one logical app track.
+- Close process-loopback activation events and monitor target process lifetime so sessions restart cleanly without leaking native handles.
+
+### Validation
+
+- Added native coverage for the deterministic process-tree root selection used when app audio binds or rebinds.
+- Verified sustained 60.00 FPS capture at 2560x1440 using NVENC P3 in the previously failing game workload.
+
 ## [1.2.0] - 2026-08-02
 
 ### New Features

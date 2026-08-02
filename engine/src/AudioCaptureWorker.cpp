@@ -38,6 +38,10 @@ class ActivateCompletionHandler :
         Microsoft::WRL::FtmBase,
         IActivateAudioInterfaceCompletionHandler> {
 public:
+    ~ActivateCompletionHandler() {
+        if (event_) CloseHandle(event_);
+    }
+
     HRESULT RuntimeClassInitialize() {
         event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         return event_ ? S_OK : HRESULT_FROM_WIN32(GetLastError());
@@ -358,10 +362,6 @@ std::string captureProcessName(const std::string& sourceSpec) {
 
 std::string sourceIdForProcessSpec(const std::string& sourceSpec) {
     return audioProcessSourceId(sourceSpec);
-}
-
-DWORD findProcessIdByName(const std::string& processName) {
-    return RunningProcessSnapshot::captureNameOnly().processIdForName(processName);
 }
 
 int64_t now100ns() {
@@ -1327,36 +1327,61 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
     const auto captureSpec = parseAudioProcessSpec(processName);
     const std::string captureName = captureSpec.processName;
     const std::string sourceId = sourceIdForProcessSpec(processName);
-    std::cerr << "[audio] Process loopback thread started for: " << captureName << " as " << sourceId << std::endl;
+    if (captureName.empty()) return;
 
-    // Retry finding the process a few times — the process may still be starting up
-    // when the audio worker launches, or the snapshot may miss it briefly.
-    DWORD processId = captureSpec.processId;
-    if (processId != 0) {
+    std::cerr << "[audio] Process loopback supervisor started for: " << captureName
+              << " as " << sourceId << std::endl;
+    bool waitingLogged = false;
+    DWORD previousProcessId = 0;
+    while (running_ && !stopRequested->load()) {
         const auto snapshot = RunningProcessSnapshot::captureNameOnly();
-        const auto& entries = snapshot.entries();
-        const bool foundPid = std::any_of(entries.begin(), entries.end(), [&](const RunningProcessInfo& entry) {
-            return entry.processId == processId && _stricmp(entry.exeName.c_str(), captureName.c_str()) == 0;
-        });
-        if (!foundPid) {
-            std::cerr << "[audio] Helper PID " << processId << " is no longer running for " << captureName << std::endl;
-            return;
+        DWORD processId = 0;
+        if (captureSpec.pidSpecific) {
+            const auto found = std::find_if(
+                snapshot.entries().begin(),
+                snapshot.entries().end(),
+                [&](const RunningProcessInfo& entry) {
+                    return entry.processId == captureSpec.processId &&
+                        _stricmp(entry.exeName.c_str(), captureName.c_str()) == 0;
+                });
+            if (found != snapshot.entries().end()) processId = found->processId;
+        } else {
+            processId = preferredProcessTreeRootForName(snapshot.entries(), captureName);
+        }
+
+        if (processId == 0) {
+            if (!waitingLogged) {
+                std::cerr << "[audio] Waiting for configured audio process: " << captureName << std::endl;
+                waitingLogged = true;
+            }
+            for (int slice = 0; slice < 20 && running_ && !stopRequested->load(); ++slice) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            continue;
+        }
+
+        if (waitingLogged || previousProcessId != processId) {
+            std::cerr << "[audio] Bound " << captureName << " process tree at PID " << processId << std::endl;
+        }
+        waitingLogged = false;
+        previousProcessId = processId;
+        runProcessLoopbackCaptureSession(captureName, sourceId, processId, stopRequested);
+
+        if (!running_ || stopRequested->load()) break;
+        std::cerr << "[audio] Process loopback session ended for " << captureName
+                  << "; waiting to rebind." << std::endl;
+        for (int slice = 0; slice < 10 && running_ && !stopRequested->load(); ++slice) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
-    constexpr int maxProcessLookupAttempts = 3;
-    for (int attempt = 0; attempt < maxProcessLookupAttempts && processId == 0 && running_ && !stopRequested->load(); ++attempt) {
-        processId = findProcessIdByName(captureName);
-        if (processId != 0) break;
-        std::cerr << "[audio] Process not found (attempt " << (attempt + 1) << "/" << maxProcessLookupAttempts << "): " << captureName << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    }
-    if (processId == 0) {
-        std::cerr << "[audio] FAILED: Process not found after retries: " << captureName << std::endl;
-        status_ = "Configured app audio source is not running: " + captureName;
-        return;
-    }
-    std::cerr << "[audio] Found process " << captureName << " with PID " << processId << std::endl;
+    std::cerr << "[audio] Process loopback supervisor stopped for: " << captureName << std::endl;
+}
 
+void AudioCaptureWorker::runProcessLoopbackCaptureSession(
+    const std::string& captureName,
+    const std::string& sourceId,
+    std::uint32_t processId,
+    std::shared_ptr<std::atomic<bool>> stopRequested) {
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool coInitialized = SUCCEEDED(hr);
 
@@ -1438,7 +1463,17 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
 
     DWORD taskIndex = 0;
     HANDLE avrtHandle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
-    audioClient->Start();
+    hr = audioClient->Start();
+    if (FAILED(hr)) {
+        std::cerr << "[audio] FAILED: AudioClient Start for " << captureName
+                  << " hr=0x" << std::hex << hr << std::dec << std::endl;
+        if (avrtHandle) AvRevertMmThreadCharacteristics(avrtHandle);
+        CoTaskMemFree(mixFormat);
+        if (coInitialized) CoUninitialize();
+        return;
+    }
+    HANDLE targetProcessHandle = OpenProcess(SYNCHRONIZE, FALSE, processId);
+    auto nextProcessHealthCheck = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     int64_t nextPts100ns = now100ns();
     bool audioClockAnchored = false;
     const int outputChannelsForSilence = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
@@ -1448,6 +1483,16 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
               << mixFormat->nChannels << " ch)" << std::endl;
 
     while (running_ && !stopRequested->load()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (targetProcessHandle && now >= nextProcessHealthCheck) {
+            nextProcessHealthCheck = now + std::chrono::seconds(1);
+            if (WaitForSingleObject(targetProcessHandle, 0) == WAIT_OBJECT_0) {
+                std::cerr << "[audio] Captured process exited: " << captureName
+                          << " (PID " << processId << ")" << std::endl;
+                break;
+            }
+        }
+
         UINT32 packetFrames = 0;
         if (FAILED(captureClient->GetNextPacketSize(&packetFrames))) break;
         bool capturedPacket = false;
@@ -1522,6 +1567,7 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
     }
 
     audioClient->Stop();
+    if (targetProcessHandle) CloseHandle(targetProcessHandle);
     if (avrtHandle) AvRevertMmThreadCharacteristics(avrtHandle);
     CoTaskMemFree(mixFormat);
     if (coInitialized) CoUninitialize();

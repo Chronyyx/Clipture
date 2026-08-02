@@ -481,6 +481,36 @@ bool testPidAudioProcessSpecsAndTreeCollapse() {
         "an independent audio helper should remain a separate capture root");
 }
 
+bool testPreferredProcessAudioTreeRoot() {
+    const std::vector<clipture::RunningProcessInfo> browserProcesses {
+        { 10, 0, "explorer.exe", "explorer.exe" },
+        { 100, 10, "brave.exe", "brave.exe" },
+        { 101, 100, "brave.exe", "brave.exe" },
+        { 102, 100, "utility.exe", "utility.exe" },
+        { 103, 102, "brave.exe", "brave.exe" },
+        { 200, 10, "brave.exe", "brave.exe" },
+        { 201, 200, "brave.exe", "brave.exe" }
+    };
+    if (!require(
+            clipture::preferredProcessTreeRootForName(browserProcesses, "app:BRAVE.EXE") == 100,
+            "app capture should bind the browser root covering the largest same-name process tree")) {
+        return false;
+    }
+
+    const std::vector<clipture::RunningProcessInfo> tiedProcesses {
+        { 400, 10, "brave.exe", "brave.exe" },
+        { 300, 10, "brave.exe", "brave.exe" }
+    };
+    if (!require(
+            clipture::preferredProcessTreeRootForName(tiedProcesses, "brave.exe") == 300,
+            "equally sized app process trees should use a deterministic PID tie-break")) {
+        return false;
+    }
+    return require(
+        clipture::preferredProcessTreeRootForName(browserProcesses, "missing.exe") == 0,
+        "missing configured apps should remain unbound until a later retry");
+}
+
 clipture::EncodedPacket makePcmPacket(
     clipture::PacketRingBuffer& pool,
     std::string sourceId,
@@ -847,6 +877,7 @@ int main() {
     if (!testFrameQueueDropAccounting()) return 1;
     if (!testImmutableAudioRouting()) return 1;
     if (!testPidAudioProcessSpecsAndTreeCollapse()) return 1;
+    if (!testPreferredProcessAudioTreeRoot()) return 1;
     if (!testLiveAacCoordinator()) return 1;
     if (!testLiveAacTimelineStaysContinuousThroughSilence()) return 1;
     if (!testConcurrentPublishDoesNotTriggerRepair()) return 1;

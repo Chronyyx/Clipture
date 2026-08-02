@@ -168,4 +168,45 @@ inline std::vector<DWORD> collapseProcessTreeRoots(
     return roots;
 }
 
+inline DWORD preferredProcessTreeRootForName(
+    const std::vector<RunningProcessInfo>& entries,
+    std::string processName) {
+    processName = audioProcessName(processName);
+    std::transform(processName.begin(), processName.end(), processName.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    if (processName.empty()) return 0;
+
+    std::vector<DWORD> candidates;
+    for (const auto& entry : entries) {
+        std::string lowerExeName = entry.lowerExeName;
+        if (lowerExeName.empty()) {
+            lowerExeName = entry.exeName;
+            std::transform(lowerExeName.begin(), lowerExeName.end(), lowerExeName.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+        }
+        if (lowerExeName == processName) candidates.push_back(entry.processId);
+    }
+    if (candidates.empty()) return 0;
+
+    const auto roots = collapseProcessTreeRoots(entries, candidates);
+    DWORD preferredRoot = 0;
+    std::size_t preferredCoverage = 0;
+    for (const DWORD root : roots) {
+        const auto coverage = static_cast<std::size_t>(std::count_if(
+            candidates.begin(),
+            candidates.end(),
+            [&](DWORD candidate) {
+                return candidate == root || processHasAncestor(entries, candidate, root);
+            }));
+        if (coverage > preferredCoverage ||
+            (coverage == preferredCoverage && (preferredRoot == 0 || root < preferredRoot))) {
+            preferredRoot = root;
+            preferredCoverage = coverage;
+        }
+    }
+    return preferredRoot;
+}
+
 }  // namespace clipture

@@ -1,57 +1,8 @@
 # Clipture
 
-Clipture is a Windows replay-buffer application built around low-latency NVIDIA NVENC capture. It continuously keeps compressed video and audio in RAM, then writes the selected time window to MP4 when a clip is saved.
+Clipture is a Windows replay-buffer application built around low-latency NVIDIA NVENC capture. It continuously persists compressed video and audio into a rolling replay archive, then muxes the selected time window into MP4 when a clip is saved.
 
-## Current Release
-
-Version `1.1.5` is a high-refresh capture stability update focused on protecting fresh desktop frames under NVENC pressure and making capture bottlenecks measurable.
-
-## What's New in 1.1.5
-
-- Preserves room for fresh desktop updates in the encoder queue so repeated CFR ticks cannot crowd out newly captured frames.
-- Uses direct native-size BGRA input when safe, with encoder-owned copy and conversion fallbacks tracked separately.
-- Adds rolling capture and NVENC latency diagnostics, including recent fresh-frame, encoder-input, and encoder-output rates.
-- Reports p50/p95 timing for capture preparation, cursor composition, input mapping, NVENC calls, output waits, bitstream copies, and resource cleanup.
-- Reuses a bounded HDR input texture pool and hardens Windows.Graphics.Capture startup and apartment cleanup.
-- Keeps the tested eight-job queue and two-slot fresh-frame reserve that restored stable high-refresh capture behavior.
-
-## 1.1.4 Highlights
-
-- Adds a phase-locked target-FPS capture sampler so 144 Hz and 210 Hz displays do not alias below the requested 60 FPS.
-- Introduces a dedicated DXGI Desktop Duplication backend with Windows.Graphics.Capture fallback, recovery diagnostics, and consistent cursor handling.
-- Pipelines NVENC submission and asynchronous output draining with bounded queues, direct native-size BGRA input when supported, and detailed frame-loss diagnostics.
-- Preserves real capture timing through the MP4 timeline instead of shortening clips when a frame deadline is missed.
-- Separates software encoder backlog from normal NVENC in-flight work when pacing saves.
-- Caps critical save pacing to one millisecond per bounded write, preventing sustained pressure from turning a normal save into a long recovery loop.
-- Improves startup behavior and development launching so stale packaged binaries do not interfere with local builds.
-
-## 1.1.3 Highlights
-
-- Keeps live AAC timelines continuous through quiet periods to prevent repeated audio in saved clips.
-- Normalizes rare AAC gaps and overlaps before MP4 muxing so audio timestamps remain monotonic.
-- Removes the temporary mixed-video diagnostic export control.
-
-## 1.1.2 Highlights
-
-- Bugfix: restores dragging from the very top of the app without covering the Clipture icon or window controls.
-
-## 1.1.1 Highlights
-
-- Removes the full-width titlebar layer that could cover the top of the Clipture icon and sidebar branding.
-- Keeps only the update, minimize, maximize, and close control area at the top right.
-- Places the Save last button back at the right edge, directly below the window controls.
-
-## 1.1.0 Highlights
-
-- Applies engine settings before capture is armed, avoiding an unnecessary default capture startup and restart.
-- Staggers optional app-audio capture and game detection after the core video, system-audio, and microphone paths are running.
-- Replaces PowerShell/WMI startup process scans with native Windows process snapshots and queries executable paths only when needed.
-- Indexes imported directories asynchronously without copying videos or creating preview files in those folders.
-- Loads clip thumbnails only near the viewport, limits concurrent extraction, and keeps a bounded RAM cache of compressed 480x270 JPEG thumbnails.
-- Adds library tabs, folder-based filters, imported-video management, filtered Select all, and easier clip selection/deletion.
-- Streams seekable video from the original file and uses bounded rolling audio chunks for mixed multi-track previews.
-- Adds video click-to-play, double-click fullscreen, hour/day duration formatting, and accelerated five-second keyboard seeking with animated cumulative feedback.
-- Makes clip length and bitrate fields editable as drafts so values can be cleared and replaced normally before validation.
+Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 
@@ -62,12 +13,13 @@ Version `1.1.5` is a high-refresh capture stability update focused on protecting
 - Separate AAC tracks with silent-track omission and short PCM recovery coverage.
 - Shared packet payloads that avoid copying the full replay buffer while saving.
 - MP4 muxing directly from buffered H.264 and AAC packets.
-- Background-priority saves with preallocated files and writes capped at 4 MB.
+- Background-priority saves with preallocated files and writes capped at 512 KB.
 - Resolution-change segmentation and stream-copy stitching when compatible.
 - HDR-to-SDR tonemapping on supported HDR capture paths.
 - Searchable clip library with folder filters, multi-select deletion, renaming, and non-copying imported video directories.
 - Range-buffered playback with rolling mixed-audio chunks, fullscreen controls, and accelerated keyboard seeking.
 - Viewport-aware 480x270 thumbnails with bounded extraction concurrency and compressed RAM caching.
+- Persistent separate-app audio capture that follows supported multi-process application trees and reconnects after restarts.
 - Global save hotkey, tray operation, startup-on-login, notifications, and automatic updates.
 
 ## Architecture
@@ -80,17 +32,17 @@ DXGI Desktop Duplication (WGC fallback)
   -> bounded pipelined BGRA-to-NV12 conversion
   -> NVENC H.264
   -> shared packet payload + cached NAL metadata
-  -> RAM video ring
+  -> rolling replay archive + bounded RAM fallback
 
 Audio
 WASAPI capture
   -> short PCM recovery ring
   -> live routing/mixing coordinator
   -> Media Foundation AAC
-  -> RAM AAC ring
+  -> rolling AAC archive + short PCM recovery window
 
 Save
-select packet ranges
+select packet ranges from the replay archive
   -> metadata-only MP4 plan
   -> bounded background-priority file writer
   -> final MP4
@@ -102,15 +54,17 @@ Startup follows a configure-before-arm sequence. Core capture starts first; opti
 
 The library reads saved clips and imported directories in place. Imported files are not duplicated, and renaming or deleting an imported card changes the original file. Thumbnail previews are generated in RAM and never stored beside the source video.
 
-## Memory Use
+## Storage and Memory Use
 
-The replay buffer intentionally lives in RAM and does not continuously write temporary recordings to disk. Compressed video is the largest component:
+The replay archive continuously writes encoded H.264 and AAC packets to managed rolling segments. A short hot window and packets waiting for persistence remain in RAM; if archive writes fail, Clipture automatically retains affected packets in RAM until persistence recovers.
+
+Approximate archive storage for video is:
 
 ```text
-video RAM bytes ~= bitrate in Mb/s * clip seconds / 8
+video bytes ~= bitrate in Mb/s * clip seconds / 8
 ```
 
-For example, two minutes at 80 Mb/s is approximately 1.2 GB of compressed video before capture surfaces, packet capacity, audio recovery data, and normal process overhead. Memory should level off after the configured replay duration. Saving should not create another full-size copy of the buffered video.
+For example, two minutes at 80 Mb/s is approximately 1.2 GB of compressed video. The rolling archive trims expired segments automatically, and saving streams selected packet ranges without constructing another full-size video copy in RAM.
 
 ## Requirements
 

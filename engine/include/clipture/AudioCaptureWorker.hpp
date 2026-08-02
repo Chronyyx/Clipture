@@ -3,6 +3,7 @@
 #include "clipture/PacketRingBuffer.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -47,6 +48,11 @@ private:
     void signalMicRefresh();
     void requestMicRefresh();
     void runProcessLoopbackCapture(const std::string& processName, std::shared_ptr<std::atomic<bool>> stopRequested);
+    void runProcessLoopbackCaptureSession(
+        const std::string& captureName,
+        const std::string& sourceId,
+        std::uint32_t processId,
+        std::shared_ptr<std::atomic<bool>> stopRequested);
     void startAppCaptureThreadLocked(const std::string& processName);
     void startMicThreadLocked();
     void stopMicThread();

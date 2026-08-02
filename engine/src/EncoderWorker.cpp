@@ -271,6 +271,7 @@ struct NvencOutputTimings {
     int64_t lock100ns = 0;
     int64_t copy100ns = 0;
     int64_t unmap100ns = 0;
+    uint32_t lockBusyRetries = 0;
 };
 
 void updateMaximum(std::atomic<int64_t>& maximum, int64_t value) {
@@ -544,6 +545,10 @@ public:
             height_ = encodeSize.height;
             fps_ = std::max(1, fps);
             bitrateMbps_ = std::max(1, bitrateMbps);
+            preparedSubmissionDepth_ = static_cast<std::size_t>(std::clamp(
+                boundedPreset + 1,
+                2,
+                static_cast<int>(maximumPreparedSubmissionDepth_)));
             initialized_ = true;
             if (asyncEnabled_) startOutputThread();
             initFailureLogged_ = false;
@@ -557,6 +562,8 @@ public:
             } else if (supportsArgbInput_) {
                 status += " Native-size frames use zero-copy BGRA input when the capture texture is available.";
             }
+            status += " Input preparation depth is " +
+                std::to_string(preparedSubmissionDepth_) + ".";
             status += " Single-pass low-resource rate control is active.";
             if (attempt.presetFamily == std::string("legacy")) {
                 status += " Legacy preset fallback is active.";
@@ -1493,10 +1500,19 @@ private:
         timings = {};
         const int64_t lockStarted100ns = monotonicNow100ns();
         NV_ENC_LOCK_BITSTREAM lock {};
-        lock.version = nvencStructVersionForApi(2, apiVersion_, true);
-        lock.outputBitstream = slot.bitstreamBuffer;
-        lock.doNotWait = 0;
-        const NVENCSTATUS nvStatus = funcs_.nvEncLockBitstream(encoder_, &lock);
+        NVENCSTATUS nvStatus = NV_ENC_SUCCESS;
+        do {
+            lock = {};
+            lock.version = nvencStructVersionForApi(2, apiVersion_, true);
+            lock.outputBitstream = slot.bitstreamBuffer;
+            lock.doNotWait = asyncEnabled_ ? 1 : 0;
+            nvStatus = funcs_.nvEncLockBitstream(encoder_, &lock);
+            if (nvStatus != NV_ENC_ERR_LOCK_BUSY || !asyncEnabled_) break;
+
+            ++timings.lockBusyRetries;
+            if (monotonicNow100ns() - lockStarted100ns >= asyncDrainWaitTimeout100ns_) break;
+            SwitchToThread();
+        } while (true);
         timings.lock100ns = monotonicNow100ns() - lockStarted100ns;
         if (nvStatus != NV_ENC_SUCCESS) {
             status = "NvEncLockBitstream failed: " + statusDetails(nvStatus);
@@ -1777,6 +1793,7 @@ private:
         frameIndex_ = 0;
         nextKeyframePts100ns_ = 0;
         nextOutputSlot_ = 0;
+        preparedSubmissionDepth_ = minimumPreparedSubmissionDepth_;
     }
 
     void destroy() {
@@ -1862,9 +1879,13 @@ private:
     static constexpr std::size_t maxRegisteredInputs_ = 32;
     static constexpr std::size_t maximumInputViewCacheSize_ = 16;
     static constexpr std::size_t outputSlotCount_ = 12;
-    static constexpr std::size_t preparedSubmissionDepth_ = 2;
+    static constexpr std::size_t minimumPreparedSubmissionDepth_ = 2;
+    static constexpr std::size_t maximumPreparedSubmissionDepth_ = outputSlotCount_ / 2;
+    std::size_t preparedSubmissionDepth_ = minimumPreparedSubmissionDepth_;
     static constexpr bool useDedicatedInputSurfaces_ = true;
     static constexpr DWORD asyncDrainWaitTimeoutMs_ = 1000;
+    static constexpr int64_t asyncDrainWaitTimeout100ns_ =
+        static_cast<int64_t>(asyncDrainWaitTimeoutMs_) * 10'000LL;
     static constexpr auto outputSlotAvailabilityWait_ = std::chrono::milliseconds(12);
 };
 
