@@ -3,6 +3,7 @@ import type { ClipSettings, CliptureApi } from "../shared/types";
 
 const api: CliptureApi = {
   getDiagnostics: () => ipcRenderer.invoke("engine:getDiagnostics"),
+  exportDiagnostics: () => ipcRenderer.invoke("engine:exportDiagnostics"),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (settings: ClipSettings) => ipcRenderer.invoke("settings:save", settings),
   saveClip: (durationSeconds: number) => ipcRenderer.invoke("engine:saveClip", durationSeconds),

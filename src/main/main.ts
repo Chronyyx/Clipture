@@ -10,7 +10,7 @@ import { format } from "node:util";
 import { basename, dirname, extname, join, parse, normalize } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
-import { constants as osConstants, setPriority } from "node:os";
+import { constants as osConstants, cpus, release as osRelease, setPriority, totalmem, version as osVersion } from "node:os";
 import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, SaveClipResult, ClipSoundOption, UpdateState } from "../shared/types";
 
 type CapturePressure = EngineDiagnostics["capturePressure"];
@@ -289,6 +289,7 @@ class EngineClient {
     schedulerDroppedFrames: 0,
     schedulerRepeatedFrames: 0,
     encoderQueueDrops: 0,
+    encoderRepeatCoalesced: 0,
     nvencSurfaceDrops: 0,
     nvencInputDrops: 0,
     encoderBackpressureDrops: 0,
@@ -2908,7 +2909,53 @@ app.on("before-quit", () => {
   engine.stop();
 });
 
+async function exportDiagnostics(): Promise<string | undefined> {
+  const exportedAt = new Date();
+  const fileTimestamp = exportedAt.toISOString().replace(/[:.]/g, "-");
+  const options = {
+    title: "Export diagnostics",
+    buttonLabel: "Export",
+    defaultPath: join(app.getPath("downloads"), `Clipture diagnostics ${fileTimestamp}.json`),
+    filters: [{ name: "JSON report", extensions: ["json"] }]
+  };
+  const result = mainWindow
+    ? await dialog.showSaveDialog(mainWindow, options)
+    : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) return undefined;
+
+  const processors = cpus();
+  const diagnostics = await engine.diagnostics();
+  const report = {
+    reportVersion: 1,
+    exportedAt: exportedAt.toISOString(),
+    application: {
+      name: app.getName(),
+      version: app.getVersion(),
+      packaged: app.isPackaged
+    },
+    operatingSystem: {
+      platform: process.platform,
+      release: osRelease(),
+      version: osVersion(),
+      architecture: process.arch,
+      totalMemoryBytes: totalmem(),
+      processor: processors[0]?.model ?? "Unknown",
+      logicalProcessors: processors.length
+    },
+    runtime: {
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+      v8: process.versions.v8
+    },
+    diagnostics
+  };
+  writeFileSync(result.filePath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  return result.filePath;
+}
+
 ipcMain.handle("engine:getDiagnostics", () => engine.diagnostics());
+ipcMain.handle("engine:exportDiagnostics", () => exportDiagnostics());
 ipcMain.handle("engine:saveClip", async (_event, durationSeconds: number) => {
   return await saveClipAndRecord(durationSeconds);
 });

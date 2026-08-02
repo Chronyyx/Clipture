@@ -56,6 +56,7 @@ public:
     int schedulerDroppedFrames() const;
     int schedulerRepeatedFrames() const;
     int encoderQueueDrops() const;
+    int encoderRepeatCoalesced() const;
     int nvencSurfaceDrops() const;
     int nvencInputDrops() const;
     int encoderBackpressureDrops() const;
@@ -117,6 +118,7 @@ private:
     std::atomic<int> schedulerDroppedFrames_ = 0;
     std::atomic<int> schedulerRepeatedFrames_ = 0;
     std::atomic<int> encoderQueueDrops_ = 0;
+    std::atomic<int> encoderRepeatCoalesced_ = 0;
     std::atomic<int> nvencSurfaceDrops_ = 0;
     std::atomic<int> nvencInputDrops_ = 0;
     std::atomic<int> encoderBackpressureDrops_ = 0;
@@ -162,7 +164,6 @@ private:
     std::atomic<int> freshFrameVersion_ = 0;
     std::atomic<int> discardPacketsAtFreshFrameVersion_ = 0;
     static constexpr std::size_t maximumPendingJobs_ = 8;
-    static constexpr std::size_t pendingFreshFrameReserve_ = 2;
     std::string status_ = "Encoder worker has not started.";
 };
 

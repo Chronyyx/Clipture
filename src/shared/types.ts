@@ -51,6 +51,7 @@ export interface EngineDiagnostics {
   schedulerDroppedFrames: number;
   schedulerRepeatedFrames: number;
   encoderQueueDrops: number;
+  encoderRepeatCoalesced: number;
   nvencSurfaceDrops: number;
   nvencInputDrops: number;
   encoderBackpressureDrops: number;
@@ -218,6 +219,7 @@ export interface ActiveProcess {
 
 export interface CliptureApi {
   getDiagnostics(): Promise<EngineDiagnostics>;
+  exportDiagnostics(): Promise<string | undefined>;
   getSettings(): Promise<ClipSettings>;
   saveSettings(settings: ClipSettings): Promise<ClipSettings>;
   saveClip(durationSeconds: number): Promise<SaveClipResult>;

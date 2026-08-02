@@ -6,6 +6,7 @@
 #include "clipture/CaptureBackendPolicy.hpp"
 #include "clipture/DesktopDuplicationHelpers.hpp"
 #include "clipture/DesktopPointerShape.hpp"
+#include "clipture/EncoderQueuePolicy.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
 #include "clipture/LatencyWindow.hpp"
 #include "clipture/FixedRateFrameSampler.hpp"
@@ -350,6 +351,24 @@ bool testVideoTimelineCatchesUpWithoutUnboundedBursts() {
                    "final video duration should use one frame as its fallback");
 }
 
+bool testEncoderQueueProtectsFreshFrames() {
+    using clipture::EncoderQueueAdmission;
+    if (!require(
+            clipture::encoderQueueAdmission(5, 8, true, false) == EncoderQueueAdmission::Enqueue,
+            "a repeat may use spare capacity while fresh-frame reserve remains")) return false;
+    if (!require(
+            clipture::encoderQueueAdmission(6, 8, true, false) == EncoderQueueAdmission::CoalesceRepeat &&
+            clipture::encoderQueueAdmission(1, 8, true, true) == EncoderQueueAdmission::CoalesceRepeat,
+            "repeats must coalesce at the fresh reserve or behind the same source frame")) return false;
+    if (!require(
+            clipture::encoderQueueAdmission(7, 8, false, false) == EncoderQueueAdmission::Enqueue &&
+            clipture::encoderQueueAdmission(8, 8, false, false) == EncoderQueueAdmission::WaitForRoom,
+            "fresh frames should use the whole queue before bounded backpressure")) return false;
+    return require(
+        clipture::encoderQueueWaitBudget() == std::chrono::milliseconds(1),
+        "a fresh desktop frame should retain the low-latency queue wait");
+}
+
 bool testAudioTimelineNeverRewinds() {
     bool anchored = false;
     int64_t nextPts100ns = 10'000'000;
@@ -626,6 +645,7 @@ int main() {
     if (!testCaptureBackendPolicyAndDxgiHelpers()) return 1;
     if (!testDesktopPointerDecodingAndClipping()) return 1;
     if (!testVideoTimelineCatchesUpWithoutUnboundedBursts()) return 1;
+    if (!testEncoderQueueProtectsFreshFrames()) return 1;
     if (!testAudioTimelineNeverRewinds()) return 1;
     if (!testFrameQueueDropAccounting()) return 1;
     if (!testImmutableAudioRouting()) return 1;

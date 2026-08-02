@@ -58,6 +58,7 @@ const defaultDiagnostics: EngineDiagnostics = {
     schedulerDroppedFrames: 0,
     schedulerRepeatedFrames: 0,
     encoderQueueDrops: 0,
+    encoderRepeatCoalesced: 0,
     nvencSurfaceDrops: 0,
     nvencInputDrops: 0,
     encoderBackpressureDrops: 0,
@@ -405,6 +406,7 @@ export function App() {
   const [clipSounds, setClipSounds] = useState<ClipSoundOption[]>([]);
   const [updateState, setUpdateState] = useState<UpdateState>(defaultUpdateState);
   const [isSavingClip, setIsSavingClip] = useState(false);
+  const [isExportingDiagnostics, setIsExportingDiagnostics] = useState(false);
   const clipSoundUrlsRef = useRef<Record<string, string>>({});
 
   async function refresh() {
@@ -465,6 +467,19 @@ export function App() {
       setNotice(error instanceof Error ? error.message : "Could not save clip.");
     } finally {
       setIsSavingClip(false);
+    }
+  }
+
+  async function exportDiagnostics() {
+    if (isExportingDiagnostics) return;
+    setIsExportingDiagnostics(true);
+    try {
+      const filePath = await window.clipture.exportDiagnostics();
+      if (filePath) setNotice(`Diagnostics exported to ${filePath}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not export diagnostics.");
+    } finally {
+      setIsExportingDiagnostics(false);
     }
   }
 
@@ -539,9 +554,20 @@ export function App() {
               <h1>{activeTab === "settings" ? "Settings" : "Diagnostics"}</h1>
               {activeTab === "diagnostics" && <p>{diagnostics.status}</p>}
             </div>
-            <button className="primary" onClick={saveClip} disabled={isSavingClip}>
-              <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${settings?.clipLengthSeconds ?? 30}s`}
-            </button>
+            <div className="topbar-actions">
+              <button className="primary" onClick={saveClip} disabled={isSavingClip}>
+                <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${settings?.clipLengthSeconds ?? 30}s`}
+              </button>
+              {activeTab === "diagnostics" && (
+                <button
+                  className="secondary-button"
+                  onClick={() => void exportDiagnostics()}
+                  disabled={isExportingDiagnostics}
+                >
+                  <Download size={18} /> {isExportingDiagnostics ? "Exporting..." : "Export diagnostics"}
+                </button>
+              )}
+            </div>
           </header>
         )}
 
@@ -3062,6 +3088,7 @@ function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
     ["Scheduler skips", String(diagnostics.schedulerDroppedFrames)],
     ["Scheduler repeats", String(diagnostics.schedulerRepeatedFrames)],
     ["Encoder queue drops", String(diagnostics.encoderQueueDrops)],
+    ["Encoder repeats coalesced", String(diagnostics.encoderRepeatCoalesced)],
     ["NVENC surface drops", String(diagnostics.nvencSurfaceDrops)],
     ["NVENC input drops", String(diagnostics.nvencInputDrops)],
     ["Encoder backpressure", String(diagnostics.encoderBackpressureDrops)],

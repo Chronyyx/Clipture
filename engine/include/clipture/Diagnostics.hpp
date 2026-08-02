@@ -65,6 +65,7 @@ struct Diagnostics {
     int schedulerDroppedFrames = 0;
     int schedulerRepeatedFrames = 0;
     int encoderQueueDrops = 0;
+    int encoderRepeatCoalesced = 0;
     int nvencSurfaceDrops = 0;
     int nvencInputDrops = 0;
     int encoderBackpressureDrops = 0;

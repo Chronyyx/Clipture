@@ -245,6 +245,33 @@ select {
   -webkit-app-region: no-drag;
 }
 
+.topbar-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex: 0 0 auto;
+  gap: 10px;
+  -webkit-app-region: no-drag;
+}
+
+.topbar-actions button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.topbar-actions .secondary-button {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.topbar-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 h1,
 h2,
 p {

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <iomanip>
+#include <iostream>
 #include <limits>
 #include <sstream>
 
@@ -273,6 +274,22 @@ HRESULT createD3dDeviceForOutput(
 
     Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
     if (SUCCEEDED(context.As(&multithread)) && multithread) multithread->SetMultithreadProtected(TRUE);
+
+    Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+    if (SUCCEEDED(device.As(&dxgiDevice)) && dxgiDevice) {
+        constexpr INT requestedGpuPriority = 1;
+        INT previousGpuPriority = 0;
+        const HRESULT getBeforeHr = dxgiDevice->GetGPUThreadPriority(&previousGpuPriority);
+        const HRESULT setHr = dxgiDevice->SetGPUThreadPriority(requestedGpuPriority);
+        INT activeGpuPriority = previousGpuPriority;
+        const HRESULT getAfterHr = dxgiDevice->GetGPUThreadPriority(&activeGpuPriority);
+        std::cerr << "[capture] D3D11 GPU priority requested=" << requestedGpuPriority
+                  << " previous=" << (SUCCEEDED(getBeforeHr) ? std::to_string(previousGpuPriority) : "unknown")
+                  << " active=" << (SUCCEEDED(getAfterHr) ? std::to_string(activeGpuPriority) : "unknown")
+                  << " setHr=" << hresultHex(setHr) << ".\n";
+    } else {
+        std::cerr << "[capture] D3D11 GPU priority unavailable: IDXGIDevice query failed.\n";
+    }
     return S_OK;
 }
 

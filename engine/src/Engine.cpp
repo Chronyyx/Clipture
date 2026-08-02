@@ -2047,6 +2047,7 @@ void Engine::refreshPacketCounts() {
             static_cast<double>(diagnostics_.encoderAcceptedFrames)
         : 0.0;
     diagnostics_.encoderQueueDrops = encoderWorker_ ? encoderWorker_->encoderQueueDrops() : 0;
+    diagnostics_.encoderRepeatCoalesced = encoderWorker_ ? encoderWorker_->encoderRepeatCoalesced() : 0;
     diagnostics_.nvencSurfaceDrops = encoderWorker_ ? encoderWorker_->nvencSurfaceDrops() : 0;
     diagnostics_.nvencInputDrops = encoderWorker_ ? encoderWorker_->nvencInputDrops() : 0;
     diagnostics_.encoderBackpressureDrops = encoderWorker_ ? encoderWorker_->encoderBackpressureDrops() : 0;
