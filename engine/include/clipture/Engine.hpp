@@ -7,6 +7,7 @@
 #include "clipture/EncoderWorker.hpp"
 #include "clipture/FrameQueue.hpp"
 #include "clipture/PacketRingBuffer.hpp"
+#include "clipture/ReplaySegmentStore.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -83,6 +84,8 @@ private:
     PacketRingBuffer videoPackets_;
     PacketRingBuffer audioPackets_;
     PacketRingBuffer aacAudioPackets_;
+    std::unique_ptr<ReplaySegmentStore> videoReplayStore_;
+    std::unique_ptr<ReplaySegmentStore> aacReplayStore_;
     std::unique_ptr<AudioReplayCoordinator> audioReplayCoordinator_;
     std::unique_ptr<CaptureSession> captureSession_;
     std::unique_ptr<EncoderWorker> encoderWorker_;

@@ -10,6 +10,8 @@
 
 namespace clipture {
 
+class ReplaySegmentStore;
+
 struct AudioReplayStats {
     std::size_t queuedPackets = 0;
     std::size_t queueHighWatermark = 0;
@@ -20,7 +22,10 @@ struct AudioReplayStats {
 
 class AudioReplayCoordinator {
 public:
-    AudioReplayCoordinator(PacketRingBuffer& rawPcmPackets, PacketRingBuffer& aacPackets);
+    AudioReplayCoordinator(
+        PacketRingBuffer& rawPcmPackets,
+        PacketRingBuffer& aacPackets,
+        ReplaySegmentStore* replayStore = nullptr);
     ~AudioReplayCoordinator();
 
     AudioReplayCoordinator(const AudioReplayCoordinator&) = delete;

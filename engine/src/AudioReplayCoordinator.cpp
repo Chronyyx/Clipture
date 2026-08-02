@@ -2,6 +2,7 @@
 
 #include "clipture/AacEncoderSession.hpp"
 #include "clipture/AudioPacketRouting.hpp"
+#include "clipture/ReplaySegmentStore.hpp"
 
 #include <Windows.h>
 
@@ -50,6 +51,7 @@ struct AudioReplayCoordinator::Impl {
 
     PacketRingBuffer& rawPackets;
     PacketRingBuffer& aacPackets;
+    ReplaySegmentStore* replayStore = nullptr;
     std::atomic<std::shared_ptr<const std::map<std::string, std::string>>> routing;
     std::atomic<bool> running { false };
     std::thread worker;
@@ -69,8 +71,8 @@ struct AudioReplayCoordinator::Impl {
     std::chrono::steady_clock::time_point lastRepairLog {};
     uint64_t suppressedRepairLogs = 0;
 
-    Impl(PacketRingBuffer& raw, PacketRingBuffer& aac)
-        : rawPackets(raw), aacPackets(aac) {
+    Impl(PacketRingBuffer& raw, PacketRingBuffer& aac, ReplaySegmentStore* replay)
+        : rawPackets(raw), aacPackets(aac), replayStore(replay) {
         routing.store(std::make_shared<const std::map<std::string, std::string>>());
     }
 
@@ -104,6 +106,7 @@ struct AudioReplayCoordinator::Impl {
             packet.audible = true;
             packet.payload = aacPackets.acquirePayload(frame.payload.size());
             std::memcpy(mutablePayload(packet).data(), frame.payload.data(), frame.payload.size());
+            if (replayStore) replayStore->push(packet);
             aacPackets.push(std::move(packet));
         }
         frames.clear();
@@ -396,8 +399,11 @@ struct AudioReplayCoordinator::Impl {
     }
 };
 
-AudioReplayCoordinator::AudioReplayCoordinator(PacketRingBuffer& rawPcmPackets, PacketRingBuffer& aacPackets)
-    : impl_(std::make_unique<Impl>(rawPcmPackets, aacPackets)) {}
+AudioReplayCoordinator::AudioReplayCoordinator(
+    PacketRingBuffer& rawPcmPackets,
+    PacketRingBuffer& aacPackets,
+    ReplaySegmentStore* replayStore)
+    : impl_(std::make_unique<Impl>(rawPcmPackets, aacPackets, replayStore)) {}
 
 AudioReplayCoordinator::~AudioReplayCoordinator() {
     stop();

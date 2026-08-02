@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -54,6 +55,16 @@ struct H264PacketLayout {
 using PacketPayload = std::vector<std::byte>;
 using PacketPayloadPtr = std::shared_ptr<PacketPayload>;
 
+class PacketPayloadReader {
+public:
+    virtual ~PacketPayloadReader() = default;
+
+    virtual std::size_t size() const noexcept = 0;
+    virtual bool read(std::size_t offset, std::span<std::byte> destination) const = 0;
+};
+
+using PacketPayloadReaderPtr = std::shared_ptr<const PacketPayloadReader>;
+
 struct EncodedPacket {
     PacketKind kind = PacketKind::Video;
     PacketCodec codec = PacketCodec::Unknown;
@@ -78,6 +89,7 @@ struct EncodedPacket {
     uint64_t sourceFrameSequence = 0;
     H264PacketLayout h264;
     PacketPayloadPtr payload;
+    PacketPayloadReaderPtr payloadReader;
 };
 
 template <typename Visitor>
@@ -90,12 +102,13 @@ void forEachH264Nal(const H264PacketLayout& layout, Visitor&& visitor) {
     }
 }
 
-inline bool payloadEmpty(const EncodedPacket& packet) {
-    return !packet.payload || packet.payload->empty();
+inline std::size_t payloadSize(const EncodedPacket& packet) {
+    if (packet.payload) return packet.payload->size();
+    return packet.payloadReader ? packet.payloadReader->size() : 0;
 }
 
-inline std::size_t payloadSize(const EncodedPacket& packet) {
-    return packet.payload ? packet.payload->size() : 0;
+inline bool payloadEmpty(const EncodedPacket& packet) {
+    return payloadSize(packet) == 0;
 }
 
 inline std::span<const std::byte> payloadBytes(const EncodedPacket& packet) {
@@ -105,6 +118,32 @@ inline std::span<const std::byte> payloadBytes(const EncodedPacket& packet) {
 
 inline PacketPayload& mutablePayload(EncodedPacket& packet) {
     return *packet.payload;
+}
+
+inline bool readPayload(
+    const EncodedPacket& packet,
+    std::size_t offset,
+    std::span<std::byte> destination) {
+    const std::size_t size = payloadSize(packet);
+    if (offset > size || destination.size() > size - offset) return false;
+    if (destination.empty()) return true;
+
+    if (packet.payload) {
+        std::memcpy(destination.data(), packet.payload->data() + offset, destination.size());
+        return true;
+    }
+    return packet.payloadReader && packet.payloadReader->read(offset, destination);
+}
+
+inline bool copyPayloadRange(
+    const EncodedPacket& packet,
+    std::size_t offset,
+    std::size_t size,
+    std::vector<std::byte>& destination) {
+    destination.resize(size);
+    if (readPayload(packet, offset, destination)) return true;
+    destination.clear();
+    return false;
 }
 
 class PacketRingBuffer {

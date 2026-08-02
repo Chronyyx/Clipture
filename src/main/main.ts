@@ -13,6 +13,18 @@ import { createHash } from "node:crypto";
 import { constants as osConstants, cpus, release as osRelease, setPriority, totalmem, version as osVersion } from "node:os";
 import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, SaveClipResult, ClipSoundOption, UpdateState } from "../shared/types";
 
+let consoleStdoutAvailable = true;
+let consoleStderrAvailable = true;
+
+// Dev launchers and terminal hosts can close inherited pipes before Electron exits.
+// Console output is diagnostic only and must never take down the main process.
+process.stdout?.on("error", () => {
+  consoleStdoutAvailable = false;
+});
+process.stderr?.on("error", () => {
+  consoleStderrAvailable = false;
+});
+
 type CapturePressure = EngineDiagnostics["capturePressure"];
 
 let latestCapturePressure: CapturePressure = "healthy";
@@ -124,7 +136,9 @@ function appendSaveTimingLog(line: string): void {
 }
 
 function logSaveTimingLine(line: string): void {
-  console.log(line);
+  if (consoleStdoutAvailable && process.stdout?.writable && !process.stdout.destroyed) {
+    console.log(line);
+  }
   appendSaveTimingLog(line);
 }
 
@@ -132,7 +146,9 @@ let engineStderrTimingRemainder = "";
 
 function logEngineStderr(chunk: Buffer): void {
   const text = chunk.toString();
-  console.error(`[engine] ${text}`);
+  if (consoleStderrAvailable && process.stderr?.writable && !process.stderr.destroyed) {
+    console.error(`[engine] ${text}`);
+  }
   const lines = `${engineStderrTimingRemainder}${text}`.split(/\r?\n/);
   engineStderrTimingRemainder = lines.pop() ?? "";
   for (const line of lines) {
@@ -334,6 +350,16 @@ class EngineClient {
     muxReady: false,
     bufferedVideoPackets: 0,
     bufferedAudioPackets: 0,
+    videoReplayArchiveHealthy: false,
+    audioReplayArchiveHealthy: false,
+    replayArchiveDiskBytes: 0,
+    replayArchiveRamFallbackBytes: 0,
+    replayArchiveQueuedBytes: 0,
+    replayArchivePersistedPackets: 0,
+    replayArchiveWriteFailures: 0,
+    replayArchiveQueuedPackets: 0,
+    replayArchiveSegments: 0,
+    replayArchiveMaximumWriteBytes: 0,
     capturedFrames: 0,
     queuedFrames: 0,
     encoderAcceptedFrames: 0,

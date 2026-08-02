@@ -12,15 +12,20 @@
 #include "clipture/FixedRateFrameSampler.hpp"
 #include "clipture/FrameQueue.hpp"
 #include "clipture/MediaClock.hpp"
+#include "clipture/Mp4Muxer.hpp"
 #include "clipture/ProcessSnapshot.hpp"
+#include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/VideoTimeline.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <array>
 #include <algorithm>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <map>
 #include <thread>
@@ -633,6 +638,198 @@ bool testConcurrentPublishDoesNotTriggerRepair() {
     return require(stats.encoderRestarts == 0, "ordinary publisher contention must not trigger AAC repair");
 }
 
+std::filesystem::path uniqueReplayTestRoot(const char* suffix) {
+    const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+    return std::filesystem::temp_directory_path() /
+        (std::string("clipture-replay-") + suffix + "-" + std::to_string(ticks));
+}
+
+bool testReplaySegmentStorePersistsAndRetainsSnapshots() {
+    const auto root = uniqueReplayTestRoot("persist");
+    clipture::ReplaySegmentStoreOptions options;
+    options.streamName = "video-test";
+    options.rootDirectory = root;
+    options.retention100ns = 200;
+    options.targetSegmentDuration100ns = 100;
+    options.targetSegmentBytes = 32;
+    options.maximumWriteBytes = 7;
+    options.deleteOnClose = true;
+
+    clipture::PacketRingBuffer pool;
+    clipture::ReplaySegmentStore store(options);
+    store.start();
+    auto makePacket = [&](int64_t pts100ns, uint8_t seed) {
+        clipture::EncodedPacket packet;
+        packet.kind = clipture::PacketKind::Video;
+        packet.codec = clipture::PacketCodec::H264AnnexB;
+        packet.pts100ns = pts100ns;
+        packet.duration100ns = 100;
+        packet.keyframe = true;
+        packet.payload = pool.acquirePayload(37);
+        for (std::size_t index = 0; index < packet.payload->size(); ++index) {
+            (*packet.payload)[index] = static_cast<std::byte>(seed + static_cast<uint8_t>(index));
+        }
+        return packet;
+    };
+
+    store.push(makePacket(1'000, 1));
+    store.push(makePacket(1'100, 2));
+    store.push(makePacket(1'300, 3));
+    if (!require(store.waitUntilIdle(std::chrono::seconds(3)), "replay archive should drain promptly")) {
+        store.stop();
+        return false;
+    }
+
+    auto snapshot = store.snapshot();
+    const auto stats = store.stats();
+    if (!require(snapshot.size() == 2 && snapshot.front().pts100ns == 1'100,
+                 "replay retention should remove packets older than the configured window")) {
+        store.stop();
+        return false;
+    }
+    if (!require(
+            !snapshot.front().payload && snapshot.front().payloadReader && stats.ramFallbackBytes == 0,
+            "persisted archive entries should release their private RAM payload reference")) {
+        store.stop();
+        return false;
+    }
+    if (!require(stats.persistedPackets >= 2 && stats.maximumWriteBytes <= 7,
+                 "archive writes should persist every retained packet within the hard request cap")) {
+        store.stop();
+        return false;
+    }
+
+    std::vector<std::byte> restored;
+    if (!require(
+            clipture::copyPayloadRange(snapshot.front(), 0, clipture::payloadSize(snapshot.front()), restored),
+            "disk-backed packet payload should remain readable")) {
+        store.stop();
+        return false;
+    }
+    if (!require(restored.size() == 37 && restored.front() == std::byte { 2 } && restored.back() == std::byte { 38 },
+                 "disk-backed payload bytes should round-trip exactly")) {
+        store.stop();
+        return false;
+    }
+
+    store.stop();
+    restored.clear();
+    if (!require(
+            clipture::copyPayloadRange(snapshot.back(), 0, clipture::payloadSize(snapshot.back()), restored),
+            "an active save snapshot should keep archived segments alive after store shutdown")) {
+        return false;
+    }
+    snapshot.clear();
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    return true;
+}
+
+bool testReplaySegmentStoreFallsBackToRam() {
+    const auto root = uniqueReplayTestRoot("fallback");
+    std::error_code ignored;
+    std::filesystem::create_directories(root.parent_path(), ignored);
+    {
+        std::ofstream blocker(root, std::ios::binary);
+        blocker << "not a directory";
+    }
+
+    clipture::ReplaySegmentStoreOptions options;
+    options.streamName = "failure-test";
+    options.rootDirectory = root;
+    options.maximumWriteBytes = 8;
+    clipture::PacketRingBuffer pool;
+    clipture::ReplaySegmentStore store(options);
+    store.start();
+
+    clipture::EncodedPacket packet;
+    packet.kind = clipture::PacketKind::Video;
+    packet.pts100ns = 1'000;
+    packet.payload = pool.acquirePayload(16);
+    std::fill(packet.payload->begin(), packet.payload->end(), std::byte { 0x5A });
+    store.push(packet);
+
+    for (int attempt = 0; attempt < 30 && store.stats().writeFailures == 0; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    const auto stats = store.stats();
+    const auto snapshot = store.snapshot();
+    const bool preserved = require(
+        stats.writeFailures > 0 && stats.ramFallbackBytes == 16 &&
+            snapshot.size() == 1 && snapshot.front().payload && !snapshot.front().payloadReader,
+        "an unavailable archive path should preserve the packet in RAM without dropping it");
+    store.stop();
+    std::filesystem::remove(root, ignored);
+    return preserved;
+}
+
+bool testMp4MuxerStreamsDiskBackedVideo() {
+    const auto root = uniqueReplayTestRoot("mux");
+    clipture::ReplaySegmentStoreOptions options;
+    options.streamName = "mux-video";
+    options.rootDirectory = root / "archive";
+    options.maximumWriteBytes = 5;
+    options.targetSegmentBytes = 64;
+    options.targetSegmentDuration100ns = 10'000'000LL;
+
+    auto packet = packetFromBytes({
+        0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28,
+        0, 0, 0, 1, 0x68, 0xEE, 0x3C, 0x80,
+        0, 0, 0, 1, 0x65, 0xAA, 0xBB, 0xCC
+    });
+    packet.pts100ns = 100'000'000LL;
+    packet.dts100ns = packet.pts100ns;
+    packet.duration100ns = 166'667LL;
+    packet.encodedWidth = 1920;
+    packet.encodedHeight = 1080;
+    if (!require(clipture::analyzeH264Packet(packet), "mux test packet should have valid Annex B layout")) {
+        return false;
+    }
+
+    clipture::ReplaySegmentStore store(options);
+    store.start();
+    store.push(packet);
+    if (!require(store.waitUntilIdle(std::chrono::seconds(3)), "mux archive should persist its video packet")) {
+        store.stop();
+        return false;
+    }
+    const auto archived = store.snapshot();
+    if (!require(archived.size() == 1 && !archived.front().payload && archived.front().payloadReader,
+                 "mux integration should consume a genuinely disk-backed packet")) {
+        store.stop();
+        return false;
+    }
+
+    clipture::MuxWritePacing pacing;
+    pacing.presentationStartPts100ns = packet.pts100ns;
+    pacing.presentationEndPts100ns = packet.pts100ns + packet.duration100ns;
+    const auto mux = clipture::muxH264ToMp4(
+        archived,
+        (root / "output").string(),
+        1920,
+        1080,
+        60,
+        50,
+        std::move(pacing));
+    store.stop();
+    if (!require(mux.ok, "MP4 muxer should stream H.264 payload ranges from the replay archive")) {
+        std::cerr << "Mux error: " << mux.message << '\n';
+        return false;
+    }
+
+    std::ifstream input(mux.filePath, std::ios::binary);
+    std::vector<char> bytes(
+        (std::istreambuf_iterator<char>(input)),
+        std::istreambuf_iterator<char>());
+    const std::array<char, 4> editType { 'e', 'l', 's', 't' };
+    const bool hasEditList = std::search(bytes.begin(), bytes.end(), editType.begin(), editType.end()) != bytes.end();
+    const bool valid = require(bytes.size() > 100 && hasEditList,
+                               "disk-backed mux output should contain MP4 metadata and an exact-range edit list");
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    return valid;
+}
+
 }  // namespace
 
 int main() {
@@ -653,6 +850,9 @@ int main() {
     if (!testLiveAacCoordinator()) return 1;
     if (!testLiveAacTimelineStaysContinuousThroughSilence()) return 1;
     if (!testConcurrentPublishDoesNotTriggerRepair()) return 1;
+    if (!testReplaySegmentStorePersistsAndRetainsSnapshots()) return 1;
+    if (!testReplaySegmentStoreFallsBackToRam()) return 1;
+    if (!testMp4MuxerStreamsDiskBackedVideo()) return 1;
     std::cout << "Packet architecture tests passed.\n";
     return 0;
 }

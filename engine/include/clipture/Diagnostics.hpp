@@ -110,6 +110,16 @@ struct Diagnostics {
     bool muxReady = false;
     int bufferedVideoPackets = 0;
     int bufferedAudioPackets = 0;
+    bool videoReplayArchiveHealthy = false;
+    bool audioReplayArchiveHealthy = false;
+    uint64_t replayArchiveDiskBytes = 0;
+    uint64_t replayArchiveRamFallbackBytes = 0;
+    uint64_t replayArchiveQueuedBytes = 0;
+    uint64_t replayArchivePersistedPackets = 0;
+    uint64_t replayArchiveWriteFailures = 0;
+    int replayArchiveQueuedPackets = 0;
+    int replayArchiveSegments = 0;
+    int replayArchiveMaximumWriteBytes = 0;
     int capturedFrames = 0;
     int queuedFrames = 0;
     int encoderAcceptedFrames = 0;

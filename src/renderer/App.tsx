@@ -103,6 +103,16 @@ const defaultDiagnostics: EngineDiagnostics = {
     muxReady: false,
     bufferedVideoPackets: 0,
     bufferedAudioPackets: 0,
+    videoReplayArchiveHealthy: false,
+    audioReplayArchiveHealthy: false,
+    replayArchiveDiskBytes: 0,
+    replayArchiveRamFallbackBytes: 0,
+    replayArchiveQueuedBytes: 0,
+    replayArchivePersistedPackets: 0,
+    replayArchiveWriteFailures: 0,
+    replayArchiveQueuedPackets: 0,
+    replayArchiveSegments: 0,
+    replayArchiveMaximumWriteBytes: 0,
     capturedFrames: 0,
     queuedFrames: 0,
     encoderAcceptedFrames: 0,
@@ -3028,6 +3038,7 @@ function SettingsView({
 }
 
 function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
+  const replayMiB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
   const entries = [
     ["Capture API", diagnostics.captureApi],
     ["Requested capture backend", diagnostics.requestedCaptureBackend],
@@ -3079,6 +3090,14 @@ function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
     ["Audio captured", String(diagnostics.audioCapturedPackets)],
     ["Video packets", String(diagnostics.bufferedVideoPackets)],
     ["Audio packets", String(diagnostics.bufferedAudioPackets)],
+    ["Replay archive video / audio", `${diagnostics.videoReplayArchiveHealthy ? "Healthy" : "RAM fallback"} / ${diagnostics.audioReplayArchiveHealthy ? "Healthy" : "RAM fallback"}`],
+    ["Replay archive disk", replayMiB(diagnostics.replayArchiveDiskBytes)],
+    ["Replay archive RAM fallback", replayMiB(diagnostics.replayArchiveRamFallbackBytes)],
+    ["Replay archive queued", `${diagnostics.replayArchiveQueuedPackets} packets / ${replayMiB(diagnostics.replayArchiveQueuedBytes)}`],
+    ["Replay archive segments", String(diagnostics.replayArchiveSegments)],
+    ["Replay archive persisted", String(diagnostics.replayArchivePersistedPackets)],
+    ["Replay archive write failures", String(diagnostics.replayArchiveWriteFailures)],
+    ["Replay archive max write", replayMiB(diagnostics.replayArchiveMaximumWriteBytes)],
     ["Dropped frames", String(diagnostics.droppedFrames)],
     ["Capture overflow", String(diagnostics.captureOverflowDrops)],
     ["Source frames superseded", String(diagnostics.sourceFramesSuperseded)],

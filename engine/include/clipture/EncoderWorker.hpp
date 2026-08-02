@@ -14,6 +14,8 @@
 
 namespace clipture {
 
+class ReplaySegmentStore;
+
 struct EncoderRecentPerformance {
     double inputFps = 0.0;
     double outputFps = 0.0;
@@ -28,7 +30,10 @@ struct EncoderRecentPerformance {
 
 class EncoderWorker {
 public:
-    EncoderWorker(FrameQueue& frames, PacketRingBuffer& packets);
+    EncoderWorker(
+        FrameQueue& frames,
+        PacketRingBuffer& packets,
+        ReplaySegmentStore* replayStore = nullptr);
     ~EncoderWorker();
 
     EncoderWorker(const EncoderWorker&) = delete;
@@ -103,6 +108,7 @@ private:
 
     FrameQueue& frames_;
     PacketRingBuffer& packets_;
+    ReplaySegmentStore* replayStore_ = nullptr;
     std::thread thread_;
     std::thread encodeThread_;
     mutable std::mutex submitMutex_;

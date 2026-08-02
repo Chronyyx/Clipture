@@ -96,6 +96,16 @@ export interface EngineDiagnostics {
   muxReady: boolean;
   bufferedVideoPackets: number;
   bufferedAudioPackets: number;
+  videoReplayArchiveHealthy: boolean;
+  audioReplayArchiveHealthy: boolean;
+  replayArchiveDiskBytes: number;
+  replayArchiveRamFallbackBytes: number;
+  replayArchiveQueuedBytes: number;
+  replayArchivePersistedPackets: number;
+  replayArchiveWriteFailures: number;
+  replayArchiveQueuedPackets: number;
+  replayArchiveSegments: number;
+  replayArchiveMaximumWriteBytes: number;
   capturedFrames: number;
   queuedFrames: number;
   encoderAcceptedFrames: number;

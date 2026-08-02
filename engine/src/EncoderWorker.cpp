@@ -1,4 +1,5 @@
 #include "clipture/EncoderWorker.hpp"
+#include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/EncoderQueuePolicy.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
 #include "clipture/MediaClock.hpp"
@@ -1869,8 +1870,11 @@ private:
 
 }  // namespace
 
-EncoderWorker::EncoderWorker(FrameQueue& frames, PacketRingBuffer& packets)
-    : frames_(frames), packets_(packets) {}
+EncoderWorker::EncoderWorker(
+    FrameQueue& frames,
+    PacketRingBuffer& packets,
+    ReplaySegmentStore* replayStore)
+    : frames_(frames), packets_(packets), replayStore_(replayStore) {}
 
 EncoderWorker::~EncoderWorker() {
     stop();
@@ -2325,6 +2329,7 @@ void EncoderWorker::encodeLoop() {
     uint64_t activeCaptureEpoch = 0;
     auto pushPackets = [this](std::vector<EncodedPacket>& packets) {
         for (auto& packet : packets) {
+            if (replayStore_) replayStore_->push(packet);
             packets_.push(std::move(packet));
             ++framesEncoded_;
         }
@@ -2358,6 +2363,7 @@ void EncoderWorker::encodeLoop() {
                 job.configVersion >= requestedConfigDiscardVersion;
             if (discardForConfig) {
                 packets_.clear();
+                if (replayStore_) replayStore_->clear();
                 appliedConfigDiscardVersion = requestedConfigDiscardVersion;
             }
             const int requestedDiscardVersion = discardPacketsAtFreshFrameVersion_.load();
@@ -2366,6 +2372,7 @@ void EncoderWorker::encodeLoop() {
                 job.freshFrameVersion >= requestedDiscardVersion;
             if (discardForFreshFrame) {
                 packets_.clear();
+                if (replayStore_) replayStore_->clear();
                 appliedDiscardVersion = requestedDiscardVersion;
             }
             std::vector<EncodedPacket> drainedPackets;

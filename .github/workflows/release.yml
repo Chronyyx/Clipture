@@ -25,6 +25,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Prepare release notes
+        run: node scripts/extract-release-notes.cjs "${{ github.ref_name }}" release-notes.md
+
       - name: Build Windows release
         run: npm run dist:win -- --publish never
         env:
@@ -37,4 +40,5 @@ jobs:
             release/*.exe
             release/*.exe.blockmap
             release/latest.yml
-          generate_release_notes: true
+          body_path: release-notes.md
+          generate_release_notes: false

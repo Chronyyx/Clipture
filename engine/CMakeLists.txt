@@ -22,6 +22,7 @@ add_executable(clipture_engine
   src/H264PacketAnalyzer.cpp
   src/Mp4Muxer.cpp
   src/NativeRuntime.cpp
+  src/ReplaySegmentStore.cpp
   src/Tonemapper.cpp
   src/WgcCaptureBackend.cpp
   third_party/rnnoise/src/celt_lpc.c
@@ -54,6 +55,8 @@ if(BUILD_TESTING)
     src/DesktopPointerShape.cpp
     src/H264PacketAnalyzer.cpp
     src/FrameQueue.cpp
+    src/Mp4Muxer.cpp
+    src/ReplaySegmentStore.cpp
   )
   target_include_directories(clipture_packet_tests PRIVATE include)
   target_compile_features(clipture_packet_tests PRIVATE cxx_std_20)

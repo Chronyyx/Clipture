@@ -33,6 +33,8 @@ struct MuxPressureSample {
 
 struct MuxWritePacing {
     std::function<MuxPressureSample()> samplePressure;
+    int64_t presentationStartPts100ns = 0;
+    int64_t presentationEndPts100ns = 0;
 };
 
 MuxResult muxH264ToMp4(

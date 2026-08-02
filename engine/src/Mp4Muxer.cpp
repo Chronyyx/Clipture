@@ -40,6 +40,7 @@ struct SampleInfo {
 struct OwnedSample {
     std::vector<std::byte> payload;
     PacketPayloadPtr sharedPayload;
+    PacketPayloadReaderPtr payloadReader;
     SampleInfo info;
     int64_t pts100ns = 0;
     uint32_t encoderEpoch = 0;
@@ -50,6 +51,24 @@ struct OwnedSample {
 std::span<const std::byte> samplePayload(const OwnedSample& sample) {
     if (sample.sharedPayload) return { sample.sharedPayload->data(), sample.sharedPayload->size() };
     return { sample.payload.data(), sample.payload.size() };
+}
+
+bool readSamplePayload(
+    const OwnedSample& sample,
+    std::size_t offset,
+    std::span<std::byte> destination) {
+    const auto memory = samplePayload(sample);
+    if (!memory.empty()) {
+        if (offset > memory.size() || destination.size() > memory.size() - offset) return false;
+        std::memcpy(destination.data(), memory.data() + offset, destination.size());
+        return true;
+    }
+    if (!sample.payloadReader ||
+        offset > sample.payloadReader->size() ||
+        destination.size() > sample.payloadReader->size() - offset) {
+        return false;
+    }
+    return sample.payloadReader->read(offset, destination);
 }
 
 struct PcmSampleView {
@@ -897,12 +916,10 @@ std::vector<NalUnit> parseAnnexBNalus(std::span<const std::byte> data) {
     return nalus;
 }
 
-std::vector<std::byte> copyNaluPayload(std::span<const std::byte> data, const NalUnit& nalu) {
-    if (nalu.offset + nalu.size > data.size()) return {};
-    return {
-        data.begin() + static_cast<std::ptrdiff_t>(nalu.offset),
-        data.begin() + static_cast<std::ptrdiff_t>(nalu.offset + nalu.size)
-    };
+std::vector<std::byte> copyNaluPayload(const EncodedPacket& packet, const NalUnit& nalu) {
+    std::vector<std::byte> result;
+    if (!copyPayloadRange(packet, nalu.offset, nalu.size, result)) result.clear();
+    return result;
 }
 
 Bytes buildAvcDecoderConfig(const std::vector<std::byte>& sps, const std::vector<std::byte>& pps) {
@@ -1104,6 +1121,17 @@ Bytes makeAudioEdts(
         appendU16(entries, 1);
         appendU16(entries, 0);
     }
+    return box("edts", fullBox("elst", 1, 0, entries));
+}
+
+Bytes makeVideoEdts(uint64_t movieDuration100ns, uint64_t mediaStart100ns) {
+    if (movieDuration100ns == 0) return {};
+    Bytes entries;
+    appendU32(entries, 1);
+    appendU64(entries, movieDuration100ns);
+    appendU64(entries, mediaStart100ns);
+    appendU16(entries, 1);
+    appendU16(entries, 0);
     return box("edts", fullBox("elst", 1, 0, entries));
 }
 
@@ -1347,9 +1375,16 @@ uint64_t samplesDuration(const Samples& samples) {
     return duration;
 }
 
-Bytes makeVideoTrak(const Bytes& avcConfig, const std::vector<VideoSamplePlan>& samples, int width, int height, int /*fps*/) {
+Bytes makeVideoTrak(
+    const Bytes& avcConfig,
+    const std::vector<VideoSamplePlan>& samples,
+    int width,
+    int height,
+    int /*fps*/,
+    uint64_t movieDuration100ns,
+    uint64_t mediaStart100ns) {
     const uint32_t timescale = 10'000'000u; // 100ns units — matches PTS-based sample durations
-    const uint64_t duration = samplesDuration(samples);
+    const uint64_t mediaDuration = samplesDuration(samples);
 
     Bytes stblPayload;
     appendBytes(stblPayload, makeStsd(avcConfig, width, height));
@@ -1365,12 +1400,13 @@ Bytes makeVideoTrak(const Bytes& avcConfig, const std::vector<VideoSamplePlan>& 
     appendBytes(minfPayload, box("stbl", stblPayload));
 
     Bytes mdiaPayload;
-    appendBytes(mdiaPayload, makeMdhd(timescale, duration));
+    appendBytes(mdiaPayload, makeMdhd(timescale, mediaDuration));
     appendBytes(mdiaPayload, makeHdlr());
     appendBytes(mdiaPayload, box("minf", minfPayload));
 
     Bytes trakPayload;
-    appendBytes(trakPayload, makeTkhd(duration, width, height));
+    appendBytes(trakPayload, makeTkhd(movieDuration100ns, width, height));
+    appendBytes(trakPayload, makeVideoEdts(movieDuration100ns, mediaStart100ns));
     appendBytes(trakPayload, box("mdia", mdiaPayload));
     return box("trak", trakPayload);
 }
@@ -1409,19 +1445,35 @@ Bytes makeAudioTrak(
     return box("trak", trakPayload);
 }
 
-Bytes makeMoov(const Bytes& avcConfig, const std::vector<VideoSamplePlan>& samples, const std::vector<AacAudioTrack>& audioTracks, int width, int height, int fps) {
+Bytes makeMoov(
+    const Bytes& avcConfig,
+    const std::vector<VideoSamplePlan>& samples,
+    const std::vector<AacAudioTrack>& audioTracks,
+    int width,
+    int height,
+    int fps,
+    uint64_t movieDuration100ns,
+    uint64_t videoMediaStart100ns,
+    int64_t videoPresentationStartPts100ns) {
     const uint32_t timescale = 10'000'000u; // movie timescale in 100ns units — matches video track
-    const uint64_t duration = samplesDuration(samples);
 
     Bytes moovPayload;
-    appendBytes(moovPayload, makeMvhd(timescale, duration, static_cast<uint32_t>(audioTracks.size() + 2)));
-    appendBytes(moovPayload, makeVideoTrak(avcConfig, samples, width, height, fps));
-    const int64_t videoStartPts100ns = samples.empty() || !samples.front().packet
-        ? 0
-        : samples.front().packet->pts100ns;
+    appendBytes(moovPayload, makeMvhd(timescale, movieDuration100ns, static_cast<uint32_t>(audioTracks.size() + 2)));
+    appendBytes(moovPayload, makeVideoTrak(
+        avcConfig,
+        samples,
+        width,
+        height,
+        fps,
+        movieDuration100ns,
+        videoMediaStart100ns));
     uint32_t trackId = 2;
     for (const auto& audioTrack : audioTracks) {
-        appendBytes(moovPayload, makeAudioTrak(audioTrack, trackId++, duration, videoStartPts100ns));
+        appendBytes(moovPayload, makeAudioTrak(
+            audioTrack,
+            trackId++,
+            movieDuration100ns,
+            videoPresentationStartPts100ns));
     }
     return box("moov", moovPayload);
 }
@@ -1572,7 +1624,7 @@ public:
 
     void flush() {
         if (buffer_.empty()) return;
-        prepareForWrite();
+        prepareForWrite(buffer_.size());
         out_.write(std::span<const std::byte>(buffer_.data(), buffer_.size()));
         buffer_.clear();
         ++flushes_;
@@ -1617,29 +1669,44 @@ private:
         return sample;
     }
 
-    void prepareForWrite() {
+    void paceElevated(std::size_t pendingBytes) {
+        elevatedBytesSinceYield_ += pendingBytes;
+        if (elevatedBytesSinceYield_ < elevatedYieldIntervalBytes_) return;
+        SwitchToThread();
+        ++yields_;
+        elevatedBytesSinceYield_ %= elevatedYieldIntervalBytes_;
+    }
+
+    void prepareForWrite(std::size_t pendingBytes) {
         if (!samplePressure_) return;
         auto sample = observePressure();
         if (sample.level == MuxPressureLevel::Elevated) {
-            SwitchToThread();
-            ++yields_;
+            paceElevated(pendingBytes);
             return;
         }
-        if (sample.level != MuxPressureLevel::Critical) return;
+        if (sample.level != MuxPressureLevel::Critical) {
+            elevatedBytesSinceYield_ = 0;
+            return;
+        }
 
+        elevatedBytesSinceYield_ = 0;
         ++recoveryWaits_;
         const auto waitStartedAt = std::chrono::steady_clock::now();
-        Sleep(1);
-        ++sleeps_;
-        ++sleepMs_;
-        sample = observePressure();
+        constexpr auto maximumRecoveryWait = std::chrono::milliseconds(16);
+        do {
+            Sleep(1);
+            ++sleeps_;
+            ++sleepMs_;
+            sample = observePressure();
+        } while (
+            sample.level == MuxPressureLevel::Critical &&
+            std::chrono::steady_clock::now() - waitStartedAt < maximumRecoveryWait);
         recoveryWaitMs_ += static_cast<std::size_t>(std::max<int64_t>(
             0,
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - waitStartedAt).count()));
         if (sample.level == MuxPressureLevel::Elevated) {
-            SwitchToThread();
-            ++yields_;
+            paceElevated(pendingBytes);
         }
     }
 
@@ -1660,6 +1727,8 @@ private:
     int64_t maximumCaptureGap100ns_ = 0;
     int64_t maximumCapturePublicationAge100ns_ = 0;
     MuxPressureLevel pressure_ = MuxPressureLevel::Healthy;
+    std::size_t elevatedBytesSinceYield_ = 0;
+    static constexpr std::size_t elevatedYieldIntervalBytes_ = 16u * 1024u * 1024u;
 };
 
 void writeU32(BufferedByteWriter& out, uint32_t value) {
@@ -1684,14 +1753,63 @@ void writeBytes(BufferedByteWriter& out, const std::vector<std::byte>& bytes) {
     writeBytes(out, std::span<const std::byte>(bytes.data(), bytes.size()));
 }
 
-void writeAvccSample(BufferedByteWriter& out, const VideoSamplePlan& sample) {
-    if (!sample.packet) return;
-    const auto bytes = payloadBytes(*sample.packet);
-    for (const auto& nalu : sample.writableNalus) {
-        if (nalu.offset + nalu.size > bytes.size()) continue;
-        writeU32(out, static_cast<uint32_t>(nalu.size));
-        writeBytes(out, bytes.subspan(nalu.offset, nalu.size));
+bool writePacketRange(
+    BufferedByteWriter& out,
+    const EncodedPacket& packet,
+    std::size_t offset,
+    std::size_t size,
+    std::vector<std::byte>& scratch) {
+    if (offset > payloadSize(packet) || size > payloadSize(packet) - offset) return false;
+    if (size == 0) return true;
+    if (packet.payload) {
+        writeBytes(out, std::span<const std::byte>(packet.payload->data() + offset, size));
+        return true;
     }
+    if (!packet.payloadReader) return false;
+
+    while (size > 0) {
+        const std::size_t count = std::min(size, scratch.size());
+        if (!packet.payloadReader->read(offset, std::span<std::byte>(scratch.data(), count))) return false;
+        writeBytes(out, std::span<const std::byte>(scratch.data(), count));
+        offset += count;
+        size -= count;
+    }
+    return true;
+}
+
+bool writeSamplePayload(
+    BufferedByteWriter& out,
+    const OwnedSample& sample,
+    std::vector<std::byte>& scratch) {
+    const auto memory = samplePayload(sample);
+    if (!memory.empty()) {
+        writeBytes(out, memory);
+        return true;
+    }
+    if (!sample.payloadReader) return sample.info.size == 0;
+
+    std::size_t offset = 0;
+    std::size_t remaining = sample.info.size;
+    while (remaining > 0) {
+        const std::size_t count = std::min(remaining, scratch.size());
+        if (!readSamplePayload(sample, offset, std::span<std::byte>(scratch.data(), count))) return false;
+        writeBytes(out, std::span<const std::byte>(scratch.data(), count));
+        offset += count;
+        remaining -= count;
+    }
+    return true;
+}
+
+bool writeAvccSample(
+    BufferedByteWriter& out,
+    const VideoSamplePlan& sample,
+    std::vector<std::byte>& scratch) {
+    if (!sample.packet) return false;
+    for (const auto& nalu : sample.writableNalus) {
+        writeU32(out, static_cast<uint32_t>(nalu.size));
+        if (!writePacketRange(out, *sample.packet, nalu.offset, nalu.size, scratch)) return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -1731,16 +1849,15 @@ MuxResult muxH264ToMp4(
         if (isVideoPacket(packet)) {
             hasVideoPacket = true;
             ++videoPacketCount;
-            const auto bytes = payloadBytes(packet);
-            videoSourceBytes += bytes.size();
+            videoSourceBytes += payloadSize(packet);
             VideoSamplePlan sample;
             sample.packet = &packet;
             sample.info.keyframe = packet.keyframe;
             auto collectNalu = [&](const NalUnit& nalu) {
                 if (nalu.type == 7 && sps.empty()) {
-                    sps = copyNaluPayload(bytes, nalu);
+                    sps = copyNaluPayload(packet, nalu);
                 } else if (nalu.type == 8 && pps.empty()) {
-                    pps = copyNaluPayload(bytes, nalu);
+                    pps = copyNaluPayload(packet, nalu);
                 }
 
                 if (isWritableVideoNalu(nalu)) {
@@ -1752,9 +1869,12 @@ MuxResult muxH264ToMp4(
                 forEachH264Nal(packet.h264, collectNalu);
                 sample.info.size = packet.h264.avccSampleSize;
             } else {
-                const auto nalus = parseAnnexBNalus(bytes);
-                for (const auto& nalu : nalus) collectNalu(nalu);
-                sample.info.size = avccSampleSize(sample.writableNalus);
+                std::vector<std::byte> materialized;
+                if (copyPayloadRange(packet, 0, payloadSize(packet), materialized)) {
+                    const auto nalus = parseAnnexBNalus(materialized);
+                    for (const auto& nalu : nalus) collectNalu(nalu);
+                    sample.info.size = avccSampleSize(sample.writableNalus);
+                }
             }
             if (sample.info.size > 0) {
                 writableNaluCount += sample.writableNalus.size();
@@ -1781,6 +1901,7 @@ MuxResult muxH264ToMp4(
             }
             OwnedSample sample;
             sample.sharedPayload = packet.payload;
+            sample.payloadReader = packet.payloadReader;
             sample.info.size = payloadSize(packet);
             sample.info.duration = packet.audioFrameCount;
             sample.pts100ns = packet.pts100ns;
@@ -1864,6 +1985,36 @@ MuxResult muxH264ToMp4(
         return result;
     }
     const uint64_t plannedVideoDuration100ns = samplesDuration(videoSamples);
+    const int64_t videoMediaStartPts100ns = videoSamples.front().packet
+        ? videoSamples.front().packet->pts100ns
+        : 0;
+    const int64_t boundedMediaDuration100ns = static_cast<int64_t>(std::min<uint64_t>(
+        plannedVideoDuration100ns,
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max())));
+    const int64_t videoMediaEndPts100ns = videoMediaStartPts100ns >
+            std::numeric_limits<int64_t>::max() - boundedMediaDuration100ns
+        ? std::numeric_limits<int64_t>::max()
+        : videoMediaStartPts100ns + boundedMediaDuration100ns;
+    int64_t videoPresentationStartPts100ns = pacing.presentationStartPts100ns > 0
+        ? std::clamp(
+            pacing.presentationStartPts100ns,
+            videoMediaStartPts100ns,
+            videoMediaEndPts100ns)
+        : videoMediaStartPts100ns;
+    int64_t videoPresentationEndPts100ns = pacing.presentationEndPts100ns > videoPresentationStartPts100ns
+        ? std::clamp(
+            pacing.presentationEndPts100ns,
+            videoPresentationStartPts100ns,
+            videoMediaEndPts100ns)
+        : videoMediaEndPts100ns;
+    if (videoPresentationEndPts100ns <= videoPresentationStartPts100ns) {
+        videoPresentationStartPts100ns = videoMediaStartPts100ns;
+        videoPresentationEndPts100ns = videoMediaEndPts100ns;
+    }
+    const uint64_t movieDuration100ns = static_cast<uint64_t>(
+        videoPresentationEndPts100ns - videoPresentationStartPts100ns);
+    const uint64_t videoMediaStart100ns = static_cast<uint64_t>(
+        videoPresentationStartPts100ns - videoMediaStartPts100ns);
     const uint32_t targetFrameDuration100ns = static_cast<uint32_t>(10'000'000LL / std::max(1, fps));
     uint32_t maxSampleDuration100ns = 0;
     std::size_t gapEvents = 0;
@@ -1884,6 +2035,8 @@ MuxResult muxH264ToMp4(
         durationStartedAt,
         "videoSamples=" + std::to_string(videoSamples.size()) +
             " plannedDuration100ns=" + std::to_string(plannedVideoDuration100ns) +
+            " presentationDuration100ns=" + std::to_string(movieDuration100ns) +
+            " decoderPreroll100ns=" + std::to_string(videoMediaStart100ns) +
             " maxSampleDuration100ns=" + std::to_string(maxSampleDuration100ns) +
             " gapEvents=" + std::to_string(gapEvents) +
             " missingFrameSlots=" + std::to_string(missingFrameSlots));
@@ -1943,9 +2096,6 @@ MuxResult muxH264ToMp4(
     AudioContinuityStats audioContinuity;
     AudioClipAlignmentStats audioAlignment;
     std::string audioContinuityError;
-    const int64_t videoStartPts100ns = videoSamples.front().packet
-        ? videoSamples.front().packet->pts100ns
-        : 0;
     for (auto& track : audioTracks) {
         finalizeAudioTimeline(track);
         if (!makeAudioTimelineContinuous(track, audioContinuity, audioContinuityError)) {
@@ -1957,8 +2107,8 @@ MuxResult muxH264ToMp4(
         }
         alignAudioTrackToVideo(
             track,
-            videoStartPts100ns,
-            plannedVideoDuration100ns,
+            videoPresentationStartPts100ns,
+            movieDuration100ns,
             audioAlignment);
     }
     logMuxSaveTiming(
@@ -1999,7 +2149,16 @@ MuxResult muxH264ToMp4(
         }
     }
 
-    const auto moov = makeMoov(avcConfig, videoSamples, audioTracks, width, height, fps);
+    const auto moov = makeMoov(
+        avcConfig,
+        videoSamples,
+        audioTracks,
+        width,
+        height,
+        fps,
+        movieDuration100ns,
+        videoMediaStart100ns,
+        videoPresentationStartPts100ns);
     logMuxSaveTiming(
         "metadata",
         metadataStartedAt,
@@ -2036,10 +2195,15 @@ MuxResult muxH264ToMp4(
 
     constexpr std::size_t liveSaveChunkBytes = 512u * 1024u;
     BufferedByteWriter bufferedOut(out, liveSaveChunkBytes, std::move(pacing.samplePressure));
+    std::vector<std::byte> payloadScratch(liveSaveChunkBytes);
     const auto videoWriteStartedAt = SaveTimingClock::now();
     uint64_t videoWrittenBytes = 0;
+    bool payloadReadSucceeded = true;
     for (const auto& sample : videoSamples) {
-        writeAvccSample(bufferedOut, sample);
+        if (!writeAvccSample(bufferedOut, sample, payloadScratch)) {
+            payloadReadSucceeded = false;
+            break;
+        }
         videoWrittenBytes += sample.info.size;
     }
     bufferedOut.flush();
@@ -2076,8 +2240,12 @@ MuxResult muxH264ToMp4(
     const auto audioSleepMsBefore = bufferedOut.sleepMs();
     uint64_t audioWrittenBytes = 0;
     for (const auto& track : audioTracks) {
+        if (!payloadReadSucceeded) break;
         for (const auto& sample : track.samples) {
-            writeBytes(bufferedOut, samplePayload(sample));
+            if (!writeSamplePayload(bufferedOut, sample, payloadScratch)) {
+                payloadReadSucceeded = false;
+                break;
+            }
             audioWrittenBytes += sample.info.size;
         }
     }
@@ -2096,15 +2264,20 @@ MuxResult muxH264ToMp4(
     logMuxSaveTiming("write_moov", moovWriteStartedAt, "bytes=" + std::to_string(moov.size()));
 
     const auto closeStartedAt = SaveTimingClock::now();
-    const bool writeSucceeded = out.good();
+    const bool writeSucceeded = payloadReadSucceeded && out.good();
     const bool closeSucceeded = out.close();
     logMuxSaveTiming("file_close", closeStartedAt);
 
     if (!writeSucceeded || !closeSucceeded) {
         std::error_code ignored;
         std::filesystem::remove(path, ignored);
-        result.message = "MP4 muxing failed while writing the output file.";
-        logMuxSaveTiming("total", totalStartedAt, "ok=false reason=write_failed");
+        result.message = payloadReadSucceeded
+            ? "MP4 muxing failed while writing the output file."
+            : "MP4 muxing failed while reading the replay archive.";
+        logMuxSaveTiming(
+            "total",
+            totalStartedAt,
+            std::string("ok=false reason=") + (payloadReadSucceeded ? "write_failed" : "archive_read_failed"));
         return result;
     }
 

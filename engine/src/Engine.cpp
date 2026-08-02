@@ -87,6 +87,17 @@ std::string jsonEscape(const std::string& value) {
 }
 
 using SaveTimingClock = std::chrono::steady_clock;
+constexpr int64_t kHotReplayRetention100ns = 12LL * 10'000'000LL;
+
+ReplaySegmentStoreOptions replayStoreOptions(const std::string& streamName, bool video) {
+    ReplaySegmentStoreOptions options;
+    options.streamName = streamName;
+    options.targetSegmentDuration100ns = video ? 8LL * 10'000'000LL : 30LL * 10'000'000LL;
+    options.targetSegmentBytes = video ? 64u * 1024u * 1024u : 8u * 1024u * 1024u;
+    options.maximumWriteBytes = 512u * 1024u;
+    options.alignSegmentsToKeyframes = video;
+    return options;
+}
 
 int64_t saveTimingElapsedMs(SaveTimingClock::time_point startedAt) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(SaveTimingClock::now() - startedAt).count();
@@ -645,9 +656,17 @@ Engine::Engine()
       videoPackets_(5LL * 60LL * 10'000'000LL),
       audioPackets_(5LL * 60LL * 10'000'000LL),
       aacAudioPackets_(5LL * 60LL * 10'000'000LL),
-      audioReplayCoordinator_(std::make_unique<AudioReplayCoordinator>(audioPackets_, aacAudioPackets_)),
+      videoReplayStore_(std::make_unique<ReplaySegmentStore>(replayStoreOptions("video", true))),
+      aacReplayStore_(std::make_unique<ReplaySegmentStore>(replayStoreOptions("audio", false))),
+      audioReplayCoordinator_(std::make_unique<AudioReplayCoordinator>(
+          audioPackets_,
+          aacAudioPackets_,
+          aacReplayStore_.get())),
       captureSession_(std::make_unique<CaptureSession>()),
-      encoderWorker_(std::make_unique<EncoderWorker>(frameQueue_, videoPackets_)),
+      encoderWorker_(std::make_unique<EncoderWorker>(
+          frameQueue_,
+          videoPackets_,
+          videoReplayStore_.get())),
       audioCaptureWorker_(std::make_unique<AudioCaptureWorker>(audioPackets_, audioReplayCoordinator_.get())) {}
 
 Engine::~Engine() {
@@ -658,6 +677,10 @@ Engine::~Engine() {
     }
     if (audioCaptureWorker_) audioCaptureWorker_->stop();
     if (audioReplayCoordinator_) audioReplayCoordinator_->stop();
+    if (captureSession_) captureSession_->stop();
+    if (encoderWorker_) encoderWorker_->stop();
+    if (aacReplayStore_) aacReplayStore_->stop();
+    if (videoReplayStore_) videoReplayStore_->stop();
 }
 
 void Engine::refreshAudioRouting() {
@@ -1061,6 +1084,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
         previousTargetHeight != settings_.targetHeight;
     if (videoOutputTargetChanged) {
         videoPackets_.clear();
+        if (videoReplayStore_) videoReplayStore_->clear();
     }
     if (settings_.targetWidth > 0 && settings_.targetHeight > 0) {
         pendingAutoVideoResolutionReset100ns_ = 0;
@@ -1103,6 +1127,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
             if (encoderWorker_) {
                 if (settings_.targetWidth <= 0 || settings_.targetHeight <= 0) {
                     videoPackets_.clear();
+                    if (videoReplayStore_) videoReplayStore_->clear();
                     encoderWorker_->resetAutoOutputResolution();
                 } else {
                     encoderWorker_->requireFreshFrame(true);
@@ -1171,12 +1196,15 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
         : "Clip-aware system";
 
     const auto retention100ns = static_cast<int64_t>(settings_.clipLengthSeconds + 5) * 10'000'000LL;
-    videoPackets_.setRetention(retention100ns);
+    videoPackets_.setRetention(kHotReplayRetention100ns);
+    if (videoReplayStore_) videoReplayStore_->setRetention(retention100ns);
+    if (aacReplayStore_) aacReplayStore_->setRetention(retention100ns);
     if (audioReplayCoordinator_) {
         audioReplayCoordinator_->setRetention(retention100ns);
+        aacAudioPackets_.setRetention(kHotReplayRetention100ns);
     } else {
         audioPackets_.setRetention(retention100ns);
-        aacAudioPackets_.setRetention(retention100ns);
+        aacAudioPackets_.setRetention(kHotReplayRetention100ns);
     }
     if (!armed_) {
         armed_ = true;
@@ -1450,7 +1478,10 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         return result;
     }
 
-    if (videoPackets_.size() == 0) {
+    const std::size_t bufferedVideoPacketCount = videoReplayStore_
+        ? videoReplayStore_->size()
+        : videoPackets_.size();
+    if (bufferedVideoPacketCount == 0) {
         result.message = "No encoded H.264 packets are buffered yet. Keep diagnostics open and wait for Encoder packets to rise above 0.";
         logEngineSaveTiming("total", totalStartedAt, saveTotalDetails("ok=false reason=no_video_packets"));
         return result;
@@ -1458,8 +1489,24 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
 
     const int duration = std::clamp(request.durationSeconds, 5, 600);
     const auto snapshotStartedAt = SaveTimingClock::now();
-    auto videoSnapshot = videoPackets_.snapshot();
-    logEngineSaveTiming("video_snapshot", snapshotStartedAt, "packets=" + std::to_string(videoSnapshot.size()));
+    auto videoSnapshot = videoReplayStore_
+        ? videoReplayStore_->snapshot()
+        : videoPackets_.snapshot();
+    const auto diskBackedVideoPackets = std::count_if(
+        videoSnapshot.begin(),
+        videoSnapshot.end(),
+        [](const EncodedPacket& packet) { return !packet.payload && packet.payloadReader; });
+    const auto videoArchiveStats = videoReplayStore_
+        ? videoReplayStore_->stats()
+        : ReplaySegmentStoreStats {};
+    logEngineSaveTiming(
+        "video_snapshot",
+        snapshotStartedAt,
+        "packets=" + std::to_string(videoSnapshot.size()) +
+            " diskBacked=" + std::to_string(diskBackedVideoPackets) +
+            " queued=" + std::to_string(videoArchiveStats.queuedPackets) +
+            " queuedBytes=" + std::to_string(videoArchiveStats.queuedBytes) +
+            " ramFallbackBytes=" + std::to_string(videoArchiveStats.ramFallbackBytes));
 
     const auto videoSelectStartedAt = SaveTimingClock::now();
     auto clipPackets = selectVideoWindowForClip(std::move(videoSnapshot), duration);
@@ -1602,18 +1649,30 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     const auto recommendedResolution = formatResolution(recommendedWidth, recommendedHeight);
     const int64_t clipStart = clipPackets.front().pts100ns;
     const int64_t clipEnd = clipPackets.back().pts100ns + std::max<int64_t>(clipPackets.back().duration100ns, 0);
+    const int64_t requestedClipStart = std::max<int64_t>(
+        clipStart,
+        clipEnd - static_cast<int64_t>(duration) * 10'000'000LL);
+    savePacing.presentationStartPts100ns = requestedClipStart;
+    savePacing.presentationEndPts100ns = clipEnd;
     const auto audioSelectStartedAt = SaveTimingClock::now();
     const bool liveAudioCaughtUp = audioReplayCoordinator_ &&
         audioReplayCoordinator_->waitUntil(clipEnd, std::chrono::milliseconds(25));
     constexpr int64_t kAudioFrameLookbehind100ns = 2'000'000LL;
     const int64_t audioSelectionStart = std::max<int64_t>(0, clipStart - kAudioFrameLookbehind100ns);
-    auto encodedAudioPackets = aacAudioPackets_.selectWindow(audioSelectionStart, clipEnd);
+    auto encodedAudioPackets = aacReplayStore_
+        ? aacReplayStore_->selectWindow(audioSelectionStart, clipEnd)
+        : aacAudioPackets_.selectWindow(audioSelectionStart, clipEnd);
     auto capturedAudioPackets = audioPackets_.selectWindow(audioSelectionStart, clipEnd);
+    const auto diskBackedAudioPackets = std::count_if(
+        encodedAudioPackets.begin(),
+        encodedAudioPackets.end(),
+        [](const EncodedPacket& packet) { return !packet.payload && packet.payloadReader; });
     const auto replayStats = audioReplayCoordinator_ ? audioReplayCoordinator_->stats() : AudioReplayStats {};
     logEngineSaveTiming(
         "audio_select",
         audioSelectStartedAt,
         "aacPackets=" + std::to_string(encodedAudioPackets.size()) +
+            " diskBackedAac=" + std::to_string(diskBackedAudioPackets) +
             " pcmFallbackPackets=" + std::to_string(capturedAudioPackets.size()) +
             " liveCaughtUp=" + std::string(liveAudioCaughtUp ? "true" : "false") +
             " queue=" + std::to_string(replayStats.queuedPackets) +
@@ -1724,6 +1783,9 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
 
             const int segmentWidth = segment.width > 0 ? segment.width : width;
             const int segmentHeight = segment.height > 0 ? segment.height : height;
+            auto segmentPacing = savePacing;
+            segmentPacing.presentationStartPts100ns = std::max(requestedClipStart, segmentStart);
+            segmentPacing.presentationEndPts100ns = std::min(clipEnd, segmentEnd);
             const auto muxStartedAt = SaveTimingClock::now();
             const auto segmentMux = muxH264ToMp4(
                 segmentMuxPackets,
@@ -1732,7 +1794,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                 segmentHeight,
                 diagnostics_.fps,
                 diagnostics_.bitrateMbps,
-                savePacing);
+                std::move(segmentPacing));
             logEngineSaveTiming(
                 "mux_segment",
                 muxStartedAt,
@@ -1909,6 +1971,8 @@ void Engine::arm() {
     diagnostics_.engineRunning = runtime.d3d11Ready;
     diagnostics_.d3d11Ready = runtime.d3d11Ready;
 
+    if (videoReplayStore_) videoReplayStore_->start();
+    if (aacReplayStore_) aacReplayStore_->start();
     encoderWorker_->start();
     {
         const auto [maxEncodeWidth, maxEncodeHeight] = encoderMaxDimensions(settings_);
@@ -1958,8 +2022,29 @@ void Engine::refreshPacketCounts() {
             }
         }
     }
-    diagnostics_.bufferedVideoPackets = static_cast<int>(videoPackets_.size());
+    diagnostics_.bufferedVideoPackets = static_cast<int>(
+        videoReplayStore_ ? videoReplayStore_->size() : videoPackets_.size());
     diagnostics_.bufferedAudioPackets = static_cast<int>(audioPackets_.size());
+    const auto videoArchive = videoReplayStore_ ? videoReplayStore_->stats() : ReplaySegmentStoreStats {};
+    const auto audioArchive = aacReplayStore_ ? aacReplayStore_->stats() : ReplaySegmentStoreStats {};
+    diagnostics_.videoReplayArchiveHealthy = videoArchive.healthy;
+    diagnostics_.audioReplayArchiveHealthy = audioArchive.healthy;
+    diagnostics_.replayArchiveDiskBytes = videoArchive.diskBytes + audioArchive.diskBytes;
+    diagnostics_.replayArchiveRamFallbackBytes =
+        videoArchive.ramFallbackBytes + audioArchive.ramFallbackBytes;
+    diagnostics_.replayArchiveQueuedBytes = videoArchive.queuedBytes + audioArchive.queuedBytes;
+    diagnostics_.replayArchivePersistedPackets =
+        videoArchive.persistedPackets + audioArchive.persistedPackets;
+    diagnostics_.replayArchiveWriteFailures = videoArchive.writeFailures + audioArchive.writeFailures;
+    diagnostics_.replayArchiveQueuedPackets = static_cast<int>(std::min<std::size_t>(
+        videoArchive.queuedPackets + audioArchive.queuedPackets,
+        static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    diagnostics_.replayArchiveSegments = static_cast<int>(std::min<std::size_t>(
+        videoArchive.activeSegments + audioArchive.activeSegments,
+        static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    diagnostics_.replayArchiveMaximumWriteBytes = static_cast<int>(std::min<std::size_t>(
+        std::max(videoArchive.maximumWriteBytes, audioArchive.maximumWriteBytes),
+        static_cast<std::size_t>(std::numeric_limits<int>::max())));
     diagnostics_.queuedFrames = static_cast<int>(frameQueue_.size());
     diagnostics_.capturedFrames = captureSession_ ? captureSession_->capturedFrames() : 0;
     diagnostics_.encoderAcceptedFrames = encoderWorker_ ? encoderWorker_->framesAccepted() : 0;
