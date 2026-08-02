@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { ClipSettings, CliptureApi } from "../shared/types";
+import type { ClipRecord, ClipSettings, CliptureApi } from "../shared/types";
 
 const api: CliptureApi = {
   getDiagnostics: () => ipcRenderer.invoke("engine:getDiagnostics"),
@@ -28,8 +28,8 @@ const api: CliptureApi = {
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
   downloadUpdate: () => ipcRenderer.invoke("updates:download"),
   installUpdate: () => ipcRenderer.invoke("updates:install"),
-  onLibraryChanged: (callback: () => void) => {
-    const listener = () => callback();
+  onLibraryChanged: (callback: (addedClip?: ClipRecord) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, addedClip?: ClipRecord) => callback(addedClip);
     ipcRenderer.on("library:changed", listener);
     return () => ipcRenderer.removeListener("library:changed", listener);
   },

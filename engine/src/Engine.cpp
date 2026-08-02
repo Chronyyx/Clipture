@@ -88,6 +88,7 @@ std::string jsonEscape(const std::string& value) {
 
 using SaveTimingClock = std::chrono::steady_clock;
 constexpr int64_t kHotReplayRetention100ns = 12LL * 10'000'000LL;
+constexpr std::size_t kSaveWriteBurstBytes = 2u * 1024u * 1024u;
 
 ReplaySegmentStoreOptions replayStoreOptions(const std::string& streamName, bool video) {
     ReplaySegmentStoreOptions options;
@@ -1465,6 +1466,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             return sample;
         }
     };
+    savePacing.burstBytes = kSaveWriteBurstBytes;
+    savePacing.storageAwareRate = true;
     logEngineSaveTiming(
         "stutter_baseline",
         totalStartedAt,

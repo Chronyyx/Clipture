@@ -1,7 +1,10 @@
 #pragma once
 
+#include "clipture/BoundedWrite.hpp"
 #include "clipture/PacketRingBuffer.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -35,6 +38,9 @@ struct MuxWritePacing {
     std::function<MuxPressureSample()> samplePressure;
     int64_t presentationStartPts100ns = 0;
     int64_t presentationEndPts100ns = 0;
+    AdaptiveWritePacerConfig adaptiveRate;
+    std::size_t burstBytes = 0;
+    bool storageAwareRate = false;
 };
 
 MuxResult muxH264ToMp4(

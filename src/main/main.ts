@@ -4,7 +4,15 @@ import { autoUpdater } from "electron-updater";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
 import { appendFileSync, closeSync, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { readdir as readdirAsync, stat as statAsync, rm as rmAsync } from "node:fs/promises";
+import {
+  mkdir as mkdirAsync,
+  readFile as readFileAsync,
+  readdir as readdirAsync,
+  rename as renameAsync,
+  stat as statAsync,
+  rm as rmAsync,
+  writeFile as writeFileAsync
+} from "node:fs/promises";
 import { Transform } from "node:stream";
 import { format } from "node:util";
 import { basename, dirname, extname, join, parse, normalize } from "node:path";
@@ -1847,10 +1855,10 @@ async function processClipFile(
   actual: { width: number; height: number },
   reencodeBitrateMbps: number,
   audioTracks: string[],
+  settings: ClipSettings,
   saveTimingId?: string
 ): Promise<{ ok: boolean; message: string; tracksUpdated: boolean; newTracks: string[] }> {
   const totalStartedAt = saveTimingNowMs();
-  const settings = readSettings();
   const systemSource = settings.audioSources.find((s) => s.id === "system" && s.enabled);
   const captureAllSystem = systemSource?.captureAllSystem ?? true;
 
@@ -2527,6 +2535,20 @@ function writeClips(clips: ClipRecord[]): void {
   writeFileSync(clipsPath(), JSON.stringify(clips.filter((clip) => clip.librarySource !== "imported"), null, 2));
 }
 
+async function appendSavedClip(clip: ClipRecord): Promise<void> {
+  let clips: ClipRecord[] = [];
+  try {
+    const parsed = JSON.parse(await readFileAsync(clipsPath(), "utf8"));
+    if (Array.isArray(parsed)) clips = parsed as ClipRecord[];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  const persisted = clips.filter((item) => item.librarySource !== "imported" && item.id !== clip.id);
+  persisted.unshift(clip);
+  await writeFileAsync(clipsPath(), JSON.stringify(persisted, null, 2), "utf8");
+}
+
 async function deleteClips(ids: string[]): Promise<boolean> {
   const idSet = new Set(ids);
   if (idSet.size === 0) return false;
@@ -2670,7 +2692,14 @@ async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeco
       }
 
       const processStartedAt = saveTimingNowMs();
-      const processResult = await processClipFile(result.clip.filePath, targetResolution, actualResolution, reencodeBitrateMbps, result.clip.audioTracks, saveId);
+      const processResult = await processClipFile(
+        result.clip.filePath,
+        targetResolution,
+        actualResolution,
+        reencodeBitrateMbps,
+        result.clip.audioTracks,
+        settings,
+        saveId);
       logSaveTiming(saveId, "postprocess.call", processStartedAt, { ok: processResult.ok });
 
       if (processResult.ok) {
@@ -2699,27 +2728,29 @@ async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeco
 
       const currentDir = dirname(result.clip.filePath);
       const newDir = join(currentDir, gameFolder);
-      if (!existsSync(newDir)) {
-        try { mkdirSync(newDir, { recursive: true }); } catch (e) { /* ignore */ }
-      }
+      const directoryStartedAt = saveTimingNowMs();
+      try { await mkdirAsync(newDir, { recursive: true }); } catch (e) { /* handled by rename below */ }
+      logSaveTiming(saveId, "finalize.directory", directoryStartedAt, { directory: newDir });
 
       const newFilePath = join(newDir, basename(result.clip.filePath));
-      const shouldMoveClip = newFilePath !== result.clip.filePath && existsSync(result.clip.filePath);
+      const shouldMoveClip = newFilePath !== result.clip.filePath;
       let movedClip = false;
       if (shouldMoveClip) {
+        const moveStartedAt = saveTimingNowMs();
         try {
-          renameSync(result.clip.filePath, newFilePath);
+          await renameAsync(result.clip.filePath, newFilePath);
           result.clip.filePath = newFilePath;
           movedClip = true;
         } catch (e) {
           console.error("Failed to move clip to game subfolder:", e);
         }
+        logSaveTiming(saveId, "finalize.move", moveStartedAt, { moved: movedClip });
       }
 
-      const clips = readClips();
-      clips.unshift(result.clip);
-      writeClips(clips);
-      mainWindow?.webContents.send("library:changed");
+      result.clip = enrichSavedClip(result.clip, settings);
+      const recordStartedAt = saveTimingNowMs();
+      await appendSavedClip(result.clip);
+      logSaveTiming(saveId, "finalize.record", recordStartedAt);
       logSaveTiming(saveId, "finalize", finalizeStartedAt, {
         moved: movedClip,
         filePath: result.clip.filePath
@@ -2729,6 +2760,9 @@ async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeco
         showNotificationWindow(settings.notificationPosition || "top-right");
         notificationWindow.webContents.send("show-notification", "", settings.notificationPosition || "top-right", "Clip saved!");
       }
+
+      const addedClip = result.clip;
+      setTimeout(() => mainWindow?.webContents.send("library:changed", addedClip), 50);
     } else if (settings.showNotification && notificationWindow) {
       showNotificationWindow(settings.notificationPosition || "top-right");
       notificationWindow.webContents.send("show-notification", "", settings.notificationPosition || "top-right", "Clip failed");

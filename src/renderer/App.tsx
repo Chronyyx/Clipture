@@ -7,6 +7,12 @@ import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, Display
 
 type Tab = "library" | "settings" | "diagnostics";
 
+type AppNotice = {
+  message: string;
+  tab?: Tab;
+  durationMs: number;
+};
+
 const defaultDiagnostics: EngineDiagnostics = {
   captureApi: "Windows.Graphics.Capture",
   requestedCaptureBackend: "auto",
@@ -411,13 +417,17 @@ export function App() {
   const [settings, setSettings] = useState<ClipSettings | undefined>();
   const [clips, setClips] = useState<ClipRecord[]>([]);
   const [query, setQuery] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<AppNotice | undefined>();
   const [selectedClip, setSelectedClip] = useState<ClipRecord | undefined>();
   const [clipSounds, setClipSounds] = useState<ClipSoundOption[]>([]);
   const [updateState, setUpdateState] = useState<UpdateState>(defaultUpdateState);
   const [isSavingClip, setIsSavingClip] = useState(false);
   const [isExportingDiagnostics, setIsExportingDiagnostics] = useState(false);
   const clipSoundUrlsRef = useRef<Record<string, string>>({});
+
+  function showNotice(message: string, tab?: Tab, durationMs = 4000) {
+    setNotice({ message, tab, durationMs });
+  }
 
   async function refresh() {
     const [nextDiagnostics, nextSettings, nextClips, nextClipSounds] = await Promise.all([
@@ -436,15 +446,21 @@ export function App() {
   useEffect(() => {
     void refresh().catch((error) => {
       console.error("Failed to refresh app state:", error);
-      setNotice(error instanceof Error ? error.message : "Could not refresh app state.");
+      showNotice(error instanceof Error ? error.message : "Could not refresh app state.", undefined, 6000);
     });
     const timer = window.setInterval(() => {
       void window.clipture.getDiagnostics().then(setDiagnostics).catch((error) => {
         console.warn("Failed to refresh diagnostics:", error);
       });
     }, 2000);
-    const unsubscribeLibrary = window.clipture.onLibraryChanged(() => {
-      void refresh().catch((error) => console.error("Failed to refresh library:", error));
+    const unsubscribeLibrary = window.clipture.onLibraryChanged((addedClip) => {
+      if (addedClip) {
+        setClips((current) => [addedClip, ...current.filter((clip) => clip.id !== addedClip.id)]);
+        return;
+      }
+      void window.clipture.listClips().then(setClips).catch((error) => {
+        console.error("Failed to refresh library:", error);
+      });
     });
     void window.clipture.getUpdateState().then(setUpdateState).catch((error) => {
       console.warn("Failed to read update state:", error);
@@ -465,16 +481,24 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(undefined), notice.durationMs);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   async function saveClip() {
     if (isSavingClip) return;
     const length = settings?.clipLengthSeconds ?? 30;
     setIsSavingClip(true);
     try {
       const result = await window.clipture.saveClip(length);
-      setNotice(result.message);
-      await refresh();
+      showNotice(result.message, activeTab);
+      if (result.clip) {
+        setClips((current) => [result.clip!, ...current.filter((clip) => clip.id !== result.clip!.id)]);
+      }
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not save clip.");
+      showNotice(error instanceof Error ? error.message : "Could not save clip.", activeTab, 6000);
     } finally {
       setIsSavingClip(false);
     }
@@ -485,9 +509,9 @@ export function App() {
     setIsExportingDiagnostics(true);
     try {
       const filePath = await window.clipture.exportDiagnostics();
-      if (filePath) setNotice(`Diagnostics exported to ${filePath}`);
+      if (filePath) showNotice(`Diagnostics exported to ${filePath}`, "diagnostics", 5000);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not export diagnostics.");
+      showNotice(error instanceof Error ? error.message : "Could not export diagnostics.", "diagnostics", 6000);
     } finally {
       setIsExportingDiagnostics(false);
     }
@@ -496,7 +520,7 @@ export function App() {
   async function importVideos() {
     const imported = await window.clipture.importVideoFolders();
     if (imported) {
-      setNotice("Imported video folder added");
+      showNotice("Imported video folder added", "library");
       await refresh();
     }
   }
@@ -505,7 +529,7 @@ export function App() {
     if (!settings) return;
     const saved = await window.clipture.saveSettings({ ...settings, ...patch });
     setSettings(saved);
-    setNotice("Settings saved");
+    showNotice("Settings saved", "settings", 2200);
   }
 
   function previewClipSound(sound: string) {
@@ -581,7 +605,9 @@ export function App() {
           </header>
         )}
 
-        {notice && <div className="notice">{notice}</div>}
+        {notice && (!notice.tab || notice.tab === activeTab) && (
+          <div className="notice" role="status">{notice.message}</div>
+        )}
         {activeTab === "library" && (
           <LibraryView
             clips={clips}

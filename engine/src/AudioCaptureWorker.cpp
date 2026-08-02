@@ -2,6 +2,7 @@
 #include "clipture/AudioProcessSpec.hpp"
 #include "clipture/AudioTimeline.hpp"
 #include "clipture/MediaClock.hpp"
+#include "clipture/PcmSampleConverter.hpp"
 #include "clipture/AudioReplayCoordinator.hpp"
 #include "clipture/ProcessSnapshot.hpp"
 
@@ -391,7 +392,7 @@ bool isFloatFormat(const WAVEFORMATEX* format) {
     return false;
 }
 
-int sourceBitsPerSample(const WAVEFORMATEX* format) {
+int sourceValidBitsPerSample(const WAVEFORMATEX* format) {
     if (!format) return 16;
     if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
         const auto extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
@@ -400,16 +401,16 @@ int sourceBitsPerSample(const WAVEFORMATEX* format) {
     return format->wBitsPerSample;
 }
 
-int16_t clampToS16(float value) {
-    value = std::clamp(value, -1.0f, 1.0f);
-    return static_cast<int16_t>(std::lrintf(value * 32767.0f));
-}
-
 void convertToS16(const BYTE* data, UINT32 frames, DWORD flags, const WAVEFORMATEX* format, int& outChannels, PacketPayload& output) {
     const int inputChannels = std::max<int>(1, format ? format->nChannels : 2);
     const int outputChannels = std::min<int>(2, inputChannels);
-    const int bits = sourceBitsPerSample(format);
-    const bool floatFormat = isFloatFormat(format);
+    const int containerBits = format ? format->wBitsPerSample : 16;
+    const int validBits = sourceValidBitsPerSample(format);
+    const std::size_t fallbackBlockAlign = static_cast<std::size_t>(inputChannels) *
+        static_cast<std::size_t>(std::max(1, containerBits / 8));
+    const std::size_t blockAlign = format && format->nBlockAlign > 0
+        ? format->nBlockAlign
+        : fallbackBlockAlign;
     const std::size_t outputSamples = static_cast<std::size_t>(frames) * outputChannels;
     output.resize(outputSamples * sizeof(int16_t));
     outChannels = outputChannels;
@@ -420,28 +421,23 @@ void convertToS16(const BYTE* data, UINT32 frames, DWORD flags, const WAVEFORMAT
         return;
     }
 
-    for (UINT32 frame = 0; frame < frames; ++frame) {
-        for (int ch = 0; ch < outputChannels; ++ch) {
-            const int inputIndex = static_cast<int>(frame) * inputChannels + ch;
-            int16_t sample = 0;
-            if (floatFormat && bits == 32) {
-                const auto* src = reinterpret_cast<const float*>(data);
-                sample = clampToS16(src[inputIndex]);
-            } else if (bits == 16) {
-                const auto* src = reinterpret_cast<const int16_t*>(data);
-                sample = src[inputIndex];
-            } else if (bits == 24) {
-                const auto* src = data + (static_cast<std::size_t>(inputIndex) * 3);
-                int32_t value = (static_cast<int32_t>(src[0]) << 8) |
-                    (static_cast<int32_t>(src[1]) << 16) |
-                    (static_cast<int32_t>(src[2]) << 24);
-                sample = static_cast<int16_t>(value >> 16);
-            } else if (bits == 32) {
-                const auto* src = reinterpret_cast<const int32_t*>(data);
-                sample = static_cast<int16_t>(src[inputIndex] >> 16);
-            }
-            dest[(static_cast<std::size_t>(frame) * outputChannels) + ch] = sample;
-        }
+    const PcmInputLayout layout {
+        inputChannels,
+        containerBits,
+        validBits,
+        blockAlign,
+        isFloatFormat(format)
+    };
+    const auto input = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(data),
+        static_cast<std::size_t>(frames) * blockAlign);
+    if (!convertInterleavedPcmToS16(
+            input,
+            frames,
+            layout,
+            outputChannels,
+            std::span<int16_t>(dest, outputSamples))) {
+        std::fill(dest, dest + outputSamples, int16_t { 0 });
     }
 }
 
@@ -856,6 +852,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
 
         DenoiseState* rnnoiseState = nullptr;
         const int rnnoiseFrameSize = rnnoise_get_frame_size();
+        const bool rnnoiseSampleRateSupported = mixFormat->nSamplesPerSec == 48000;
         RnnoiseFrameQueue rnnoiseQueue(rnnoiseFrameSize);
         std::vector<float> rnnoiseFrameIn(static_cast<std::size_t>(rnnoiseFrameSize));
         std::vector<float> rnnoiseFrameOut(static_cast<std::size_t>(rnnoiseFrameSize));
@@ -935,7 +932,8 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                 }
 
                 while (rnnoiseQueue.popFrame(rnnoiseFrameIn)) {
-                    const bool needsRnnoise = isolation || (gateEnabled && autoGate);
+                    const bool needsRnnoise = rnnoiseSampleRateSupported &&
+                        (isolation || (gateEnabled && autoGate));
                     if (needsRnnoise && !rnnoiseState) {
                         rnnoiseState = rnnoise_create(nullptr);
                     } else if (!needsRnnoise && rnnoiseState) {
@@ -1123,6 +1121,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
 
     DenoiseState* rnnoiseState = nullptr;
     const int rnnoiseFrameSize = rnnoise_get_frame_size(); // 480
+    const bool rnnoiseSampleRateSupported = mixFormat->nSamplesPerSec == 48000;
     RnnoiseFrameQueue rnnoiseQueue(rnnoiseFrameSize);
     std::vector<float> rnnoiseFrameIn(static_cast<std::size_t>(rnnoiseFrameSize));
     std::vector<float> rnnoiseFrameOut(static_cast<std::size_t>(rnnoiseFrameSize));
@@ -1186,7 +1185,8 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                 }
                 
                 while (rnnoiseQueue.popFrame(rnnoiseFrameIn)) {
-                    const bool needsRnnoise = isolation || (gateEnabled && autoGate);
+                    const bool needsRnnoise = rnnoiseSampleRateSupported &&
+                        (isolation || (gateEnabled && autoGate));
                     if (needsRnnoise && !rnnoiseState) {
                         rnnoiseState = rnnoise_create(nullptr);
                     } else if (!needsRnnoise && rnnoiseState) {

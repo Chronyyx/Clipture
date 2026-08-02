@@ -118,26 +118,22 @@ public:
     SavePriorityGuard()
         : thread_(GetCurrentThread()),
           previousPriority_(GetThreadPriority(thread_)) {
-        backgroundStarted_ = SetThreadPriority(thread_, THREAD_MODE_BACKGROUND_BEGIN) != 0;
         belowNormalSet_ = SetThreadPriority(thread_, THREAD_PRIORITY_BELOW_NORMAL) != 0;
         std::cerr << "[save-timing] source=engine stage=save_priority"
                   << " previousPriority=" << previousPriority_
-                  << " backgroundBegin=" << (backgroundStarted_ ? "true" : "false")
+                  << " backgroundBegin=false"
+                  << " adaptiveBackground=true"
                   << " belowNormal=" << (belowNormalSet_ ? "true" : "false")
                   << std::endl;
     }
 
     ~SavePriorityGuard() {
-        bool backgroundEnded = false;
-        if (backgroundStarted_) {
-            backgroundEnded = SetThreadPriority(thread_, THREAD_MODE_BACKGROUND_END) != 0;
-        }
         bool restoredPriority = false;
         if (previousPriority_ != THREAD_PRIORITY_ERROR_RETURN) {
             restoredPriority = SetThreadPriority(thread_, previousPriority_) != 0;
         }
         std::cerr << "[save-timing] source=engine stage=save_priority_restore"
-                  << " backgroundEnd=" << (backgroundEnded ? "true" : "false")
+                  << " backgroundEnd=false"
                   << " restoredPriority=" << (restoredPriority ? "true" : "false")
                   << std::endl;
     }
@@ -148,7 +144,6 @@ public:
 private:
     HANDLE thread_ = nullptr;
     int previousPriority_ = THREAD_PRIORITY_ERROR_RETURN;
-    bool backgroundStarted_ = false;
     bool belowNormalSet_ = false;
 };
 

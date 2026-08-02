@@ -4,6 +4,7 @@
 #include "clipture/VideoTimeline.hpp"
 
 #include <Windows.h>
+#include <winioctl.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>
@@ -12,6 +13,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +25,7 @@
 #include <memory>
 #include <span>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 namespace clipture {
@@ -51,24 +54,6 @@ struct OwnedSample {
 std::span<const std::byte> samplePayload(const OwnedSample& sample) {
     if (sample.sharedPayload) return { sample.sharedPayload->data(), sample.sharedPayload->size() };
     return { sample.payload.data(), sample.payload.size() };
-}
-
-bool readSamplePayload(
-    const OwnedSample& sample,
-    std::size_t offset,
-    std::span<std::byte> destination) {
-    const auto memory = samplePayload(sample);
-    if (!memory.empty()) {
-        if (offset > memory.size() || destination.size() > memory.size() - offset) return false;
-        std::memcpy(destination.data(), memory.data() + offset, destination.size());
-        return true;
-    }
-    if (!sample.payloadReader ||
-        offset > sample.payloadReader->size() ||
-        destination.size() > sample.payloadReader->size() - offset) {
-        return false;
-    }
-    return sample.payloadReader->read(offset, destination);
 }
 
 struct PcmSampleView {
@@ -1478,9 +1463,109 @@ Bytes makeMoov(
     return box("moov", moovPayload);
 }
 
+StorageSeekPenalty queryStorageSeekPenalty(HANDLE handle) {
+    if (handle == INVALID_HANDLE_VALUE) return StorageSeekPenalty::Unknown;
+    STORAGE_PROPERTY_QUERY query {};
+    query.PropertyId = StorageDeviceSeekPenaltyProperty;
+    query.QueryType = PropertyStandardQuery;
+    DEVICE_SEEK_PENALTY_DESCRIPTOR descriptor {};
+    DWORD returnedBytes = 0;
+    if (!DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &query,
+            sizeof(query),
+            &descriptor,
+            sizeof(descriptor),
+            &returnedBytes,
+            nullptr) ||
+        returnedBytes < sizeof(descriptor)) {
+        return StorageSeekPenalty::Unknown;
+    }
+    return descriptor.IncursSeekPenalty
+        ? StorageSeekPenalty::Incurs
+        : StorageSeekPenalty::DoesNotIncur;
+}
+
+StorageSeekPenalty storageSeekPenaltyForPath(const std::wstring& path, HANDLE fileHandle) {
+    const auto directResult = queryStorageSeekPenalty(fileHandle);
+    if (directResult != StorageSeekPenalty::Unknown) return directResult;
+
+    std::wstring fullPath(32'768, L'\0');
+    const DWORD fullPathLength = GetFullPathNameW(
+        path.c_str(),
+        static_cast<DWORD>(fullPath.size()),
+        fullPath.data(),
+        nullptr);
+    if (fullPathLength == 0 || fullPathLength >= fullPath.size()) return StorageSeekPenalty::Unknown;
+    fullPath.resize(fullPathLength);
+
+    std::wstring volumePath(32'768, L'\0');
+    if (!GetVolumePathNameW(
+            fullPath.c_str(),
+            volumePath.data(),
+            static_cast<DWORD>(volumePath.size()))) {
+        return StorageSeekPenalty::Unknown;
+    }
+    volumePath.resize(volumePath.find(L'\0'));
+
+    const UINT driveType = GetDriveTypeW(volumePath.c_str());
+    if (driveType == DRIVE_RAMDISK) return StorageSeekPenalty::DoesNotIncur;
+    if (driveType == DRIVE_REMOTE || driveType == DRIVE_CDROM || driveType == DRIVE_NO_ROOT_DIR) {
+        return StorageSeekPenalty::Unknown;
+    }
+
+    std::wstring volumeName(32'768, L'\0');
+    std::wstring volumeDevice;
+    if (GetVolumeNameForVolumeMountPointW(
+            volumePath.c_str(),
+            volumeName.data(),
+            static_cast<DWORD>(volumeName.size()))) {
+        volumeName.resize(volumeName.find(L'\0'));
+        while (!volumeName.empty() && (volumeName.back() == L'\\' || volumeName.back() == L'/')) {
+            volumeName.pop_back();
+        }
+        volumeDevice = std::move(volumeName);
+    } else if (volumePath.size() >= 2 && volumePath[1] == L':') {
+        volumeDevice = L"\\\\.\\" + volumePath.substr(0, 2);
+    } else {
+        return StorageSeekPenalty::Unknown;
+    }
+
+    const HANDLE volumeHandle = CreateFileW(
+        volumeDevice.c_str(),
+        0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        0,
+        nullptr);
+    if (volumeHandle == INVALID_HANDLE_VALUE) return StorageSeekPenalty::Unknown;
+    const auto result = queryStorageSeekPenalty(volumeHandle);
+    CloseHandle(volumeHandle);
+    return result;
+}
+
+const char* storageSeekPenaltyName(StorageSeekPenalty value) {
+    switch (value) {
+        case StorageSeekPenalty::DoesNotIncur: return "none";
+        case StorageSeekPenalty::Incurs: return "yes";
+        default: return "unknown";
+    }
+}
+
+const char* ioPriorityName(PRIORITY_HINT value) {
+    switch (value) {
+        case IoPriorityHintVeryLow: return "very-low";
+        case IoPriorityHintLow: return "low";
+        case IoPriorityHintNormal: return "normal";
+        default: return "unknown";
+    }
+}
+
 class Win32FileWriter {
 public:
-    static constexpr DWORD maxWriteBytes = 4u * 1024u * 1024u;
+    static constexpr DWORD maxWriteBytes = 512u * 1024u;
 
     explicit Win32FileWriter(const std::wstring& path) {
         handle_ = CreateFileW(
@@ -1496,8 +1581,13 @@ public:
             return;
         }
 
+        storageSeekPenalty_ = storageSeekPenaltyForPath(path, handle_);
+
         FILE_IO_PRIORITY_HINT_INFO priorityInfo {};
-        priorityInfo.PriorityHint = IoPriorityHintLow;
+        priorityInfo.PriorityHint = storageSeekPenalty_ == StorageSeekPenalty::DoesNotIncur
+            ? IoPriorityHintLow
+            : IoPriorityHintVeryLow;
+        ioPriorityHint_ = priorityInfo.PriorityHint;
         lowPriorityApplied_ = SetFileInformationByHandle(
             handle_,
             FileIoPriorityHintInfo,
@@ -1513,6 +1603,8 @@ public:
     bool good() const { return valid() && lastError_ == ERROR_SUCCESS; }
     bool preallocated() const { return preallocated_; }
     bool lowPriorityApplied() const { return lowPriorityApplied_; }
+    PRIORITY_HINT ioPriorityHint() const { return ioPriorityHint_; }
+    StorageSeekPenalty storageSeekPenalty() const { return storageSeekPenalty_; }
     uint64_t bytesWritten() const { return bytesWritten_; }
     DWORD maximumWriteSize() const { return maximumWriteSize_; }
     DWORD lastError() const { return lastError_; }
@@ -1571,6 +1663,8 @@ private:
     uint64_t bytesWritten_ = 0;
     bool preallocated_ = false;
     bool lowPriorityApplied_ = false;
+    PRIORITY_HINT ioPriorityHint_ = IoPriorityHintNormal;
+    StorageSeekPenalty storageSeekPenalty_ = StorageSeekPenalty::Unknown;
 };
 
 void writeU32(Win32FileWriter& out, uint32_t value) {
@@ -1601,11 +1695,23 @@ public:
     explicit BufferedByteWriter(
         Win32FileWriter& out,
         std::size_t capacity = 4 * 1024 * 1024,
-        std::function<MuxPressureSample()> samplePressure = {})
+        std::function<MuxPressureSample()> samplePressure = {},
+        bool adaptiveRateEnabled = false,
+        AdaptiveWritePacerConfig adaptiveRate = {},
+        std::size_t burstBytes = 0)
         : out_(out),
           capacity_(std::max<std::size_t>(capacity, 1)),
-          samplePressure_(std::move(samplePressure)) {
+          samplePressure_(std::move(samplePressure)),
+          adaptiveRateEnabled_(adaptiveRateEnabled),
+          rateController_(adaptiveRate),
+          burstBytes_(adaptiveRateEnabled
+              ? std::max<std::size_t>(burstBytes, capacity_)
+              : 0) {
         buffer_.reserve(capacity_);
+    }
+
+    ~BufferedByteWriter() {
+        finishBackgroundMode();
     }
 
     void write(std::span<const std::byte> bytes) {
@@ -1622,10 +1728,57 @@ public:
         }
     }
 
+    bool writeFromReader(
+        const PacketPayloadReader& reader,
+        std::size_t offset,
+        std::size_t size) {
+        while (size > 0) {
+            const std::size_t available = capacity_ - buffer_.size();
+            if (available == 0) {
+                flush();
+                continue;
+            }
+
+            const std::size_t count = std::min(available, size);
+            const std::size_t previousSize = buffer_.size();
+            buffer_.resize(previousSize + count);
+            const auto readStartedAt = std::chrono::steady_clock::now();
+            const bool read = reader.read(
+                offset,
+                std::span<std::byte>(buffer_.data() + previousSize, count));
+            const auto readUs = static_cast<uint64_t>(std::max<int64_t>(
+                0,
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - readStartedAt).count()));
+            ++sourceReadCalls_;
+            sourceReadUs_ += readUs;
+            maximumSourceReadUs_ = std::max(maximumSourceReadUs_, readUs);
+            if (!read) {
+                buffer_.resize(previousSize);
+                return false;
+            }
+            sourceReadBytes_ += count;
+            offset += count;
+            size -= count;
+        }
+        return true;
+    }
+
     void flush() {
         if (buffer_.empty()) return;
         prepareForWrite(buffer_.size());
-        out_.write(std::span<const std::byte>(buffer_.data(), buffer_.size()));
+        const auto writeStartedAt = std::chrono::steady_clock::now();
+        const bool wrote = out_.write(std::span<const std::byte>(buffer_.data(), buffer_.size()));
+        const auto writeDurationUs = static_cast<uint64_t>(std::max<int64_t>(
+            0,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - writeStartedAt).count()));
+        ++outputWriteCalls_;
+        outputWriteUs_ += writeDurationUs;
+        maximumOutputWriteUs_ = std::max(maximumOutputWriteUs_, writeDurationUs);
+        if (wrote && adaptiveRateEnabled_) {
+            rateController_.observeWrite(buffer_.size(), writeDurationUs);
+        }
         buffer_.clear();
         ++flushes_;
     }
@@ -1645,6 +1798,45 @@ public:
     std::size_t yieldCount() const { return yields_; }
     std::size_t recoveryWaitCount() const { return recoveryWaits_; }
     std::size_t recoveryWaitMs() const { return recoveryWaitMs_; }
+    bool adaptiveRateEnabled() const { return adaptiveRateEnabled_; }
+    uint64_t rateLimitBytesPerSecond() const {
+        return adaptiveRateEnabled_ ? rateController_.currentBytesPerSecond() : 0;
+    }
+    uint64_t minimumRateBytesPerSecond() const {
+        return adaptiveRateEnabled_ ? rateController_.minimumRateSeen() : 0;
+    }
+    uint64_t maximumRateBytesPerSecond() const {
+        return adaptiveRateEnabled_ ? rateController_.maximumRateSeen() : 0;
+    }
+    uint64_t observedWriteBytesPerSecond() const {
+        return adaptiveRateEnabled_ ? rateController_.observedServiceBytesPerSecond() : 0;
+    }
+    std::size_t rateAdjustments() const {
+        return adaptiveRateEnabled_ ? rateController_.rateAdjustments() : 0;
+    }
+    std::size_t pressureBackoffs() const {
+        return adaptiveRateEnabled_ ? rateController_.pressureBackoffs() : 0;
+    }
+    std::size_t measuredWrites() const {
+        return adaptiveRateEnabled_ ? rateController_.measuredWrites() : 0;
+    }
+    std::size_t adaptiveBackgroundEntries() const { return adaptiveBackgroundEntries_; }
+    std::size_t adaptiveBackgroundMs() const {
+        uint64_t totalUs = adaptiveBackgroundUs_;
+        if (adaptiveBackgroundStarted_) {
+            totalUs += steadyNowUs() - adaptiveBackgroundStartedAtUs_;
+        }
+        return static_cast<std::size_t>(totalUs / 1000);
+    }
+    uint64_t sourceReadBytes() const { return sourceReadBytes_; }
+    std::size_t sourceReadCalls() const { return sourceReadCalls_; }
+    std::size_t sourceReadMs() const { return static_cast<std::size_t>(sourceReadUs_ / 1000); }
+    uint64_t maximumSourceReadUs() const { return maximumSourceReadUs_; }
+    std::size_t outputWriteCalls() const { return outputWriteCalls_; }
+    std::size_t outputWriteMs() const { return static_cast<std::size_t>(outputWriteUs_ / 1000); }
+    uint64_t maximumOutputWriteUs() const { return maximumOutputWriteUs_; }
+    std::size_t rateLimitSleepCount() const { return rateLimitSleeps_; }
+    std::size_t rateLimitSleepMs() const { return rateLimitSleepUs_ / 1000; }
     std::size_t pressureTransitions() const { return pressureTransitions_; }
     int64_t maximumQueueAge100ns() const { return maximumQueueAge100ns_; }
     int maximumEncoderQueueDepth() const { return maximumEncoderQueueDepth_; }
@@ -1653,6 +1845,42 @@ public:
     int64_t maximumCapturePublicationAge100ns() const { return maximumCapturePublicationAge100ns_; }
 
 private:
+    static uint64_t steadyNowUs() {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    static AdaptiveWritePressure adaptivePressure(MuxPressureLevel level) {
+        switch (level) {
+            case MuxPressureLevel::Critical: return AdaptiveWritePressure::Critical;
+            case MuxPressureLevel::Elevated: return AdaptiveWritePressure::Elevated;
+            default: return AdaptiveWritePressure::Healthy;
+        }
+    }
+
+    void finishBackgroundMode() {
+        if (!adaptiveBackgroundStarted_) return;
+        SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
+        adaptiveBackgroundUs_ += steadyNowUs() - adaptiveBackgroundStartedAtUs_;
+        adaptiveBackgroundStarted_ = false;
+    }
+
+    void updateBackgroundMode(AdaptiveWritePressure pressure) {
+        if (pressure == AdaptiveWritePressure::Healthy) {
+            finishBackgroundMode();
+            adaptiveBackgroundAttempted_ = false;
+            return;
+        }
+        if (pressure == AdaptiveWritePressure::Elevated) return;
+        if (adaptiveBackgroundStarted_ || adaptiveBackgroundAttempted_) return;
+        adaptiveBackgroundAttempted_ = true;
+        if (SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) != FALSE) {
+            adaptiveBackgroundStarted_ = true;
+            adaptiveBackgroundStartedAtUs_ = steadyNowUs();
+            ++adaptiveBackgroundEntries_;
+        }
+    }
+
     MuxPressureSample observePressure() {
         const auto sample = samplePressure_();
         maximumQueueAge100ns_ = std::max(maximumQueueAge100ns_, sample.oldestFrameAge100ns);
@@ -1666,6 +1894,11 @@ private:
             pressure_ = sample.level;
             ++pressureTransitions_;
         }
+        const auto sustainedPressure = pressureGate_.update(
+            adaptivePressure(sample.level),
+            steadyNowUs());
+        if (adaptiveRateEnabled_) rateController_.observePressure(sustainedPressure);
+        updateBackgroundMode(sustainedPressure);
         return sample;
     }
 
@@ -1678,41 +1911,76 @@ private:
     }
 
     void prepareForWrite(std::size_t pendingBytes) {
-        if (!samplePressure_) return;
-        auto sample = observePressure();
-        if (sample.level == MuxPressureLevel::Elevated) {
-            paceElevated(pendingBytes);
-            return;
+        if (samplePressure_) {
+            auto sample = observePressure();
+            if (sample.level == MuxPressureLevel::Elevated) {
+                paceElevated(pendingBytes);
+            } else if (sample.level == MuxPressureLevel::Critical) {
+                elevatedBytesSinceYield_ = 0;
+                ++recoveryWaits_;
+                const auto waitStartedAt = std::chrono::steady_clock::now();
+                constexpr auto maximumRecoveryWait = std::chrono::milliseconds(16);
+                do {
+                    Sleep(1);
+                    ++sleeps_;
+                    ++sleepMs_;
+                    sample = observePressure();
+                } while (
+                    sample.level == MuxPressureLevel::Critical &&
+                    std::chrono::steady_clock::now() - waitStartedAt < maximumRecoveryWait);
+                recoveryWaitMs_ += static_cast<std::size_t>(std::max<int64_t>(
+                    0,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - waitStartedAt).count()));
+                if (sample.level == MuxPressureLevel::Elevated) {
+                    paceElevated(pendingBytes);
+                }
+            } else {
+                elevatedBytesSinceYield_ = 0;
+            }
         }
-        if (sample.level != MuxPressureLevel::Critical) {
-            elevatedBytesSinceYield_ = 0;
-            return;
-        }
+        paceToTarget(pendingBytes);
+    }
 
-        elevatedBytesSinceYield_ = 0;
-        ++recoveryWaits_;
-        const auto waitStartedAt = std::chrono::steady_clock::now();
-        constexpr auto maximumRecoveryWait = std::chrono::milliseconds(16);
-        do {
-            Sleep(1);
-            ++sleeps_;
-            ++sleepMs_;
-            sample = observePressure();
-        } while (
-            sample.level == MuxPressureLevel::Critical &&
-            std::chrono::steady_clock::now() - waitStartedAt < maximumRecoveryWait);
-        recoveryWaitMs_ += static_cast<std::size_t>(std::max<int64_t>(
-            0,
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - waitStartedAt).count()));
-        if (sample.level == MuxPressureLevel::Elevated) {
-            paceElevated(pendingBytes);
+    void paceToTarget(std::size_t pendingBytes) {
+        const uint64_t bytesPerSecond = rateLimitBytesPerSecond();
+        if (bytesPerSecond == 0 || pendingBytes == 0) return;
+
+        using Clock = std::chrono::steady_clock;
+        const auto now = Clock::now();
+        const auto burstDuration = std::chrono::duration_cast<Clock::duration>(
+            std::chrono::duration<double>(
+                static_cast<double>(burstBytes_) / static_cast<double>(bytesPerSecond)));
+        const auto writeDuration = std::chrono::duration_cast<Clock::duration>(
+            std::chrono::duration<double>(
+                static_cast<double>(pendingBytes) / static_cast<double>(bytesPerSecond)));
+
+        if (!rateLimitStarted_) {
+            nextRateLimitedWrite_ = now - burstDuration;
+            rateLimitStarted_ = true;
+        } else {
+            nextRateLimitedWrite_ = std::max(nextRateLimitedWrite_, now - burstDuration);
         }
+        nextRateLimitedWrite_ += writeDuration;
+        if (nextRateLimitedWrite_ <= now) return;
+
+        const auto sleepStartedAt = Clock::now();
+        std::this_thread::sleep_until(nextRateLimitedWrite_);
+        const auto sleptUs = std::max<int64_t>(
+            0,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                Clock::now() - sleepStartedAt).count());
+        ++rateLimitSleeps_;
+        rateLimitSleepUs_ += static_cast<std::size_t>(sleptUs);
     }
 
     Win32FileWriter& out_;
     const std::size_t capacity_;
     std::function<MuxPressureSample()> samplePressure_;
+    const bool adaptiveRateEnabled_;
+    AdaptiveWriteRateController rateController_;
+    SustainedWritePressureGate pressureGate_;
+    const std::size_t burstBytes_;
     std::vector<std::byte> buffer_;
     std::size_t flushes_ = 0;
     std::size_t sleeps_ = 0;
@@ -1720,13 +1988,29 @@ private:
     std::size_t yields_ = 0;
     std::size_t recoveryWaits_ = 0;
     std::size_t recoveryWaitMs_ = 0;
+    std::size_t rateLimitSleeps_ = 0;
+    std::size_t rateLimitSleepUs_ = 0;
     std::size_t pressureTransitions_ = 0;
+    std::size_t adaptiveBackgroundEntries_ = 0;
+    uint64_t adaptiveBackgroundUs_ = 0;
+    uint64_t adaptiveBackgroundStartedAtUs_ = 0;
+    uint64_t sourceReadBytes_ = 0;
+    uint64_t sourceReadUs_ = 0;
+    uint64_t maximumSourceReadUs_ = 0;
+    uint64_t outputWriteUs_ = 0;
+    uint64_t maximumOutputWriteUs_ = 0;
+    std::size_t sourceReadCalls_ = 0;
+    std::size_t outputWriteCalls_ = 0;
     int64_t maximumQueueAge100ns_ = 0;
     int maximumEncoderQueueDepth_ = 0;
     int maximumNvencInFlight_ = 0;
     int64_t maximumCaptureGap100ns_ = 0;
     int64_t maximumCapturePublicationAge100ns_ = 0;
     MuxPressureLevel pressure_ = MuxPressureLevel::Healthy;
+    bool adaptiveBackgroundStarted_ = false;
+    bool adaptiveBackgroundAttempted_ = false;
+    bool rateLimitStarted_ = false;
+    std::chrono::steady_clock::time_point nextRateLimitedWrite_ {};
     std::size_t elevatedBytesSinceYield_ = 0;
     static constexpr std::size_t elevatedYieldIntervalBytes_ = 16u * 1024u * 1024u;
 };
@@ -1757,8 +2041,7 @@ bool writePacketRange(
     BufferedByteWriter& out,
     const EncodedPacket& packet,
     std::size_t offset,
-    std::size_t size,
-    std::vector<std::byte>& scratch) {
+    std::size_t size) {
     if (offset > payloadSize(packet) || size > payloadSize(packet) - offset) return false;
     if (size == 0) return true;
     if (packet.payload) {
@@ -1766,48 +2049,28 @@ bool writePacketRange(
         return true;
     }
     if (!packet.payloadReader) return false;
-
-    while (size > 0) {
-        const std::size_t count = std::min(size, scratch.size());
-        if (!packet.payloadReader->read(offset, std::span<std::byte>(scratch.data(), count))) return false;
-        writeBytes(out, std::span<const std::byte>(scratch.data(), count));
-        offset += count;
-        size -= count;
-    }
-    return true;
+    return out.writeFromReader(*packet.payloadReader, offset, size);
 }
 
 bool writeSamplePayload(
     BufferedByteWriter& out,
-    const OwnedSample& sample,
-    std::vector<std::byte>& scratch) {
+    const OwnedSample& sample) {
     const auto memory = samplePayload(sample);
     if (!memory.empty()) {
         writeBytes(out, memory);
         return true;
     }
     if (!sample.payloadReader) return sample.info.size == 0;
-
-    std::size_t offset = 0;
-    std::size_t remaining = sample.info.size;
-    while (remaining > 0) {
-        const std::size_t count = std::min(remaining, scratch.size());
-        if (!readSamplePayload(sample, offset, std::span<std::byte>(scratch.data(), count))) return false;
-        writeBytes(out, std::span<const std::byte>(scratch.data(), count));
-        offset += count;
-        remaining -= count;
-    }
-    return true;
+    return out.writeFromReader(*sample.payloadReader, 0, sample.info.size);
 }
 
 bool writeAvccSample(
     BufferedByteWriter& out,
-    const VideoSamplePlan& sample,
-    std::vector<std::byte>& scratch) {
+    const VideoSamplePlan& sample) {
     if (!sample.packet) return false;
     for (const auto& nalu : sample.writableNalus) {
         writeU32(out, static_cast<uint32_t>(nalu.size));
-        if (!writePacketRange(out, *sample.packet, nalu.offset, nalu.size, scratch)) return false;
+        if (!writePacketRange(out, *sample.packet, nalu.offset, nalu.size)) return false;
     }
     return true;
 }
@@ -2174,6 +2437,12 @@ MuxResult muxH264ToMp4(
     }
     const uint64_t finalFileSize = ftyp.size() + mdatHeaderSize + mdatPayloadSize + moov.size();
     const bool preallocated = out.preallocate(finalFileSize);
+    const bool adaptiveWritePacing = shouldUseAdaptiveWritePacing(
+        pacing.storageAwareRate,
+        out.storageSeekPenalty());
+    const auto adaptiveRateConfig = writePacerConfigForStorage(
+        pacing.adaptiveRate,
+        out.storageSeekPenalty());
 
     const auto headerStartedAt = SaveTimingClock::now();
     writeBytes(out, ftyp);
@@ -2191,16 +2460,28 @@ MuxResult muxH264ToMp4(
         "largeMdat=" + std::string(largeMdat ? "true" : "false") +
             " preallocated=" + std::string(preallocated ? "true" : "false") +
             " finalBytes=" + std::to_string(finalFileSize) +
-            " lowIoPriority=" + std::string(out.lowPriorityApplied() ? "true" : "false"));
+            " lowIoPriority=" + std::string(out.lowPriorityApplied() ? "true" : "false") +
+            " ioPriority=" + ioPriorityName(out.ioPriorityHint()) +
+            " storageSeekPenalty=" + storageSeekPenaltyName(out.storageSeekPenalty()) +
+            " adaptiveWritePacing=" + std::string(adaptiveWritePacing ? "true" : "false") +
+            " initialRateMiBps=" + std::to_string(
+                adaptiveWritePacing
+                    ? adaptiveRateConfig.initialBytesPerSecond / (1024ULL * 1024ULL)
+                    : 0));
 
     constexpr std::size_t liveSaveChunkBytes = 512u * 1024u;
-    BufferedByteWriter bufferedOut(out, liveSaveChunkBytes, std::move(pacing.samplePressure));
-    std::vector<std::byte> payloadScratch(liveSaveChunkBytes);
+    BufferedByteWriter bufferedOut(
+        out,
+        liveSaveChunkBytes,
+        std::move(pacing.samplePressure),
+        adaptiveWritePacing,
+        adaptiveRateConfig,
+        pacing.burstBytes);
     const auto videoWriteStartedAt = SaveTimingClock::now();
     uint64_t videoWrittenBytes = 0;
     bool payloadReadSucceeded = true;
     for (const auto& sample : videoSamples) {
-        if (!writeAvccSample(bufferedOut, sample, payloadScratch)) {
+        if (!writeAvccSample(bufferedOut, sample)) {
             payloadReadSucceeded = false;
             break;
         }
@@ -2221,6 +2502,31 @@ MuxResult muxH264ToMp4(
             " throughputMiBps=" + std::to_string(videoThroughputMiBps) +
             " flushes=" + std::to_string(videoFlushes) +
             " maxWriteBytes=" + std::to_string(out.maximumWriteSize()) +
+            " sourceReadBytes=" + std::to_string(bufferedOut.sourceReadBytes()) +
+            " sourceReadCalls=" + std::to_string(bufferedOut.sourceReadCalls()) +
+            " sourceReadMs=" + std::to_string(bufferedOut.sourceReadMs()) +
+            " maxSourceReadUs=" + std::to_string(bufferedOut.maximumSourceReadUs()) +
+            " outputWriteCalls=" + std::to_string(bufferedOut.outputWriteCalls()) +
+            " outputWriteMs=" + std::to_string(bufferedOut.outputWriteMs()) +
+            " maxOutputWriteUs=" + std::to_string(bufferedOut.maximumOutputWriteUs()) +
+            " adaptiveBackgroundEntries=" + std::to_string(
+                bufferedOut.adaptiveBackgroundEntries()) +
+            " adaptiveBackgroundMs=" + std::to_string(bufferedOut.adaptiveBackgroundMs()) +
+            " adaptiveRate=" + std::string(
+                bufferedOut.adaptiveRateEnabled() ? "true" : "false") +
+            " finalRateMiBps=" + std::to_string(
+                bufferedOut.rateLimitBytesPerSecond() / (1024ULL * 1024ULL)) +
+            " minimumRateMiBps=" + std::to_string(
+                bufferedOut.minimumRateBytesPerSecond() / (1024ULL * 1024ULL)) +
+            " maximumRateMiBps=" + std::to_string(
+                bufferedOut.maximumRateBytesPerSecond() / (1024ULL * 1024ULL)) +
+            " observedWriteMiBps=" + std::to_string(
+                bufferedOut.observedWriteBytesPerSecond() / (1024ULL * 1024ULL)) +
+            " measuredWrites=" + std::to_string(bufferedOut.measuredWrites()) +
+            " rateAdjustments=" + std::to_string(bufferedOut.rateAdjustments()) +
+            " pressureBackoffs=" + std::to_string(bufferedOut.pressureBackoffs()) +
+            " rateLimitSleeps=" + std::to_string(bufferedOut.rateLimitSleepCount()) +
+            " rateLimitSleepMs=" + std::to_string(bufferedOut.rateLimitSleepMs()) +
             " paceYields=" + std::to_string(bufferedOut.yieldCount()) +
             " paceSleeps=" + std::to_string(videoSleeps) +
             " paceSleepMs=" + std::to_string(videoSleepMs) +
@@ -2238,11 +2544,18 @@ MuxResult muxH264ToMp4(
     const auto audioFlushesBefore = bufferedOut.flushCount();
     const auto audioSleepsBefore = bufferedOut.sleepCount();
     const auto audioSleepMsBefore = bufferedOut.sleepMs();
+    const auto audioRateLimitSleepsBefore = bufferedOut.rateLimitSleepCount();
+    const auto audioRateLimitSleepMsBefore = bufferedOut.rateLimitSleepMs();
+    const auto audioSourceReadBytesBefore = bufferedOut.sourceReadBytes();
+    const auto audioSourceReadCallsBefore = bufferedOut.sourceReadCalls();
+    const auto audioSourceReadMsBefore = bufferedOut.sourceReadMs();
+    const auto audioOutputWriteCallsBefore = bufferedOut.outputWriteCalls();
+    const auto audioOutputWriteMsBefore = bufferedOut.outputWriteMs();
     uint64_t audioWrittenBytes = 0;
     for (const auto& track : audioTracks) {
         if (!payloadReadSucceeded) break;
         for (const auto& sample : track.samples) {
-            if (!writeSamplePayload(bufferedOut, sample, payloadScratch)) {
+            if (!writeSamplePayload(bufferedOut, sample)) {
                 payloadReadSucceeded = false;
                 break;
             }
@@ -2256,6 +2569,20 @@ MuxResult muxH264ToMp4(
         "tracks=" + std::to_string(audioTracks.size()) +
             " bytes=" + std::to_string(audioWrittenBytes) +
             " flushes=" + std::to_string(bufferedOut.flushCount() - audioFlushesBefore) +
+            " sourceReadBytes=" + std::to_string(
+                bufferedOut.sourceReadBytes() - audioSourceReadBytesBefore) +
+            " sourceReadCalls=" + std::to_string(
+                bufferedOut.sourceReadCalls() - audioSourceReadCallsBefore) +
+            " sourceReadMs=" + std::to_string(
+                bufferedOut.sourceReadMs() - audioSourceReadMsBefore) +
+            " outputWriteCalls=" + std::to_string(
+                bufferedOut.outputWriteCalls() - audioOutputWriteCallsBefore) +
+            " outputWriteMs=" + std::to_string(
+                bufferedOut.outputWriteMs() - audioOutputWriteMsBefore) +
+            " rateLimitSleeps=" + std::to_string(
+                bufferedOut.rateLimitSleepCount() - audioRateLimitSleepsBefore) +
+            " rateLimitSleepMs=" + std::to_string(
+                bufferedOut.rateLimitSleepMs() - audioRateLimitSleepMsBefore) +
             " paceSleeps=" + std::to_string(bufferedOut.sleepCount() - audioSleepsBefore) +
             " paceSleepMs=" + std::to_string(bufferedOut.sleepMs() - audioSleepMsBefore));
 

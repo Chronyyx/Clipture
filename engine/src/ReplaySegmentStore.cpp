@@ -112,6 +112,8 @@ struct ReplaySessionDirectory {
     }
 };
 
+bool applyLowIoPriority(HANDLE handle);
+
 struct SegmentBacking {
     std::shared_ptr<ReplaySessionDirectory> session;
     std::filesystem::path path;
@@ -153,6 +155,7 @@ struct SegmentBacking {
                 FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
                 nullptr);
             if (readHandle == INVALID_HANDLE_VALUE) return false;
+            applyLowIoPriority(readHandle);
             readFileOffset = 0;
             readFileOffsetKnown = true;
             readAhead.reserve(kReadAheadBytes);

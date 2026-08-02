@@ -254,7 +254,7 @@ export interface CliptureApi {
   checkForUpdates(): Promise<UpdateState>;
   downloadUpdate(): Promise<void>;
   installUpdate(): Promise<void>;
-  onLibraryChanged: (callback: () => void) => () => void;
+  onLibraryChanged: (callback: (addedClip?: ClipRecord) => void) => () => void;
   onUpdateStateChanged: (callback: (state: UpdateState) => void) => () => void;
   onPlaySound: (callback: (sound: string) => void) => () => void;
   onShowNotification: (callback: (thumbnailUrl: string, position: string, message?: string) => void) => () => void;

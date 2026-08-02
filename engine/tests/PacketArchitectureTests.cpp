@@ -13,6 +13,7 @@
 #include "clipture/FrameQueue.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/Mp4Muxer.hpp"
+#include "clipture/PcmSampleConverter.hpp"
 #include "clipture/ProcessSnapshot.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/VideoTimeline.hpp"
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <map>
 #include <thread>
@@ -81,7 +83,7 @@ bool testMalformedPackets() {
 }
 
 bool testBoundedWrites() {
-    constexpr std::size_t maximum = 4u * 1024u * 1024u;
+    constexpr std::size_t maximum = 512u * 1024u;
     std::size_t remaining = 11u * 1024u * 1024u + 17u;
     std::size_t total = 0;
     std::size_t writes = 0;
@@ -92,8 +94,217 @@ bool testBoundedWrites() {
         total += request;
         ++writes;
     }
-    return require(total == 11u * 1024u * 1024u + 17u && writes == 3,
-                   "bounded writer should cover every byte in three requests");
+    return require(total == 11u * 1024u * 1024u + 17u && writes == 23,
+                   "bounded writer should cover every byte without exceeding 512 KiB");
+}
+
+bool testAdaptiveWriteRateController() {
+    if (!require(
+            clipture::shouldUseAdaptiveWritePacing(
+                true,
+                clipture::StorageSeekPenalty::DoesNotIncur),
+            "solid-state storage should bound sustained cache writes")) {
+        return false;
+    }
+    if (!require(
+            clipture::shouldUseAdaptiveWritePacing(
+                true,
+                clipture::StorageSeekPenalty::Incurs) &&
+                clipture::shouldUseAdaptiveWritePacing(
+                    true,
+                    clipture::StorageSeekPenalty::Unknown),
+            "seek-penalty and unknown storage should use adaptive pacing")) {
+        return false;
+    }
+    if (!require(
+            !clipture::shouldUseAdaptiveWritePacing(
+                false,
+                clipture::StorageSeekPenalty::Incurs),
+            "adaptive pacing should remain opt-in for other mux callers")) {
+        return false;
+    }
+
+    const auto solidStateConfig = clipture::writePacerConfigForStorage(
+        {},
+        clipture::StorageSeekPenalty::DoesNotIncur);
+    if (!require(
+            solidStateConfig.initialBytesPerSecond == 640ULL * 1024ULL * 1024ULL &&
+                solidStateConfig.maximumLearnedBytesPerSecond == 768ULL * 1024ULL * 1024ULL &&
+                solidStateConfig.adjustmentWindowBytes == 128u * 1024u * 1024u,
+            "solid-state pacing should stay fast while bounding dirty-cache growth")) {
+        return false;
+    }
+
+    clipture::SustainedWritePressureGate pressureGate;
+    if (!require(
+            pressureGate.update(clipture::AdaptiveWritePressure::Elevated, 0) ==
+                clipture::AdaptiveWritePressure::Healthy &&
+                pressureGate.update(clipture::AdaptiveWritePressure::Elevated, 49'999) ==
+                    clipture::AdaptiveWritePressure::Healthy,
+            "brief elevated pressure should not demote the save thread")) {
+        return false;
+    }
+    if (!require(
+            pressureGate.update(clipture::AdaptiveWritePressure::Elevated, 50'000) ==
+                clipture::AdaptiveWritePressure::Elevated,
+            "sustained elevated pressure should activate background protection")) {
+        return false;
+    }
+    if (!require(
+            pressureGate.update(clipture::AdaptiveWritePressure::Healthy, 60'000) ==
+                clipture::AdaptiveWritePressure::Elevated &&
+                pressureGate.update(clipture::AdaptiveWritePressure::Healthy, 309'999) ==
+                    clipture::AdaptiveWritePressure::Elevated &&
+                pressureGate.update(clipture::AdaptiveWritePressure::Healthy, 310'000) ==
+                    clipture::AdaptiveWritePressure::Healthy,
+            "background protection should require a stable healthy recovery window")) {
+        return false;
+    }
+    if (!require(
+            pressureGate.update(clipture::AdaptiveWritePressure::Critical, 310'001) ==
+                clipture::AdaptiveWritePressure::Critical,
+            "critical pressure should activate protection immediately")) {
+        return false;
+    }
+
+    constexpr uint64_t mib = 1024ULL * 1024ULL;
+    clipture::AdaptiveWritePacerConfig config;
+    config.initialBytesPerSecond = 96 * mib;
+    config.minimumBytesPerSecond = 16 * mib;
+    config.maximumLearnedBytesPerSecond = 512 * mib;
+    config.adjustmentWindowBytes = static_cast<std::size_t>(mib);
+    config.targetUtilizationPercent = 75;
+    config.minimumMeasuredWriteUs = 1;
+
+    auto unmeasuredConfig = config;
+    unmeasuredConfig.minimumMeasuredWriteUs = 1'000;
+    clipture::AdaptiveWriteRateController unmeasuredController(unmeasuredConfig);
+    unmeasuredController.observeWrite(static_cast<std::size_t>(mib), 100);
+    if (!require(
+            unmeasuredController.currentBytesPerSecond() ==
+                unmeasuredConfig.initialBytesPerSecond,
+            "cache-speed writes should not make the controller guess at physical throughput")) {
+        return false;
+    }
+
+    clipture::AdaptiveWriteRateController controller(config);
+    controller.observeWrite(static_cast<std::size_t>(mib), 4'000);
+    const uint64_t healthyRate = controller.currentBytesPerSecond();
+    if (!require(
+            healthyRate > config.initialBytesPerSecond,
+            "healthy fast writes should cautiously increase the learned rate")) {
+        return false;
+    }
+
+    controller.observePressure(clipture::AdaptiveWritePressure::Elevated);
+    const uint64_t elevatedRate = controller.currentBytesPerSecond();
+    if (!require(
+            elevatedRate < healthyRate,
+            "elevated capture pressure should reduce write throughput immediately")) {
+        return false;
+    }
+    controller.observePressure(clipture::AdaptiveWritePressure::Elevated);
+    if (!require(
+            controller.currentBytesPerSecond() == elevatedRate,
+            "sustained elevated pressure should not repeatedly collapse the rate")) {
+        return false;
+    }
+
+    controller.observePressure(clipture::AdaptiveWritePressure::Critical);
+    const uint64_t criticalRate = controller.currentBytesPerSecond();
+    if (!require(
+            criticalRate <= elevatedRate / 2,
+            "critical capture pressure should halve the adaptive rate")) {
+        return false;
+    }
+    controller.observePressure(clipture::AdaptiveWritePressure::Healthy);
+    controller.observeWrite(static_cast<std::size_t>(mib), 4'000);
+    return require(
+        controller.currentBytesPerSecond() > criticalRate &&
+            controller.pressureBackoffs() == 2 &&
+            controller.measuredWrites() == 2,
+        "stable capture should recover gradually after pressure subsides");
+}
+
+bool testPcmContainerConversion() {
+    const std::array<int32_t, 4> extensible24In32 {
+        1'073'741'824,
+        -1'073'741'824,
+        2'147'483'392,
+        std::numeric_limits<int32_t>::min()
+    };
+    std::array<int16_t, 4> converted {};
+    const clipture::PcmInputLayout extensibleLayout {
+        2,
+        32,
+        24,
+        8,
+        false
+    };
+    if (!require(
+            clipture::convertInterleavedPcmToS16(
+                std::as_bytes(std::span(extensible24In32)),
+                2,
+                extensibleLayout,
+                2,
+                converted),
+            "24-valid-bit PCM in 32-bit containers should convert")) {
+        return false;
+    }
+    if (!require(
+            converted == std::array<int16_t, 4> { 16384, -16384, 32767, -32768 },
+            "32-bit container stride must remain intact for 24-bit microphone samples")) {
+        return false;
+    }
+
+    const std::array<uint8_t, 6> packed24 { 0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x80 };
+    std::array<int16_t, 2> packedConverted {};
+    const clipture::PcmInputLayout packedLayout { 1, 24, 24, 3, false };
+    if (!require(
+            clipture::convertInterleavedPcmToS16(
+                std::as_bytes(std::span(packed24)),
+                2,
+                packedLayout,
+                1,
+                packedConverted),
+            "packed 24-bit PCM should convert")) {
+        return false;
+    }
+    if (!require(
+            packedConverted == std::array<int16_t, 2> { 32767, -32768 },
+            "packed 24-bit PCM should preserve full-scale polarity")) {
+        return false;
+    }
+
+    const std::array<float, 2> floating { 0.5f, -0.5f };
+    std::array<int16_t, 2> floatConverted {};
+    const clipture::PcmInputLayout floatLayout { 1, 32, 32, 4, true };
+    if (!require(
+            clipture::convertInterleavedPcmToS16(
+                std::as_bytes(std::span(floating)),
+                2,
+                floatLayout,
+                1,
+                floatConverted),
+            "32-bit float PCM should convert")) {
+        return false;
+    }
+    if (!require(
+            floatConverted == std::array<int16_t, 2> { 16384, -16384 },
+            "float PCM conversion should preserve normalized samples")) {
+        return false;
+    }
+
+    auto malformedLayout = extensibleLayout;
+    malformedLayout.blockAlign = 6;
+    return require(
+        !clipture::convertInterleavedPcmToS16(
+            std::as_bytes(std::span(extensible24In32)),
+            2,
+            malformedLayout,
+            2,
+            converted),
+        "PCM conversion should reject a block alignment smaller than its containers");
 }
 
 bool testLatencyWindowIsBoundedAndRecent() {
@@ -866,6 +1077,8 @@ int main() {
     if (!testStartCodesAndFlags()) return 1;
     if (!testMalformedPackets()) return 1;
     if (!testBoundedWrites()) return 1;
+    if (!testAdaptiveWriteRateController()) return 1;
+    if (!testPcmContainerConversion()) return 1;
     if (!testLatencyWindowIsBoundedAndRecent()) return 1;
     if (!testRefreshRateSamplerMaintainsTargetCadence()) return 1;
     if (!testJitteredRefreshSamplerMaintainsCadence()) return 1;

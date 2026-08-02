@@ -13,7 +13,7 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 - Separate AAC tracks with silent-track omission and short PCM recovery coverage.
 - Shared packet payloads that avoid copying the full replay buffer while saving.
 - MP4 muxing directly from buffered H.264 and AAC packets.
-- Background-priority saves with preallocated files and writes capped at 512 KB.
+- Adaptive storage-aware saves with preallocated files, low I/O priority, and writes capped at 512 KB.
 - Resolution-change segmentation and stream-copy stitching when compatible.
 - HDR-to-SDR tonemapping on supported HDR capture paths.
 - Searchable clip library with folder filters, multi-select deletion, renaming, and non-copying imported video directories.
@@ -44,7 +44,7 @@ WASAPI capture
 Save
 select packet ranges from the replay archive
   -> metadata-only MP4 plan
-  -> bounded background-priority file writer
+  -> bounded adaptive low-I/O-priority file writer
   -> final MP4
 ```
 
@@ -65,6 +65,8 @@ video bytes ~= bitrate in Mb/s * clip seconds / 8
 ```
 
 For example, two minutes at 80 Mb/s is approximately 1.2 GB of compressed video. The rolling archive trims expired segments automatically, and saving streams selected packet ranges without constructing another full-size video copy in RAM.
+
+Save output is paced according to storage type, observed write service, and live capture pressure. This keeps SSD saves fast while preventing a large cached write burst from being deferred to file close, and lets foreground applications take priority when the storage device is busy.
 
 ## Requirements
 

@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.2.2] - 2026-08-02
+
+### Performance
+
+- Add storage-aware adaptive save pacing: SSD output remains high-throughput while bounded sustained writes prevent large dirty-cache bursts, and slower or unknown storage learns a safer rate dynamically.
+- Apply low Windows I/O priority to SSD output, very-low priority to seek-heavy storage, and reserve full background thread mode for sustained critical capture pressure.
+- Stream replay archive ranges directly into the mux buffer, removing an extra disk-read scratch copy while retaining the 512 KB maximum output request.
+- Move final directory creation, file placement, and clip-index persistence off Electron's synchronous main-thread path.
+- Insert newly saved clips into the library incrementally instead of rescanning the full library twice at save completion.
+
+### Audio Reliability
+
+- Respect PCM container width, valid-bit depth, and block alignment when converting WASAPI input, including microphones that expose 24 valid bits inside 32-bit containers.
+- Support packed 24-bit, 32-bit integer, and floating-point PCM conversion without misaligned samples that can sound like hiss or static.
+- Run RNNoise processing only for its supported 48 kHz input rate while preserving normal capture at other device sample rates.
+
+### UI And Diagnostics
+
+- Make status notices dismiss automatically and keep settings notices scoped to the Settings tab.
+- Add source-read, output-write, adaptive-rate, I/O-priority, and finalization-stage timing details for diagnosing slow saves without blocking capture.
+
+### Validation
+
+- Added native coverage for adaptive write-rate behavior, capture-pressure hysteresis, 512 KB write bounds, and PCM container conversion edge cases.
+- Verified the native engine, packet architecture tests, Electron type checks, and production renderer build.
+
 ## [1.2.1] - 2026-08-02
 
 ### Performance
