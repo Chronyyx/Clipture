@@ -1,6 +1,5 @@
 #include "clipture/EncoderWorker.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
-#include "clipture/EncoderQueuePolicy.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/VideoTimeline.hpp"
@@ -9,6 +8,8 @@
 #include <avrt.h>
 #include <d3d11.h>
 #include <d3d11_1.h>
+#include <d3d11_4.h>
+#include <dxgi.h>
 #include <ffnvcodec/nvEncodeAPI.h>
 #include <wrl/client.h>
 
@@ -32,6 +33,15 @@ constexpr uint32_t kBundledNvencHeaderApiMinor = NVENCAPI_MINOR_VERSION;
 constexpr uint32_t kBundledNvencHeaderApiRaw = NVENCAPI_VERSION;
 constexpr uint32_t kNvencStructSignature = 0x7u;
 constexpr uint32_t kNvencExtendedStructFlag = 1u << 31;
+
+// Developer capture-validation switch. Set false to encode only newly captured
+// source frames; keep true for normal CFR clips and editor-friendly still video.
+constexpr bool kEnableStillFrameDuplication = true;
+
+// OBS's Windows NVENC path keeps several synchronous submissions in flight
+// before blocking for the oldest output. Keep this switch close to the CFR
+// switch so either path can be compared from a development build.
+constexpr bool kPreferObsStyleBufferedSyncNvenc = true;
 
 using NvEncodeApiCreateInstance = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
 using NvEncodeApiGetMaxSupportedVersion = NVENCSTATUS(NVENCAPI*)(uint32_t*);
@@ -377,10 +387,7 @@ public:
             return false;
         }
 
-        device_.Reset();
-        texture->GetDevice(&device_);
-        if (!device_) {
-            status = "NVENC initialize failed: could not get D3D11 device from captured texture.";
+        if (!initializeD3dDevices(texture, status)) {
             return false;
         }
 
@@ -392,10 +399,14 @@ public:
             const char* presetFamily;
         };
         const InitAttempt attempts[] = {
-            { nvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_LOW_LATENCY, true, "modern" },
-            { nvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_LOW_LATENCY, false, "modern" },
-            { legacyNvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_UNDEFINED, true, "legacy" },
-            { legacyNvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_UNDEFINED, false, "legacy" },
+            { nvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_LOW_LATENCY,
+              !kPreferObsStyleBufferedSyncNvenc, "modern" },
+            { nvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_LOW_LATENCY,
+              kPreferObsStyleBufferedSyncNvenc, "modern" },
+            { legacyNvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_UNDEFINED,
+              !kPreferObsStyleBufferedSyncNvenc, "legacy" },
+            { legacyNvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_UNDEFINED,
+              kPreferObsStyleBufferedSyncNvenc, "legacy" },
         };
         auto logInitAttemptFailure = [this](const InitAttempt& attempt, const std::string& reason) {
             if (initFailureLogged_) return;
@@ -554,7 +565,10 @@ public:
             initFailureLogged_ = false;
             status = asyncEnabled_
                 ? "Direct NVENC H.264 async " + nvencPresetName(boundedPreset) + " session initialized."
-                : "Direct NVENC H.264 sync compatibility " + nvencPresetName(boundedPreset) + " session initialized.";
+                : "Direct NVENC H.264 buffered sync " + nvencPresetName(boundedPreset) + " session initialized.";
+            if (separateEncoderDevice_) {
+                status += " Capture and NVENC use isolated D3D11 devices with a shared prepared-frame bridge.";
+            }
             if (useDedicatedInputSurfaces_) {
                 status += supportsNv12Input_
                     ? " Native-size frames use persistent per-slot NV12 input surfaces."
@@ -789,15 +803,17 @@ public:
 
         slot->mappedInput = mapped.mappedResource;
         slot->mappedRegisteredResource = prepared.registeredResource;
-        // Direct capture inputs retain their pool lease until the output thread
-        // has unlocked the bitstream and unmapped this resource.
+        // Keep several submitted outputs queued before locking the oldest one.
+        // This is the same bounded synchronous pipeline used by OBS: input
+        // preparation, NVENC, and bitstream retrieval can overlap without
+        // enabling DirectX asynchronous event mode.
+        {
+            std::lock_guard lock(outputMutex_);
+            inFlightOrder_.push_back(slotIndex(slot));
+            const int current = inFlightCount_.fetch_add(1) + 1;
+            if (externalInFlightCount_) externalInFlightCount_->store(current);
+        }
         if (asyncEnabled_) {
-            {
-                std::lock_guard lock(outputMutex_);
-                inFlightOrder_.push_back(slotIndex(slot));
-                const int current = inFlightCount_.fetch_add(1) + 1;
-                if (externalInFlightCount_) externalInFlightCount_->store(current);
-            }
             outputCv_.notify_one();
             ++frameIndex_;
             status = "Direct NVENC async pipeline is queueing H.264 frames.";
@@ -805,34 +821,13 @@ public:
             return true;
         }
 
-        EncodedPacket packet;
-        bool produced = false;
-        NvencOutputTimings outputTimings;
-        const int64_t drainStarted100ns = monotonicNow100ns();
-        if (!lockOutputSlot(*slot, packet, status, produced, outputTimings)) {
-            return false;
-        }
-        const int64_t drainLatency100ns = monotonicNow100ns() - drainStarted100ns;
-        const int64_t outputTimingRecorded100ns = monotonicNow100ns();
-        if (outputLockLatency_) {
-            outputLockLatency_->record(outputTimingRecorded100ns, outputTimings.lock100ns);
-        }
-        if (outputCopyLatency_) {
-            outputCopyLatency_->record(outputTimingRecorded100ns, outputTimings.copy100ns);
-        }
-        if (outputUnmapLatency_) {
-            outputUnmapLatency_->record(outputTimingRecorded100ns, outputTimings.unmap100ns);
-        }
-        outputDrainSamples_.fetch_add(1, std::memory_order_relaxed);
-        totalOutputDrainLatency100ns_.fetch_add(drainLatency100ns, std::memory_order_relaxed);
-        updateMaximum(maximumOutputDrainLatency100ns_, drainLatency100ns);
-        slot->inFlight = false;
-        if (produced) {
-            packets.push_back(std::move(packet));
-        }
         ++frameIndex_;
-        status = "Direct NVENC is outputting H.264 packets.";
-        return true;
+        if (inFlightCount_.load(std::memory_order_relaxed) <
+            static_cast<int>(syncOutputDelay_)) {
+            status = "Direct NVENC buffered sync pipeline is priming output.";
+            return true;
+        }
+        return drainOldestSyncOutput(packets, status);
     }
 
     bool drainPending(std::vector<EncodedPacket>& packets, std::string& status) {
@@ -902,6 +897,380 @@ private:
         NV_ENC_REGISTERED_PTR registeredResource = nullptr;
         NV_ENC_BUFFER_FORMAT bufferFormat = NV_ENC_BUFFER_FORMAT_UNDEFINED;
     };
+
+    bool initializeD3dDevices(ID3D11Texture2D* texture, std::string& status) {
+        if (!texture) {
+            status = "NVENC initialize failed: captured texture is null.";
+            return false;
+        }
+        if (captureDevice_ && device_) return true;
+
+        texture->GetDevice(&captureDevice_);
+        if (!captureDevice_) {
+            status = "NVENC initialize failed: could not get the capture D3D11 device.";
+            return false;
+        }
+        captureDevice_->GetImmediateContext(&captureContext_);
+        if (!captureContext_) {
+            status = "NVENC initialize failed: could not get the capture D3D11 context.";
+            return false;
+        }
+        Microsoft::WRL::ComPtr<ID3D11Multithread> captureMultithread;
+        if (SUCCEEDED(captureContext_.As(&captureMultithread)) && captureMultithread) {
+            captureMultithread->SetMultithreadProtected(TRUE);
+        }
+
+        Microsoft::WRL::ComPtr<IDXGIDevice> captureDxgiDevice;
+        Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+        HRESULT hr = captureDevice_.As(&captureDxgiDevice);
+        if (FAILED(hr) || !captureDxgiDevice ||
+            FAILED(captureDxgiDevice->GetAdapter(&adapter)) || !adapter) {
+            status = "NVENC initialize failed: could not resolve the capture GPU adapter.";
+            return false;
+        }
+
+        D3D_FEATURE_LEVEL featureLevels[] {
+            D3D_FEATURE_LEVEL_11_1,
+            D3D_FEATURE_LEVEL_11_0,
+        };
+        D3D_FEATURE_LEVEL selectedFeatureLevel {};
+        UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+        hr = D3D11CreateDevice(
+            adapter.Get(),
+            D3D_DRIVER_TYPE_UNKNOWN,
+            nullptr,
+            flags,
+            featureLevels,
+            ARRAYSIZE(featureLevels),
+            D3D11_SDK_VERSION,
+            &device_,
+            &selectedFeatureLevel,
+            &context_);
+        if (FAILED(hr)) {
+            flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+            hr = D3D11CreateDevice(
+                adapter.Get(),
+                D3D_DRIVER_TYPE_UNKNOWN,
+                nullptr,
+                flags,
+                featureLevels,
+                ARRAYSIZE(featureLevels),
+                D3D11_SDK_VERSION,
+                &device_,
+                &selectedFeatureLevel,
+                &context_);
+        }
+        if (FAILED(hr) || !device_ || !context_) {
+            std::ostringstream message;
+            message << "NVENC initialize failed: separate D3D11 encoder device creation failed, HRESULT 0x"
+                    << std::hex << hr;
+            status = message.str();
+            return false;
+        }
+
+        Microsoft::WRL::ComPtr<ID3D11Multithread> encoderMultithread;
+        if (SUCCEEDED(context_.As(&encoderMultithread)) && encoderMultithread) {
+            encoderMultithread->SetMultithreadProtected(TRUE);
+        }
+        separateEncoderDevice_ = device_.Get() != captureDevice_.Get();
+        return true;
+    }
+
+    void resetPreparedFrameBridge() {
+        canonicalOutputView_.Reset();
+        canonicalTexture_.Reset();
+        canonicalCaptureEpoch_ = 0;
+        canonicalSourceFrameSequence_ = 0;
+        canonicalScalerGeneration_ = 0;
+        encoderBridgeMutex_.Reset();
+        captureBridgeMutex_.Reset();
+        encoderBridgeTexture_.Reset();
+        captureBridgeTexture_.Reset();
+        bridgeCaptureDevice_.Reset();
+        bridgeWidth_ = 0;
+        bridgeHeight_ = 0;
+        bridgeFormat_ = DXGI_FORMAT_UNKNOWN;
+        inputViews_.clear();
+    }
+
+    bool ensureSharedCaptureBridge(const CapturedFrame& frame, std::string& status) {
+        if (!frame.texture || !captureDevice_ || !device_) {
+            status = "NVENC shared-frame bridge failed: capture or encoder device is unavailable.";
+            return false;
+        }
+
+        Microsoft::WRL::ComPtr<ID3D11Device> frameDevice;
+        frame.texture->GetDevice(&frameDevice);
+        D3D11_TEXTURE2D_DESC frameDesc {};
+        frame.texture->GetDesc(&frameDesc);
+        if (captureBridgeTexture_ && encoderBridgeTexture_ &&
+            bridgeCaptureDevice_.Get() == frameDevice.Get() &&
+            bridgeWidth_ == frameDesc.Width &&
+            bridgeHeight_ == frameDesc.Height &&
+            bridgeFormat_ == frameDesc.Format) {
+            return true;
+        }
+
+        resetPreparedFrameBridge();
+        if (!frameDevice || frameDevice.Get() != captureDevice_.Get()) {
+            status = "NVENC shared-frame bridge failed: captured texture changed D3D11 devices.";
+            return false;
+        }
+
+        D3D11_TEXTURE2D_DESC bridgeDesc {};
+        bridgeDesc.Width = frameDesc.Width;
+        bridgeDesc.Height = frameDesc.Height;
+        bridgeDesc.MipLevels = 1;
+        bridgeDesc.ArraySize = 1;
+        bridgeDesc.Format = frameDesc.Format;
+        bridgeDesc.SampleDesc.Count = 1;
+        bridgeDesc.Usage = D3D11_USAGE_DEFAULT;
+        bridgeDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        bridgeDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+
+        HRESULT hr = captureDevice_->CreateTexture2D(&bridgeDesc, nullptr, &captureBridgeTexture_);
+        if (FAILED(hr) || !captureBridgeTexture_) {
+            std::ostringstream message;
+            message << "NVENC shared-frame bridge creation failed, HRESULT 0x" << std::hex << hr;
+            status = message.str();
+            return false;
+        }
+
+        Microsoft::WRL::ComPtr<IDXGIResource> sharedResource;
+        HANDLE sharedHandle = nullptr;
+        hr = captureBridgeTexture_.As(&sharedResource);
+        if (FAILED(hr) || !sharedResource || FAILED(sharedResource->GetSharedHandle(&sharedHandle)) ||
+            !sharedHandle) {
+            status = "NVENC shared-frame bridge failed: shared texture handle is unavailable.";
+            resetPreparedFrameBridge();
+            return false;
+        }
+        hr = device_->OpenSharedResource(
+            sharedHandle,
+            __uuidof(ID3D11Texture2D),
+            reinterpret_cast<void**>(encoderBridgeTexture_.GetAddressOf()));
+        if (FAILED(hr) || !encoderBridgeTexture_) {
+            std::ostringstream message;
+            message << "NVENC shared-frame bridge open failed, HRESULT 0x" << std::hex << hr;
+            status = message.str();
+            resetPreparedFrameBridge();
+            return false;
+        }
+        hr = captureBridgeTexture_.As(&captureBridgeMutex_);
+        if (FAILED(hr) || !captureBridgeMutex_ ||
+            FAILED(encoderBridgeTexture_.As(&encoderBridgeMutex_)) || !encoderBridgeMutex_) {
+            status = "NVENC shared-frame bridge failed: keyed mutex is unavailable.";
+            resetPreparedFrameBridge();
+            return false;
+        }
+
+        bridgeCaptureDevice_ = frameDevice;
+        bridgeWidth_ = frameDesc.Width;
+        bridgeHeight_ = frameDesc.Height;
+        bridgeFormat_ = frameDesc.Format;
+        return true;
+    }
+
+    bool ensureCanonicalSurface(int inputWidth, int inputHeight, std::string& status) {
+        const DXGI_FORMAT format = supportsNv12Input_
+            ? DXGI_FORMAT_NV12
+            : DXGI_FORMAT_B8G8R8A8_UNORM;
+        if (format == DXGI_FORMAT_NV12 && !ensureVideoScaler(inputWidth, inputHeight, status)) {
+            return false;
+        }
+
+        if (canonicalTexture_) {
+            D3D11_TEXTURE2D_DESC existing {};
+            canonicalTexture_->GetDesc(&existing);
+            const bool generationMatches = format != DXGI_FORMAT_NV12 ||
+                canonicalScalerGeneration_ == scalerGeneration_;
+            if (existing.Width == static_cast<UINT>(width_) &&
+                existing.Height == static_cast<UINT>(height_) &&
+                existing.Format == format && generationMatches) {
+                return true;
+            }
+            canonicalOutputView_.Reset();
+            canonicalTexture_.Reset();
+        }
+
+        D3D11_TEXTURE2D_DESC textureDesc {};
+        textureDesc.Width = static_cast<UINT>(std::max(1, width_));
+        textureDesc.Height = static_cast<UINT>(std::max(1, height_));
+        textureDesc.MipLevels = 1;
+        textureDesc.ArraySize = 1;
+        textureDesc.Format = format;
+        textureDesc.SampleDesc.Count = 1;
+        textureDesc.Usage = D3D11_USAGE_DEFAULT;
+        textureDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
+        if (format == DXGI_FORMAT_B8G8R8A8_UNORM) {
+            textureDesc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+        }
+        HRESULT hr = device_->CreateTexture2D(&textureDesc, nullptr, &canonicalTexture_);
+        if (FAILED(hr) || !canonicalTexture_) {
+            std::ostringstream message;
+            message << "NVENC canonical surface creation failed, HRESULT 0x" << std::hex << hr;
+            status = message.str();
+            return false;
+        }
+
+        if (format == DXGI_FORMAT_NV12) {
+            D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outputDesc {};
+            outputDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+            outputDesc.Texture2D.MipSlice = 0;
+            hr = videoDevice_->CreateVideoProcessorOutputView(
+                canonicalTexture_.Get(),
+                videoProcessorEnumerator_.Get(),
+                &outputDesc,
+                &canonicalOutputView_);
+            if (FAILED(hr) || !canonicalOutputView_) {
+                std::ostringstream message;
+                message << "NVENC canonical NV12 view creation failed, HRESULT 0x" << std::hex << hr;
+                status = message.str();
+                canonicalTexture_.Reset();
+                return false;
+            }
+            if (videoContext1_) {
+                videoContext1_->VideoProcessorSetOutputColorSpace1(
+                    videoProcessor_.Get(),
+                    DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+            }
+        }
+        canonicalScalerGeneration_ = scalerGeneration_;
+        canonicalCaptureEpoch_ = 0;
+        canonicalSourceFrameSequence_ = 0;
+        return true;
+    }
+
+    bool prepareCanonicalFrame(const CapturedFrame& frame, std::string& status) {
+        if (!ensureSharedCaptureBridge(frame, status) ||
+            !ensureCanonicalSurface(frame.width, frame.height, status)) {
+            return false;
+        }
+
+        constexpr DWORD bridgeWaitMs = 1000;
+        HRESULT hr = captureBridgeMutex_->AcquireSync(0, bridgeWaitMs);
+        if (hr != S_OK) {
+            std::ostringstream message;
+            message << "NVENC shared-frame producer wait failed, HRESULT 0x" << std::hex << hr;
+            status = message.str();
+            return false;
+        }
+        captureContext_->CopyResource(captureBridgeTexture_.Get(), frame.texture.Get());
+        hr = captureBridgeMutex_->ReleaseSync(1);
+        if (FAILED(hr)) {
+            status = "NVENC shared-frame producer release failed.";
+            return false;
+        }
+
+        hr = encoderBridgeMutex_->AcquireSync(1, bridgeWaitMs);
+        if (hr != S_OK) {
+            std::ostringstream message;
+            message << "NVENC shared-frame consumer wait failed, HRESULT 0x" << std::hex << hr;
+            status = message.str();
+            return false;
+        }
+
+        bool prepared = true;
+        D3D11_TEXTURE2D_DESC canonicalDesc {};
+        canonicalTexture_->GetDesc(&canonicalDesc);
+        if (canonicalDesc.Format == DXGI_FORMAT_NV12) {
+            auto inputView = videoProcessorInputView(encoderBridgeTexture_.Get(), status);
+            if (!inputView) {
+                prepared = false;
+            } else {
+                D3D11_VIDEO_PROCESSOR_STREAM stream {};
+                stream.Enable = TRUE;
+                stream.pInputSurface = inputView.Get();
+                hr = videoContext_->VideoProcessorBlt(
+                    videoProcessor_.Get(), canonicalOutputView_.Get(), 0, 1, &stream);
+                if (FAILED(hr)) {
+                    std::ostringstream message;
+                    message << "NVENC canonical conversion failed, HRESULT 0x" << std::hex << hr;
+                    status = message.str();
+                    prepared = false;
+                }
+            }
+        } else {
+            context_->CopyResource(canonicalTexture_.Get(), encoderBridgeTexture_.Get());
+        }
+
+        const HRESULT releaseHr = encoderBridgeMutex_->ReleaseSync(0);
+        if (FAILED(releaseHr)) {
+            status = "NVENC shared-frame consumer release failed.";
+            return false;
+        }
+        if (!prepared) return false;
+
+        canonicalCaptureEpoch_ = frame.captureEpoch;
+        canonicalSourceFrameSequence_ = frame.sequence;
+        return true;
+    }
+
+    bool ensureEncoderInputSurface(OutputSlot& slot, std::string& status) {
+        if (!canonicalTexture_) {
+            status = "NVENC input surface failed: canonical frame is unavailable.";
+            return false;
+        }
+        D3D11_TEXTURE2D_DESC canonicalDesc {};
+        canonicalTexture_->GetDesc(&canonicalDesc);
+        if (slot.scaledTexture) {
+            D3D11_TEXTURE2D_DESC existing {};
+            slot.scaledTexture->GetDesc(&existing);
+            if (existing.Width == canonicalDesc.Width &&
+                existing.Height == canonicalDesc.Height &&
+                existing.Format == canonicalDesc.Format) {
+                return true;
+            }
+            slot.scaledOutputView.Reset();
+            slot.scaledTexture.Reset();
+            slot.surfaceCaptureEpoch = 0;
+            slot.surfaceSourceFrameSequence = 0;
+        }
+
+        canonicalDesc.MiscFlags = 0;
+        canonicalDesc.CPUAccessFlags = 0;
+        canonicalDesc.Usage = D3D11_USAGE_DEFAULT;
+        const HRESULT hr = device_->CreateTexture2D(&canonicalDesc, nullptr, &slot.scaledTexture);
+        if (FAILED(hr) || !slot.scaledTexture) {
+            std::ostringstream message;
+            message << "NVENC registered input surface creation failed, HRESULT 0x" << std::hex << hr;
+            status = message.str();
+            return false;
+        }
+        slot.scaledViewGeneration = canonicalScalerGeneration_;
+        slot.surfaceCaptureEpoch = 0;
+        slot.surfaceSourceFrameSequence = 0;
+        return true;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> prepareSharedFrameForEncode(
+        const CapturedFrame& frame,
+        OutputSlot& slot,
+        NvencFrameTimings::InputPath& inputPath,
+        std::string& status) {
+        const bool canonicalChanged =
+            !canonicalTexture_ ||
+            canonicalCaptureEpoch_ != frame.captureEpoch ||
+            canonicalSourceFrameSequence_ != frame.sequence;
+        if (canonicalChanged && !prepareCanonicalFrame(frame, status)) return nullptr;
+        if (!ensureEncoderInputSurface(slot, status)) return nullptr;
+
+        const bool slotAlreadyContainsFrame =
+            frame.sequence != 0 &&
+            slot.surfaceCaptureEpoch == frame.captureEpoch &&
+            slot.surfaceSourceFrameSequence == frame.sequence;
+        if (!slotAlreadyContainsFrame) {
+            context_->CopyResource(slot.scaledTexture.Get(), canonicalTexture_.Get());
+            slot.surfaceCaptureEpoch = frame.captureEpoch;
+            slot.surfaceSourceFrameSequence = frame.sequence;
+        }
+        inputPath = canonicalChanged
+            ? NvencFrameTimings::InputPath::VideoProcessor
+            : (slotAlreadyContainsFrame
+                ? NvencFrameTimings::InputPath::CachedSurface
+                : NvencFrameTimings::InputPath::BgraCopyFallback);
+        return slot.scaledTexture;
+    }
 
     void startOutputThread() {
         if (outputThreadRunning_.exchange(true)) return;
@@ -1017,6 +1386,9 @@ private:
         if (!frame.texture || !device_ || width_ <= 0 || height_ <= 0) {
             status = "NVENC input preparation failed: invalid frame or output size.";
             return nullptr;
+        }
+        if (separateEncoderDevice_) {
+            return prepareSharedFrameForEncode(frame, slot, inputPath, status);
         }
         D3D11_TEXTURE2D_DESC frameDesc {};
         frame.texture->GetDesc(&frameDesc);
@@ -1454,7 +1826,12 @@ private:
     }
 
     bool drainReady(std::vector<EncodedPacket>& packets, std::string& status) {
-        if (!asyncEnabled_) return true;
+        if (!asyncEnabled_) {
+            while (inFlightCount_.load(std::memory_order_relaxed) > 0) {
+                if (!drainOldestSyncOutput(packets, status)) return false;
+            }
+            return true;
+        }
         collectCompletedPackets(packets);
         if (outputFatal_.load()) {
             std::lock_guard lock(outputMutex_);
@@ -1490,6 +1867,56 @@ private:
         return true;
     }
 
+    bool drainOldestSyncOutput(
+        std::vector<EncodedPacket>& packets,
+        std::string& status) {
+        std::size_t index = 0;
+        {
+            std::lock_guard lock(outputMutex_);
+            if (inFlightOrder_.empty()) return true;
+            index = inFlightOrder_.front();
+        }
+        if (index >= outputSlots_.size()) {
+            status = "NVENC buffered sync drain failed: output slot index is invalid.";
+            return false;
+        }
+
+        auto& slot = outputSlots_[index];
+        EncodedPacket packet;
+        bool produced = false;
+        NvencOutputTimings outputTimings;
+        const int64_t drainStarted100ns = monotonicNow100ns();
+        if (!lockOutputSlot(slot, packet, status, produced, outputTimings)) return false;
+        const int64_t drainLatency100ns = monotonicNow100ns() - drainStarted100ns;
+        const int64_t outputTimingRecorded100ns = monotonicNow100ns();
+        if (outputLockLatency_) {
+            outputLockLatency_->record(outputTimingRecorded100ns, outputTimings.lock100ns);
+        }
+        if (outputCopyLatency_) {
+            outputCopyLatency_->record(outputTimingRecorded100ns, outputTimings.copy100ns);
+        }
+        if (outputUnmapLatency_) {
+            outputUnmapLatency_->record(outputTimingRecorded100ns, outputTimings.unmap100ns);
+        }
+        outputDrainSamples_.fetch_add(1, std::memory_order_relaxed);
+        totalOutputDrainLatency100ns_.fetch_add(drainLatency100ns, std::memory_order_relaxed);
+        updateMaximum(maximumOutputDrainLatency100ns_, drainLatency100ns);
+
+        {
+            std::lock_guard lock(outputMutex_);
+            if (!inFlightOrder_.empty() && inFlightOrder_.front() == index) {
+                inFlightOrder_.pop_front();
+            }
+            slot.inFlight = false;
+            const int remaining = inFlightCount_.fetch_sub(1) - 1;
+            if (externalInFlightCount_) externalInFlightCount_->store(std::max(0, remaining));
+        }
+        outputCv_.notify_all();
+        if (produced) packets.push_back(std::move(packet));
+        status = "Direct NVENC buffered sync pipeline is outputting H.264 packets.";
+        return true;
+    }
+
     bool lockOutputSlot(
         OutputSlot& slot,
         EncodedPacket& packet,
@@ -1500,19 +1927,12 @@ private:
         timings = {};
         const int64_t lockStarted100ns = monotonicNow100ns();
         NV_ENC_LOCK_BITSTREAM lock {};
-        NVENCSTATUS nvStatus = NV_ENC_SUCCESS;
-        do {
-            lock = {};
-            lock.version = nvencStructVersionForApi(2, apiVersion_, true);
-            lock.outputBitstream = slot.bitstreamBuffer;
-            lock.doNotWait = asyncEnabled_ ? 1 : 0;
-            nvStatus = funcs_.nvEncLockBitstream(encoder_, &lock);
-            if (nvStatus != NV_ENC_ERR_LOCK_BUSY || !asyncEnabled_) break;
-
-            ++timings.lockBusyRetries;
-            if (monotonicNow100ns() - lockStarted100ns >= asyncDrainWaitTimeout100ns_) break;
-            SwitchToThread();
-        } while (true);
+        lock.version = nvencStructVersionForApi(2, apiVersion_, true);
+        lock.outputBitstream = slot.bitstreamBuffer;
+        // NVIDIA recommends a blocking lock for DirectX input. In async mode
+        // the completion event has already fired before this call.
+        lock.doNotWait = 0;
+        const NVENCSTATUS nvStatus = funcs_.nvEncLockBitstream(encoder_, &lock);
         timings.lock100ns = monotonicNow100ns() - lockStarted100ns;
         if (nvStatus != NV_ENC_SUCCESS) {
             status = "NvEncLockBitstream failed: " + statusDetails(nvStatus);
@@ -1760,6 +2180,7 @@ private:
         videoContext_.Reset();
         videoDevice_.Reset();
         context_.Reset();
+        resetPreparedFrameBridge();
         inputViews_.clear();
         presetGuid_ = {};
         encodeConfig_ = {};
@@ -1799,6 +2220,9 @@ private:
     void destroy() {
         destroyEncoderResources();
         device_.Reset();
+        captureContext_.Reset();
+        captureDevice_.Reset();
+        separateEncoderDevice_ = false;
         if (module_) {
             FreeLibrary(module_);
             module_ = nullptr;
@@ -1808,6 +2232,8 @@ private:
 
     HMODULE module_ = nullptr;
     NV_ENCODE_API_FUNCTION_LIST funcs_ {};
+    Microsoft::WRL::ComPtr<ID3D11Device> captureDevice_;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> captureContext_;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID3D11VideoDevice> videoDevice_;
@@ -1815,6 +2241,13 @@ private:
     Microsoft::WRL::ComPtr<ID3D11VideoContext1> videoContext1_;
     Microsoft::WRL::ComPtr<ID3D11VideoProcessorEnumerator> videoProcessorEnumerator_;
     Microsoft::WRL::ComPtr<ID3D11VideoProcessor> videoProcessor_;
+    Microsoft::WRL::ComPtr<ID3D11Device> bridgeCaptureDevice_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> captureBridgeTexture_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> encoderBridgeTexture_;
+    Microsoft::WRL::ComPtr<IDXGIKeyedMutex> captureBridgeMutex_;
+    Microsoft::WRL::ComPtr<IDXGIKeyedMutex> encoderBridgeMutex_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> canonicalTexture_;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorOutputView> canonicalOutputView_;
     PacketRingBuffer& packetPool_;
     std::atomic<int>* externalInFlightCount_ = nullptr;
     std::atomic<int>* externalDropCount_ = nullptr;
@@ -1873,12 +2306,20 @@ private:
     bool supportsDirectCaptureInput_ = false;
     bool directCaptureFallbackLogged_ = false;
     bool directBgraFallbackLogged_ = false;
+    bool separateEncoderDevice_ = false;
+    UINT bridgeWidth_ = 0;
+    UINT bridgeHeight_ = 0;
+    DXGI_FORMAT bridgeFormat_ = DXGI_FORMAT_UNKNOWN;
+    uint64_t canonicalCaptureEpoch_ = 0;
+    uint64_t canonicalSourceFrameSequence_ = 0;
+    uint64_t canonicalScalerGeneration_ = 0;
     uint32_t frameIndex_ = 0;
     int64_t nextKeyframePts100ns_ = 0;
     std::size_t nextOutputSlot_ = 0;
     static constexpr std::size_t maxRegisteredInputs_ = 32;
     static constexpr std::size_t maximumInputViewCacheSize_ = 16;
     static constexpr std::size_t outputSlotCount_ = 12;
+    static constexpr std::size_t syncOutputDelay_ = 3;
     static constexpr std::size_t minimumPreparedSubmissionDepth_ = 2;
     static constexpr std::size_t maximumPreparedSubmissionDepth_ = outputSlotCount_ / 2;
     std::size_t preparedSubmissionDepth_ = minimumPreparedSubmissionDepth_;
@@ -1928,6 +2369,13 @@ void EncoderWorker::start() {
 void EncoderWorker::stop() {
     if (!running_.exchange(false)) return;
     frames_.stop();
+    {
+        std::lock_guard lock(submitMutex_);
+        pendingJobs_.clear();
+        pendingOutputTicks_ = 0;
+        pendingFreshTicks_ = 0;
+        pendingRepeatTicks_ = 0;
+    }
     submitCv_.notify_all();
     if (thread_.joinable()) thread_.join();
     submitCv_.notify_all();
@@ -2003,7 +2451,17 @@ int EncoderWorker::framesEncoded() const {
 
 int EncoderWorker::queuedEncodeFrames() const {
     std::lock_guard lock(submitMutex_);
-    return static_cast<int>(pendingJobs_.size());
+    return static_cast<int>(std::min<std::size_t>(pendingOutputTicks_, INT_MAX));
+}
+
+int EncoderWorker::queuedFreshEncodeFrames() const {
+    std::lock_guard lock(submitMutex_);
+    return static_cast<int>(std::min<std::size_t>(pendingFreshTicks_, INT_MAX));
+}
+
+int EncoderWorker::queuedRepeatEncodeFrames() const {
+    std::lock_guard lock(submitMutex_);
+    return static_cast<int>(std::min<std::size_t>(pendingRepeatTicks_, INT_MAX));
 }
 
 int EncoderWorker::schedulerDroppedFrames() const {
@@ -2152,55 +2610,59 @@ void EncoderWorker::setStatus(std::string status) {
     status_ = std::move(status);
 }
 
-bool EncoderWorker::queueJob(EncodeJob job) {
+bool EncoderWorker::queueTick(EncodeJob job) {
     std::unique_lock lock(submitMutex_);
-    const uint64_t sourceSequence = job.frame.sequence;
-    const bool repeatsObservedSource = sourceSequence != 0 && sourceSequence == lastObservedSourceSequence_;
-    if (sourceSequence != 0) lastObservedSourceSequence_ = sourceSequence;
-    const bool matchingSourceAlreadyQueued = repeatsObservedSource &&
-        std::any_of(pendingJobs_.begin(), pendingJobs_.end(), [sourceSequence](const EncodeJob& pending) {
-            return pending.frame.sequence == sourceSequence;
-        });
-
-    const auto admission = encoderQueueAdmission(
-        pendingJobs_.size(),
-        maximumPendingJobs_,
-        repeatsObservedSource,
-        matchingSourceAlreadyQueued);
-    if (admission == EncoderQueueAdmission::CoalesceRepeat) {
-        ++encoderRepeatCoalesced_;
-        return false;
+    job.run.tickCount = 1;
+    const bool repeatedTick = !job.run.beginsWithFreshSource;
+    const bool canMergeTail = repeatedTick && !pendingJobs_.empty() &&
+        pendingJobs_.back().fps == job.fps &&
+        pendingJobs_.back().bitrateMbps == job.bitrateMbps &&
+        pendingJobs_.back().targetWidth == job.targetWidth &&
+        pendingJobs_.back().targetHeight == job.targetHeight &&
+        pendingJobs_.back().maxEncodeWidth == job.maxEncodeWidth &&
+        pendingJobs_.back().maxEncodeHeight == job.maxEncodeHeight &&
+        pendingJobs_.back().nvencPreset == job.nvencPreset &&
+        pendingJobs_.back().configVersion == job.configVersion &&
+        pendingJobs_.back().freshFrameVersion == job.freshFrameVersion &&
+        cfrRunCanAppend(
+            pendingJobs_.back().run,
+            job.run.sourceSequence,
+            job.run.captureEpoch,
+            job.run.firstPts100ns,
+            job.run.frameSpacing100ns);
+    if (canMergeTail) {
+        ++pendingJobs_.back().run.tickCount;
+        ++pendingOutputTicks_;
+        ++pendingRepeatTicks_;
+        lock.unlock();
+        ++framesAccepted_;
+        submitCv_.notify_one();
+        return true;
     }
-    if (admission == EncoderQueueAdmission::WaitForRoom) {
-        submitCv_.wait_for(lock, encoderQueueWaitBudget(), [this] {
-            return !running_.load() || pendingJobs_.size() < maximumPendingJobs_;
+
+    if (pendingJobs_.size() >= maximumPendingRuns_) {
+        submitCv_.wait_for(lock, std::chrono::milliseconds(1), [this] {
+            return !running_.load() || pendingJobs_.size() < maximumPendingRuns_;
         });
     }
     if (!running_.load()) return false;
-    if (pendingJobs_.size() >= maximumPendingJobs_) {
-        if (repeatsObservedSource) {
+    if (pendingJobs_.size() >= maximumPendingRuns_) {
+        if (repeatedTick) {
             ++encoderRepeatCoalesced_;
             return false;
         }
-        uint64_t previousSequence = lastDequeuedSourceSequence_;
-        auto repeated = pendingJobs_.end();
-        for (auto it = pendingJobs_.begin(); it != pendingJobs_.end(); ++it) {
-            const uint64_t queuedSequence = it->frame.sequence;
-            if (queuedSequence != 0 && queuedSequence == previousSequence) {
-                repeated = it;
-                break;
-            }
-            if (queuedSequence != 0) previousSequence = queuedSequence;
-        }
-        if (repeated != pendingJobs_.end()) {
-            pendingJobs_.erase(repeated);
-            ++encoderRepeatCoalesced_;
-        } else {
-            pendingJobs_.pop_front();
-            ++encoderQueueDrops_;
-            ++encoderBackpressureDrops_;
-        }
+        const auto droppedRun = pendingJobs_.front().run;
+        pendingOutputTicks_ -= std::min<std::size_t>(pendingOutputTicks_, droppedRun.tickCount);
+        pendingFreshTicks_ -= std::min<std::size_t>(pendingFreshTicks_, cfrFreshTickCount(droppedRun));
+        pendingRepeatTicks_ -= std::min<std::size_t>(pendingRepeatTicks_, cfrRepeatTickCount(droppedRun));
+        pendingJobs_.pop_front();
+        const int droppedTicks = static_cast<int>(std::min<uint32_t>(droppedRun.tickCount, INT_MAX));
+        encoderQueueDrops_.fetch_add(droppedTicks);
+        encoderBackpressureDrops_.fetch_add(droppedTicks);
     }
+    pendingOutputTicks_ += job.run.tickCount;
+    pendingFreshTicks_ += cfrFreshTickCount(job.run);
+    pendingRepeatTicks_ += cfrRepeatTickCount(job.run);
     pendingJobs_.push_back(std::move(job));
     lock.unlock();
     ++framesAccepted_;
@@ -2240,8 +2702,9 @@ void EncoderWorker::run() {
             {
                 std::lock_guard lock(submitMutex_);
                 pendingJobs_.clear();
-                lastObservedSourceSequence_ = 0;
-                lastDequeuedSourceSequence_ = 0;
+                pendingOutputTicks_ = 0;
+                pendingFreshTicks_ = 0;
+                pendingRepeatTicks_ = 0;
             }
             submitCv_.notify_all();
             activeFps = fps;
@@ -2306,7 +2769,16 @@ void EncoderWorker::run() {
                 scalingActive_ = frameToEncode.width != outputWidth || frameToEncode.height != outputHeight;
 
                 const uint64_t sourceSequence = frameToEncode.sequence;
-                if (queueJob(EncodeJob {
+                const bool repeatsSourceFrame =
+                    lastSubmittedSourceSequence != 0 &&
+                    sourceSequence == lastSubmittedSourceSequence;
+                if (!shouldScheduleCfrTick(
+                        sourceSequence,
+                        lastSubmittedSourceSequence,
+                        kEnableStillFrameDuplication)) {
+                    continue;
+                }
+                if (queueTick(EncodeJob {
                         std::move(frameToEncode),
                         fps,
                         std::clamp(targetBitrateMbps_.load(), 4, 120),
@@ -2317,8 +2789,16 @@ void EncoderWorker::run() {
                         std::clamp(nvencPreset_.load(std::memory_order_relaxed), 1, 5),
                         configVersion_.load(),
                         currentFreshFrameVersion,
+                        CfrFrameRun {
+                            sourceSequence,
+                            currentFrame->captureEpoch,
+                            tickPts100ns,
+                            frameSpacing100ns,
+                            1,
+                            !repeatsSourceFrame,
+                        },
                     })) {
-                    if (lastSubmittedSourceSequence != 0 && sourceSequence == lastSubmittedSourceSequence) {
+                    if (repeatsSourceFrame) {
                         ++schedulerRepeatedFrames_;
                     }
                     lastSubmittedSourceSequence = sourceSequence;
@@ -2366,143 +2846,157 @@ void EncoderWorker::encodeLoop() {
             if (pendingJobs_.empty()) continue;
             job = std::move(pendingJobs_.front());
             pendingJobs_.pop_front();
-            lastDequeuedSourceSequence_ = job.frame.sequence;
+            pendingOutputTicks_ -= std::min<std::size_t>(pendingOutputTicks_, job.run.tickCount);
+            pendingFreshTicks_ -= std::min<std::size_t>(pendingFreshTicks_, cfrFreshTickCount(job.run));
+            pendingRepeatTicks_ -= std::min<std::size_t>(pendingRepeatTicks_, cfrRepeatTickCount(job.run));
         }
         submitCv_.notify_all();
 
-        const int64_t submitStarted100ns = monotonicNow100ns();
-        const bool freshEpochChanged = activeFreshFrameVersion >= 0 &&
-            job.freshFrameVersion != activeFreshFrameVersion;
-        const bool sessionChanged =
-            job.configVersion != activeConfigVersion ||
-            job.freshFrameVersion != activeFreshFrameVersion ||
-            job.frame.captureEpoch != activeCaptureEpoch;
-        if (sessionChanged) {
-            const int requestedConfigDiscardVersion = discardPacketsAtConfigVersion_.load();
-            const bool discardForConfig =
-                requestedConfigDiscardVersion > appliedConfigDiscardVersion &&
-                job.configVersion >= requestedConfigDiscardVersion;
-            if (discardForConfig) {
-                packets_.clear();
-                if (replayStore_) replayStore_->clear();
-                appliedConfigDiscardVersion = requestedConfigDiscardVersion;
+        for (uint32_t tick = 0; tick < job.run.tickCount; ++tick) {
+            if (!running_.load() && tick > 0) break;
+            if (job.configVersion != configVersion_.load() ||
+                job.freshFrameVersion != freshFrameVersion_.load()) {
+                break;
             }
-            const int requestedDiscardVersion = discardPacketsAtFreshFrameVersion_.load();
-            const bool discardForFreshFrame =
-                requestedDiscardVersion > appliedDiscardVersion &&
-                job.freshFrameVersion >= requestedDiscardVersion;
-            if (discardForFreshFrame) {
-                packets_.clear();
-                if (replayStore_) replayStore_->clear();
-                appliedDiscardVersion = requestedDiscardVersion;
-            }
-            std::vector<EncodedPacket> drainedPackets;
-            std::string drainStatus;
-            if (!freshEpochChanged && !discardForConfig && !discardForFreshFrame) {
-                session->drainPending(drainedPackets, drainStatus);
-                pushPackets(drainedPackets);
-            }
-            session = std::make_unique<NvencSession>(
-                packets_,
-                &nvencInFlightFrames_,
-                &encoderBackpressureDrops_,
-                &nvencSurfaceDrops_,
-                &nvencInputDrops_,
-                &recentOutputEventWaitLatency_,
-                &recentOutputLockLatency_,
-                &recentOutputCopyLatency_,
-                &recentOutputUnmapLatency_);
-            nvencInFlightFrames_ = 0;
-            nvencPreparedFrames_ = 0;
-            activeConfigVersion = job.configVersion;
-            activeFreshFrameVersion = job.freshFrameVersion;
-            activeCaptureEpoch = job.frame.captureEpoch;
-        }
 
-        std::string sessionStatus;
-        bool encoderInitialized = false;
-        bool encoded = false;
-        if (nvencRuntimeLoaded_ && session->initialize(
-                job.frame.texture.Get(),
-                job.frame.width,
-                job.frame.height,
-                job.targetWidth,
-                job.targetHeight,
-                job.maxEncodeWidth,
-                job.maxEncodeHeight,
-                job.fps,
-                job.bitrateMbps,
-                job.nvencPreset,
-                sessionStatus)) {
-            encoderInitialized = true;
-            outputWidth_ = session->outputWidth();
-            outputHeight_ = session->outputHeight();
-            scalingActive_ = job.frame.width != session->outputWidth() ||
-                job.frame.height != session->outputHeight();
-
-            std::vector<EncodedPacket> encodedPackets;
-            NvencFrameTimings timings;
-            encoded = session->encode(std::move(job.frame), encodedPackets, sessionStatus, timings);
-            if (timings.inputPath != NvencFrameTimings::InputPath::None) {
-                const int64_t timingRecorded100ns = monotonicNow100ns();
-                recentInputPreparationLatency_.record(timingRecorded100ns, timings.scale100ns);
-                recentInputMapLatency_.record(timingRecorded100ns, timings.inputMap100ns);
-                recentNvencCallLatency_.record(timingRecorded100ns, timings.encodeCall100ns);
+            CapturedFrame frameForTick = job.frame;
+            frameForTick.pts100ns = job.run.firstPts100ns +
+                static_cast<int64_t>(tick) * job.run.frameSpacing100ns;
+            const int64_t submitStarted100ns = monotonicNow100ns();
+            const bool freshEpochChanged = activeFreshFrameVersion >= 0 &&
+                job.freshFrameVersion != activeFreshFrameVersion;
+            const bool sessionChanged =
+                job.configVersion != activeConfigVersion ||
+                job.freshFrameVersion != activeFreshFrameVersion ||
+                frameForTick.captureEpoch != activeCaptureEpoch;
+            if (sessionChanged) {
+                const int requestedConfigDiscardVersion = discardPacketsAtConfigVersion_.load();
+                const bool discardForConfig =
+                    requestedConfigDiscardVersion > appliedConfigDiscardVersion &&
+                    job.configVersion >= requestedConfigDiscardVersion;
+                if (discardForConfig) {
+                    packets_.clear();
+                    if (replayStore_) replayStore_->clear();
+                    appliedConfigDiscardVersion = requestedConfigDiscardVersion;
+                }
+                const int requestedDiscardVersion = discardPacketsAtFreshFrameVersion_.load();
+                const bool discardForFreshFrame =
+                    requestedDiscardVersion > appliedDiscardVersion &&
+                    job.freshFrameVersion >= requestedDiscardVersion;
+                if (discardForFreshFrame) {
+                    packets_.clear();
+                    if (replayStore_) replayStore_->clear();
+                    appliedDiscardVersion = requestedDiscardVersion;
+                }
+                std::vector<EncodedPacket> drainedPackets;
+                std::string drainStatus;
+                if (!freshEpochChanged && !discardForConfig && !discardForFreshFrame) {
+                    session->drainPending(drainedPackets, drainStatus);
+                    pushPackets(drainedPackets);
+                }
+                session = std::make_unique<NvencSession>(
+                    packets_,
+                    &nvencInFlightFrames_,
+                    &encoderBackpressureDrops_,
+                    &nvencSurfaceDrops_,
+                    &nvencInputDrops_,
+                    &recentOutputEventWaitLatency_,
+                    &recentOutputLockLatency_,
+                    &recentOutputCopyLatency_,
+                    &recentOutputUnmapLatency_);
+                nvencInFlightFrames_ = 0;
+                nvencPreparedFrames_ = 0;
+                activeConfigVersion = job.configVersion;
+                activeFreshFrameVersion = job.freshFrameVersion;
+                activeCaptureEpoch = frameForTick.captureEpoch;
             }
-            switch (timings.inputPath) {
-                case NvencFrameTimings::InputPath::DirectCaptureBgra:
-                case NvencFrameTimings::InputPath::CachedSurface:
-                    nvencZeroCopyFrames_.fetch_add(1, std::memory_order_relaxed);
-                    break;
-                case NvencFrameTimings::InputPath::BgraCopyFallback:
-                    nvencCopyFallbackFrames_.fetch_add(1, std::memory_order_relaxed);
-                    break;
-                case NvencFrameTimings::InputPath::VideoProcessor:
-                    nvencConvertedFrames_.fetch_add(1, std::memory_order_relaxed);
-                    break;
-                case NvencFrameTimings::InputPath::None:
-                    break;
+
+            std::string sessionStatus;
+            bool encoderInitialized = false;
+            bool encoded = false;
+            if (nvencRuntimeLoaded_ && session->initialize(
+                    frameForTick.texture.Get(),
+                    frameForTick.width,
+                    frameForTick.height,
+                    job.targetWidth,
+                    job.targetHeight,
+                    job.maxEncodeWidth,
+                    job.maxEncodeHeight,
+                    job.fps,
+                    job.bitrateMbps,
+                    job.nvencPreset,
+                    sessionStatus)) {
+                encoderInitialized = true;
+                outputWidth_ = session->outputWidth();
+                outputHeight_ = session->outputHeight();
+                scalingActive_ = frameForTick.width != session->outputWidth() ||
+                    frameForTick.height != session->outputHeight();
+
+                std::vector<EncodedPacket> encodedPackets;
+                NvencFrameTimings timings;
+                encoded = session->encode(std::move(frameForTick), encodedPackets, sessionStatus, timings);
+                if (timings.inputPath != NvencFrameTimings::InputPath::None) {
+                    const int64_t timingRecorded100ns = monotonicNow100ns();
+                    recentInputPreparationLatency_.record(timingRecorded100ns, timings.scale100ns);
+                    recentInputMapLatency_.record(timingRecorded100ns, timings.inputMap100ns);
+                    recentNvencCallLatency_.record(timingRecorded100ns, timings.encodeCall100ns);
+                }
+                switch (timings.inputPath) {
+                    case NvencFrameTimings::InputPath::DirectCaptureBgra:
+                    case NvencFrameTimings::InputPath::CachedSurface:
+                        nvencZeroCopyFrames_.fetch_add(1, std::memory_order_relaxed);
+                        break;
+                    case NvencFrameTimings::InputPath::BgraCopyFallback:
+                        nvencCopyFallbackFrames_.fetch_add(1, std::memory_order_relaxed);
+                        break;
+                    case NvencFrameTimings::InputPath::VideoProcessor:
+                        nvencConvertedFrames_.fetch_add(1, std::memory_order_relaxed);
+                        break;
+                    case NvencFrameTimings::InputPath::None:
+                        break;
+                }
+                profiledSubmissions_.fetch_add(1, std::memory_order_relaxed);
+                totalScaleLatency100ns_.fetch_add(timings.scale100ns, std::memory_order_relaxed);
+                totalInputMapLatency100ns_.fetch_add(timings.inputMap100ns, std::memory_order_relaxed);
+                totalNvencCallLatency100ns_.fetch_add(timings.encodeCall100ns, std::memory_order_relaxed);
+                updateMaximum(maximumScaleLatency100ns_, timings.scale100ns);
+                updateMaximum(maximumInputMapLatency100ns_, timings.inputMap100ns);
+                updateMaximum(maximumNvencCallLatency100ns_, timings.encodeCall100ns);
+                totalOutputDrainLatency100ns_.store(
+                    session->averageOutputDrainLatency100ns(), std::memory_order_relaxed);
+                maximumOutputDrainLatency100ns_.store(
+                    session->maximumOutputDrainLatency100ns(), std::memory_order_relaxed);
+                nvencInFlightFrames_ = session->inFlightCount();
+                nvencPreparedFrames_ = session->preparedCount();
+                pushPackets(encodedPackets);
             }
-            profiledSubmissions_.fetch_add(1, std::memory_order_relaxed);
-            totalScaleLatency100ns_.fetch_add(timings.scale100ns, std::memory_order_relaxed);
-            totalInputMapLatency100ns_.fetch_add(timings.inputMap100ns, std::memory_order_relaxed);
-            totalNvencCallLatency100ns_.fetch_add(timings.encodeCall100ns, std::memory_order_relaxed);
-            updateMaximum(maximumScaleLatency100ns_, timings.scale100ns);
-            updateMaximum(maximumInputMapLatency100ns_, timings.inputMap100ns);
-            updateMaximum(maximumNvencCallLatency100ns_, timings.encodeCall100ns);
-            totalOutputDrainLatency100ns_.store(
-                session->averageOutputDrainLatency100ns(), std::memory_order_relaxed);
-            maximumOutputDrainLatency100ns_.store(
-                session->maximumOutputDrainLatency100ns(), std::memory_order_relaxed);
-            nvencInFlightFrames_ = session->inFlightCount();
-            nvencPreparedFrames_ = session->preparedCount();
-            pushPackets(encodedPackets);
-        }
 
-        if (!sessionStatus.empty()) setStatus(sessionStatus);
-        if (encoderInitialized && !encoded) {
-            std::cerr << "[encoder] Resetting NVENC session after encode failure: " << sessionStatus << std::endl;
-            session = std::make_unique<NvencSession>(
-                packets_,
-                &nvencInFlightFrames_,
-                &encoderBackpressureDrops_,
-                &nvencSurfaceDrops_,
-                &nvencInputDrops_,
-                &recentOutputEventWaitLatency_,
-                &recentOutputLockLatency_,
-                &recentOutputCopyLatency_,
-                &recentOutputUnmapLatency_);
-            nvencInFlightFrames_ = 0;
-            nvencPreparedFrames_ = 0;
-            activeConfigVersion = -1;
-            activeFreshFrameVersion = -1;
-            activeCaptureEpoch = 0;
-        }
+            if (!sessionStatus.empty()) setStatus(sessionStatus);
+            if (encoderInitialized && !encoded) {
+                std::cerr << "[encoder] Resetting NVENC session after encode failure: " << sessionStatus << std::endl;
+                session = std::make_unique<NvencSession>(
+                    packets_,
+                    &nvencInFlightFrames_,
+                    &encoderBackpressureDrops_,
+                    &nvencSurfaceDrops_,
+                    &nvencInputDrops_,
+                    &recentOutputEventWaitLatency_,
+                    &recentOutputLockLatency_,
+                    &recentOutputCopyLatency_,
+                    &recentOutputUnmapLatency_);
+                nvencInFlightFrames_ = 0;
+                nvencPreparedFrames_ = 0;
+                activeConfigVersion = -1;
+                activeFreshFrameVersion = -1;
+                activeCaptureEpoch = 0;
+                break;
+            }
 
-        const int64_t submitLatency100ns = monotonicNow100ns() - submitStarted100ns;
-        int64_t previousMaximum = maximumSubmitLatency100ns_.load();
-        while (submitLatency100ns > previousMaximum &&
-               !maximumSubmitLatency100ns_.compare_exchange_weak(previousMaximum, submitLatency100ns)) {
+            const int64_t submitLatency100ns = monotonicNow100ns() - submitStarted100ns;
+            int64_t previousMaximum = maximumSubmitLatency100ns_.load();
+            while (submitLatency100ns > previousMaximum &&
+                   !maximumSubmitLatency100ns_.compare_exchange_weak(previousMaximum, submitLatency100ns)) {
+            }
         }
     }
 

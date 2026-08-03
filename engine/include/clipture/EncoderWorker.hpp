@@ -1,5 +1,6 @@
 #pragma once
 
+#include "clipture/CfrFrameScheduler.hpp"
 #include "clipture/FrameQueue.hpp"
 #include "clipture/LatencyWindow.hpp"
 #include "clipture/PacketRingBuffer.hpp"
@@ -58,6 +59,8 @@ public:
     int framesAccepted() const;
     int framesEncoded() const;
     int queuedEncodeFrames() const;
+    int queuedFreshEncodeFrames() const;
+    int queuedRepeatEncodeFrames() const;
     int schedulerDroppedFrames() const;
     int schedulerRepeatedFrames() const;
     int encoderQueueDrops() const;
@@ -99,11 +102,12 @@ private:
         int nvencPreset = 3;
         int configVersion = 0;
         int freshFrameVersion = 0;
+        CfrFrameRun run;
     };
 
     void run();
     void encodeLoop();
-    bool queueJob(EncodeJob job);
+    bool queueTick(EncodeJob job);
     void setStatus(std::string status);
 
     FrameQueue& frames_;
@@ -114,8 +118,9 @@ private:
     mutable std::mutex submitMutex_;
     std::condition_variable submitCv_;
     std::deque<EncodeJob> pendingJobs_;
-    uint64_t lastObservedSourceSequence_ = 0;
-    uint64_t lastDequeuedSourceSequence_ = 0;
+    std::size_t pendingOutputTicks_ = 0;
+    std::size_t pendingFreshTicks_ = 0;
+    std::size_t pendingRepeatTicks_ = 0;
     mutable std::mutex statusMutex_;
     std::atomic<bool> running_ = false;
     std::atomic<bool> nvencRuntimeLoaded_ = false;
@@ -169,7 +174,7 @@ private:
     std::atomic<int> discardPacketsAtConfigVersion_ = 0;
     std::atomic<int> freshFrameVersion_ = 0;
     std::atomic<int> discardPacketsAtFreshFrameVersion_ = 0;
-    static constexpr std::size_t maximumPendingJobs_ = 8;
+    static constexpr std::size_t maximumPendingRuns_ = 8;
     std::string status_ = "Encoder worker has not started.";
 };
 

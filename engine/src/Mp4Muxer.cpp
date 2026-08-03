@@ -1805,6 +1805,9 @@ public:
     uint64_t minimumRateBytesPerSecond() const {
         return adaptiveRateEnabled_ ? rateController_.minimumRateSeen() : 0;
     }
+    uint64_t dynamicMinimumRateBytesPerSecond() const {
+        return adaptiveRateEnabled_ ? rateController_.dynamicMinimumRate() : 0;
+    }
     uint64_t maximumRateBytesPerSecond() const {
         return adaptiveRateEnabled_ ? rateController_.maximumRateSeen() : 0;
     }
@@ -2518,6 +2521,8 @@ MuxResult muxH264ToMp4(
                 bufferedOut.rateLimitBytesPerSecond() / (1024ULL * 1024ULL)) +
             " minimumRateMiBps=" + std::to_string(
                 bufferedOut.minimumRateBytesPerSecond() / (1024ULL * 1024ULL)) +
+            " measuredFloorMiBps=" + std::to_string(
+                bufferedOut.dynamicMinimumRateBytesPerSecond() / (1024ULL * 1024ULL)) +
             " maximumRateMiBps=" + std::to_string(
                 bufferedOut.maximumRateBytesPerSecond() / (1024ULL * 1024ULL)) +
             " observedWriteMiBps=" + std::to_string(

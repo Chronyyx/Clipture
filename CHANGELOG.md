@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.2.3] - 2026-08-02
+
+### Capture Performance
+
+- Rebuild constant-frame-rate scheduling around compact frame runs so unchanged source frames still produce real encoded samples at every requested output tick without filling the queue with duplicate job objects.
+- Isolate capture and NVENC on separate D3D11 devices connected by a keyed shared-texture bridge, keeping encoder conversion and resource waits away from the live capture context.
+- Convert each unique captured frame to a canonical NV12 surface once, then reuse it across repeated CFR ticks and copy it into bounded per-output NVENC surfaces.
+- Add an OBS-style buffered synchronous NVENC path that keeps three outputs queued before locking the oldest bitstream, allowing input preparation, hardware encoding, and output retrieval to overlap.
+- Keep asynchronous and legacy NVENC initialization paths as compatibility fallbacks, with developer switches for comparing buffered sync and still-frame duplication behavior.
+
+### Save Performance
+
+- Measure capture pressure relative to the state at save start so an existing encoder workload does not make every save throttle as though the save caused it.
+- Separate queued fresh frames from queued repeat ticks in save pacing and diagnostics.
+- Derive a minimum adaptive write rate from measured storage service, preventing a fast SSD from collapsing to the conservative 16 MiB/s fallback after transient pressure.
+- Recover write throughput promptly after capture pressure clears while retaining bounded 512 KB writes and low I/O priority.
+
+### Diagnostics And Validation
+
+- Report queued fresh and repeated encoder ticks independently and log the measured storage-rate floor used during a save.
+- Add deterministic coverage for compact CFR runs and measured-service write-rate floors.
+- Verified native packet tests, the production Electron build, sustained rolling capture, and a 120-second 2560x1440 save containing 7,230 video packets with zero missing frame slots or save-time drops.
+- The reference 428 MB save completed in 806 ms, and FFmpeg reported the resulting MP4 as 60 FPS with a 1:59.98 presentation duration.
+
 ## [1.2.2] - 2026-08-02
 
 ### Performance

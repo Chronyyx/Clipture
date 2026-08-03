@@ -527,6 +527,8 @@ std::string toJson(const Diagnostics& diagnostics) {
         << "\"schedulerRepeatedFrames\":" << diagnostics.schedulerRepeatedFrames << ","
         << "\"encoderQueueDrops\":" << diagnostics.encoderQueueDrops << ","
         << "\"encoderRepeatCoalesced\":" << diagnostics.encoderRepeatCoalesced << ","
+        << "\"encoderQueuedFreshFrames\":" << diagnostics.encoderQueuedFreshFrames << ","
+        << "\"encoderQueuedRepeatFrames\":" << diagnostics.encoderQueuedRepeatFrames << ","
         << "\"nvencSurfaceDrops\":" << diagnostics.nvencSurfaceDrops << ","
         << "\"nvencInputDrops\":" << diagnostics.nvencInputDrops << ","
         << "\"encoderBackpressureDrops\":" << diagnostics.encoderBackpressureDrops << ","

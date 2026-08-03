@@ -26,6 +26,7 @@ jobs:
         run: npm ci
 
       - name: Prepare release notes
+        id: release_notes
         run: node scripts/extract-release-notes.cjs "${{ github.ref_name }}" release-notes.md
 
       - name: Build Windows release
@@ -34,11 +35,14 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
+          name: ${{ steps.release_notes.outputs.release_title }}
           files: |
             release/*.exe
             release/*.exe.blockmap
             release/latest.yml
           body_path: release-notes.md
           generate_release_notes: false
+          fail_on_unmatched_files: true
+          make_latest: true

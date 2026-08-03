@@ -1395,6 +1395,14 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     const int saveStartNvencInputDrops = encoderWorker_ ? encoderWorker_->nvencInputDrops() : 0;
     const int saveStartEncoderAccepted = encoderWorker_ ? encoderWorker_->framesAccepted() : 0;
     const int saveStartEncoderEncoded = encoderWorker_ ? encoderWorker_->framesEncoded() : 0;
+    const int saveStartFrameQueueDepth = static_cast<int>(frameQueue_.size());
+    const int64_t saveStartOldestFrameAge100ns = frameQueue_.oldestFrameAge100ns();
+    const int saveStartEncoderQueueDepth = encoderWorker_ ? encoderWorker_->queuedFreshEncodeFrames() : 0;
+    const int saveStartNvencInFlight = encoderWorker_ ? encoderWorker_->nvencInFlightFrames() : 0;
+    const int64_t saveStartCaptureGap100ns = captureSession_ ? captureSession_->lastFrameInterval100ns() : 0;
+    const int64_t saveStartCapturePublicationAge100ns = captureSession_
+        ? captureSession_->lastPublishedAge100ns()
+        : 0;
     auto saveStutterDeltaDetails = [&]() {
         const int currentDroppedFrames = currentVideoDropCount();
         const int currentEncoderAccepted = encoderWorker_ ? encoderWorker_->framesAccepted() : 0;
@@ -1434,33 +1442,67 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         return details + saveStutterDeltaDetails();
     };
     MuxWritePacing savePacing {
-        [this, saveStartDroppedFrames, currentVideoDropCount, observedDroppedFrames = 0]() mutable {
+        [this,
+         saveStartDroppedFrames,
+         saveStartFrameQueueDepth,
+         saveStartOldestFrameAge100ns,
+         saveStartEncoderQueueDepth,
+         saveStartNvencInFlight,
+         saveStartCaptureGap100ns,
+         saveStartCapturePublicationAge100ns,
+         currentVideoDropCount,
+         previousPublishedFrames = saveStartCaptureStats.publishedFrames,
+         previousDesktopPresents = saveStartCaptureStats.desktopPresents]() mutable {
             MuxPressureSample sample;
             sample.frameQueueDepth = frameQueue_.size();
             sample.oldestFrameAge100ns = frameQueue_.oldestFrameAge100ns();
-            sample.encoderQueueDepth = encoderWorker_ ? encoderWorker_->queuedEncodeFrames() : 0;
+            sample.encoderQueueDepth = encoderWorker_ ? encoderWorker_->queuedFreshEncodeFrames() : 0;
             sample.nvencInFlight = encoderWorker_ ? encoderWorker_->nvencInFlightFrames() : 0;
+            const auto captureStats = captureSession_
+                ? captureSession_->runtimeStats()
+                : CaptureRuntimeStats {};
             sample.captureGap100ns = captureSession_ ? captureSession_->lastFrameInterval100ns() : 0;
             sample.capturePublicationAge100ns = captureSession_
                 ? captureSession_->lastPublishedAge100ns()
                 : 0;
+            const bool captureWasActive =
+                captureStats.publishedFrames > previousPublishedFrames ||
+                captureStats.desktopPresents > previousDesktopPresents;
+            previousPublishedFrames = captureStats.publishedFrames;
+            previousDesktopPresents = captureStats.desktopPresents;
             sample.droppedFramesDelta = currentVideoDropCount() - saveStartDroppedFrames;
-            const bool droppedSinceLastSample = sample.droppedFramesDelta > observedDroppedFrames;
-            observedDroppedFrames = std::max(observedDroppedFrames, sample.droppedFramesDelta);
             const int64_t frameInterval100ns = 10'000'000LL / std::max(1, diagnostics_.fps);
-            if (droppedSinceLastSample ||
-                sample.frameQueueDepth >= 4 ||
-                sample.oldestFrameAge100ns > frameInterval100ns * 4 ||
-                sample.encoderQueueDepth >= 6 ||
-                sample.captureGap100ns > frameInterval100ns * 4 ||
-                sample.capturePublicationAge100ns > frameInterval100ns * 4) {
+            const int frameQueueGrowth = std::max(
+                0,
+                static_cast<int>(sample.frameQueueDepth) - saveStartFrameQueueDepth);
+            const int encoderQueueGrowth = std::max(0, sample.encoderQueueDepth - saveStartEncoderQueueDepth);
+            const int nvencInFlightGrowth = std::max(0, sample.nvencInFlight - saveStartNvencInFlight);
+            const int64_t oldestAgeGrowth = std::max<int64_t>(
+                0,
+                sample.oldestFrameAge100ns - saveStartOldestFrameAge100ns);
+            const int64_t captureGapGrowth = std::max<int64_t>(
+                0,
+                sample.captureGap100ns - saveStartCaptureGap100ns);
+            const int64_t publicationAgeGrowth = std::max<int64_t>(
+                0,
+                sample.capturePublicationAge100ns - saveStartCapturePublicationAge100ns);
+            const bool captureCritical = captureWasActive && (
+                captureGapGrowth > frameInterval100ns * 4 ||
+                publicationAgeGrowth > frameInterval100ns * 4);
+            const bool captureElevated = captureWasActive && (
+                captureGapGrowth > frameInterval100ns * 2 ||
+                publicationAgeGrowth > frameInterval100ns * 2);
+            if (frameQueueGrowth >= 4 ||
+                oldestAgeGrowth > frameInterval100ns * 4 ||
+                encoderQueueGrowth >= 4 ||
+                nvencInFlightGrowth >= 6 ||
+                captureCritical) {
                 sample.level = MuxPressureLevel::Critical;
-            } else if (sample.frameQueueDepth >= 2 ||
-                       sample.oldestFrameAge100ns > frameInterval100ns * 2 ||
-                       sample.encoderQueueDepth >= 3 ||
-                       sample.nvencInFlight >= 9 ||
-                       sample.captureGap100ns > frameInterval100ns * 2 ||
-                       sample.capturePublicationAge100ns > frameInterval100ns * 2) {
+            } else if (frameQueueGrowth >= 2 ||
+                       oldestAgeGrowth > frameInterval100ns * 2 ||
+                       encoderQueueGrowth >= 2 ||
+                       nvencInFlightGrowth >= 3 ||
+                       captureElevated) {
                 sample.level = MuxPressureLevel::Elevated;
             }
             return sample;
@@ -1473,7 +1515,10 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         totalStartedAt,
         "droppedFrames=" + std::to_string(saveStartDroppedFrames) +
             " encoderAccepted=" + std::to_string(saveStartEncoderAccepted) +
-            " encoderEncoded=" + std::to_string(saveStartEncoderEncoded));
+            " encoderEncoded=" + std::to_string(saveStartEncoderEncoded) +
+            " frameQueueDepth=" + std::to_string(saveStartFrameQueueDepth) +
+            " encoderQueueDepth=" + std::to_string(saveStartEncoderQueueDepth) +
+            " nvencInFlight=" + std::to_string(saveStartNvencInFlight));
 
     if (diagnostics_.activeEncoder != EncoderName::Nvenc) {
         result.message = "Cannot save clip: direct NVENC is not available, and this MVP requires NVENC first.";
@@ -2136,6 +2181,8 @@ void Engine::refreshPacketCounts() {
         : 0.0;
     diagnostics_.encoderQueueDrops = encoderWorker_ ? encoderWorker_->encoderQueueDrops() : 0;
     diagnostics_.encoderRepeatCoalesced = encoderWorker_ ? encoderWorker_->encoderRepeatCoalesced() : 0;
+    diagnostics_.encoderQueuedFreshFrames = encoderWorker_ ? encoderWorker_->queuedFreshEncodeFrames() : 0;
+    diagnostics_.encoderQueuedRepeatFrames = encoderWorker_ ? encoderWorker_->queuedRepeatEncodeFrames() : 0;
     diagnostics_.nvencSurfaceDrops = encoderWorker_ ? encoderWorker_->nvencSurfaceDrops() : 0;
     diagnostics_.nvencInputDrops = encoderWorker_ ? encoderWorker_->nvencInputDrops() : 0;
     diagnostics_.encoderBackpressureDrops = encoderWorker_ ? encoderWorker_->encoderBackpressureDrops() : 0;

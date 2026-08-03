@@ -37,6 +37,7 @@ struct AdaptiveWritePacerConfig {
     uint64_t maximumLearnedBytesPerSecond = 4ULL * 1024ULL * 1024ULL * 1024ULL;
     std::size_t adjustmentWindowBytes = 16u * 1024u * 1024u;
     uint32_t targetUtilizationPercent = 75;
+    uint32_t minimumMeasuredServicePercent = 20;
     uint64_t minimumMeasuredWriteUs = 250;
 };
 
@@ -140,6 +141,10 @@ public:
             config_.targetUtilizationPercent,
             1,
             95);
+        config_.minimumMeasuredServicePercent = std::clamp<uint32_t>(
+            config_.minimumMeasuredServicePercent,
+            1,
+            config_.targetUtilizationPercent);
         config_.minimumMeasuredWriteUs = std::max<uint64_t>(config_.minimumMeasuredWriteUs, 1);
 
         currentBytesPerSecond_ = config_.initialBytesPerSecond;
@@ -155,15 +160,26 @@ public:
         healthyBytes_ = 0;
 
         if (pressure == AdaptiveWritePressure::Critical) {
-            setRate(std::max(config_.minimumBytesPerSecond, currentBytesPerSecond_ / 2));
+            setRate(std::max(dynamicMinimumBytesPerSecond(), currentBytesPerSecond_ / 2));
             ++pressureBackoffs_;
         } else if (
             pressure == AdaptiveWritePressure::Elevated &&
             previousPressure == AdaptiveWritePressure::Healthy) {
             setRate(std::max(
-                config_.minimumBytesPerSecond,
+                dynamicMinimumBytesPerSecond(),
                 currentBytesPerSecond_ - currentBytesPerSecond_ / 4));
             ++pressureBackoffs_;
+        } else if (
+            pressure == AdaptiveWritePressure::Healthy &&
+            previousPressure != AdaptiveWritePressure::Healthy &&
+            observedServiceBytesPerSecond_ > 0) {
+            const uint64_t healthyTarget = std::clamp(
+                observedServiceBytesPerSecond_ * config_.targetUtilizationPercent / 100,
+                dynamicMinimumBytesPerSecond(),
+                config_.maximumLearnedBytesPerSecond);
+            if (healthyTarget > currentBytesPerSecond_) {
+                setRate(currentBytesPerSecond_ + (healthyTarget - currentBytesPerSecond_) / 2);
+            }
         }
     }
 
@@ -212,11 +228,20 @@ public:
     uint64_t observedServiceBytesPerSecond() const { return observedServiceBytesPerSecond_; }
     uint64_t minimumRateSeen() const { return minimumRateSeen_; }
     uint64_t maximumRateSeen() const { return maximumRateSeen_; }
+    uint64_t dynamicMinimumRate() const { return dynamicMinimumBytesPerSecond(); }
     std::size_t rateAdjustments() const { return rateAdjustments_; }
     std::size_t pressureBackoffs() const { return pressureBackoffs_; }
     std::size_t measuredWrites() const { return measuredWrites_; }
 
 private:
+    uint64_t dynamicMinimumBytesPerSecond() const {
+        if (observedServiceBytesPerSecond_ == 0) return config_.minimumBytesPerSecond;
+        return std::clamp(
+            observedServiceBytesPerSecond_ * config_.minimumMeasuredServicePercent / 100,
+            config_.minimumBytesPerSecond,
+            config_.maximumLearnedBytesPerSecond);
+    }
+
     void setRate(uint64_t rate) {
         rate = std::clamp(
             rate,

@@ -1,8 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "private": true,
   "description": "NVENC-first Windows clipping app with Electron UI and native C++ capture engine.",
+  "releaseTitle": "Clipture 1.2.3: Stable 60 FPS Capture",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

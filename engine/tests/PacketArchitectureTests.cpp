@@ -6,7 +6,7 @@
 #include "clipture/CaptureBackendPolicy.hpp"
 #include "clipture/DesktopDuplicationHelpers.hpp"
 #include "clipture/DesktopPointerShape.hpp"
-#include "clipture/EncoderQueuePolicy.hpp"
+#include "clipture/CfrFrameScheduler.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
 #include "clipture/LatencyWindow.hpp"
 #include "clipture/FixedRateFrameSampler.hpp"
@@ -213,8 +213,9 @@ bool testAdaptiveWriteRateController() {
     controller.observePressure(clipture::AdaptiveWritePressure::Critical);
     const uint64_t criticalRate = controller.currentBytesPerSecond();
     if (!require(
-            criticalRate <= elevatedRate / 2,
-            "critical capture pressure should halve the adaptive rate")) {
+            criticalRate < elevatedRate &&
+                criticalRate >= controller.dynamicMinimumRate(),
+            "critical pressure should back off without falling below the measured service floor")) {
         return false;
     }
     controller.observePressure(clipture::AdaptiveWritePressure::Healthy);
@@ -567,22 +568,37 @@ bool testVideoTimelineCatchesUpWithoutUnboundedBursts() {
                    "final video duration should use one frame as its fallback");
 }
 
-bool testEncoderQueueProtectsFreshFrames() {
-    using clipture::EncoderQueueAdmission;
+bool testCfrFrameRunsCompactRepeatedTicks() {
+    clipture::CfrFrameRun run {
+        42,
+        7,
+        1'000'000,
+        166'666,
+        1,
+        true,
+    };
     if (!require(
-            clipture::encoderQueueAdmission(5, 8, true, false) == EncoderQueueAdmission::Enqueue,
-            "a repeat may use spare capacity while fresh-frame reserve remains")) return false;
+            clipture::cfrRunCanAppend(run, 42, 7, 1'166'666, 166'666),
+            "a contiguous repeated tick should append to its source-frame run")) return false;
+    ++run.tickCount;
     if (!require(
-            clipture::encoderQueueAdmission(6, 8, true, false) == EncoderQueueAdmission::CoalesceRepeat &&
-            clipture::encoderQueueAdmission(1, 8, true, true) == EncoderQueueAdmission::CoalesceRepeat,
-            "repeats must coalesce at the fresh reserve or behind the same source frame")) return false;
+            clipture::cfrFreshTickCount(run) == 1 && clipture::cfrRepeatTickCount(run) == 1,
+            "a run should account for its fresh tick separately from repeats")) return false;
     if (!require(
-            clipture::encoderQueueAdmission(7, 8, false, false) == EncoderQueueAdmission::Enqueue &&
-            clipture::encoderQueueAdmission(8, 8, false, false) == EncoderQueueAdmission::WaitForRoom,
-            "fresh frames should use the whole queue before bounded backpressure")) return false;
+            !clipture::cfrRunCanAppend(run, 43, 7, 1'333'332, 166'666) &&
+                !clipture::cfrRunCanAppend(run, 42, 8, 1'333'332, 166'666) &&
+                !clipture::cfrRunCanAppend(run, 42, 7, 1'499'998, 166'666),
+            "source, epoch, and timestamp discontinuities should begin a new run")) return false;
+    if (!require(
+            clipture::shouldScheduleCfrTick(42, 42, true) &&
+                !clipture::shouldScheduleCfrTick(42, 42, false) &&
+                clipture::shouldScheduleCfrTick(43, 42, false),
+            "the developer switch should disable only repeated source ticks")) return false;
+    clipture::CfrFrameRun repeatedOnly { 42, 7, 2'000'000, 166'666, 12, false };
     return require(
-        clipture::encoderQueueWaitBudget() == std::chrono::milliseconds(1),
-        "a fresh desktop frame should retain the low-latency queue wait");
+        clipture::cfrFreshTickCount(repeatedOnly) == 0 &&
+            clipture::cfrRepeatTickCount(repeatedOnly) == 12,
+        "a continuation run should remain outside fresh-frame pressure accounting");
 }
 
 bool testAudioTimelineNeverRewinds() {
@@ -1085,7 +1101,7 @@ int main() {
     if (!testCaptureBackendPolicyAndDxgiHelpers()) return 1;
     if (!testDesktopPointerDecodingAndClipping()) return 1;
     if (!testVideoTimelineCatchesUpWithoutUnboundedBursts()) return 1;
-    if (!testEncoderQueueProtectsFreshFrames()) return 1;
+    if (!testCfrFrameRunsCompactRepeatedTicks()) return 1;
     if (!testAudioTimelineNeverRewinds()) return 1;
     if (!testFrameQueueDropAccounting()) return 1;
     if (!testImmutableAudioRouting()) return 1;

@@ -1,4 +1,4 @@
-const { readFileSync, writeFileSync } = require("node:fs");
+const { appendFileSync, readFileSync, writeFileSync } = require("node:fs");
 const { resolve } = require("node:path");
 
 const tag = process.argv[2];
@@ -12,6 +12,10 @@ const version = tag.slice(1);
 const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
 if (packageJson.version !== version) {
   throw new Error(`Release tag ${tag} does not match package.json version ${packageJson.version}.`);
+}
+const releaseTitle = packageJson.releaseTitle ?? `Clipture ${version}`;
+if (typeof releaseTitle !== "string" || !releaseTitle.includes(version) || /[\r\n]/.test(releaseTitle)) {
+  throw new Error(`package.json releaseTitle must be a single line containing ${version}.`);
 }
 
 const changelog = readFileSync(resolve("CHANGELOG.md"), "utf8");
@@ -28,4 +32,7 @@ const body = `${match[0]}${nextHeading >= 0 ? following.slice(0, nextHeading) : 
 if (!body) throw new Error(`The changelog section for ${version} is empty.`);
 
 writeFileSync(resolve(outputPath), `${body}\n`, "utf8");
+if (process.env.GITHUB_OUTPUT) {
+  appendFileSync(process.env.GITHUB_OUTPUT, `release_title=${releaseTitle}\n`, "utf8");
+}
 console.log(`Prepared release notes for ${tag} at ${outputPath}.`);

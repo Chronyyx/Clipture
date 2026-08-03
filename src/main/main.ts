@@ -314,6 +314,8 @@ class EngineClient {
     schedulerRepeatedFrames: 0,
     encoderQueueDrops: 0,
     encoderRepeatCoalesced: 0,
+    encoderQueuedFreshFrames: 0,
+    encoderQueuedRepeatFrames: 0,
     nvencSurfaceDrops: 0,
     nvencInputDrops: 0,
     encoderBackpressureDrops: 0,

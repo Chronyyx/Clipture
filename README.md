@@ -9,6 +9,8 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 - DXGI Desktop Duplication capture with automatic Windows.Graphics.Capture fallback.
 - Direct NVIDIA NVENC H.264 encoding with runtime API compatibility checks.
 - Configurable 24, 30, or 60 FPS capture and up to ten minutes of replay history.
+- Constant-frame-rate output with real encoded samples for unchanged desktop intervals, using compact repeated-frame runs instead of duplicate queued jobs.
+- Isolated capture and encoder D3D11 devices with a shared prepared-frame bridge and buffered NVENC output.
 - System, microphone, detected game/app, and explicit per-app audio capture.
 - Separate AAC tracks with silent-track omission and short PCM recovery coverage.
 - Shared packet payloads that avoid copying the full replay buffer while saving.
@@ -28,9 +30,10 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 Video
 DXGI Desktop Duplication (WGC fallback)
   -> D3D11 texture
-  -> phase-locked target-FPS sampler
-  -> bounded pipelined BGRA-to-NV12 conversion
-  -> NVENC H.264
+  -> phase-locked target-FPS sampler + compact CFR runs
+  -> keyed bridge to an isolated encoder D3D11 device
+  -> once-per-source BGRA-to-NV12 preparation
+  -> per-output registered surface + buffered NVENC H.264
   -> shared packet payload + cached NAL metadata
   -> rolling replay archive + bounded RAM fallback
 
@@ -66,7 +69,7 @@ video bytes ~= bitrate in Mb/s * clip seconds / 8
 
 For example, two minutes at 80 Mb/s is approximately 1.2 GB of compressed video. The rolling archive trims expired segments automatically, and saving streams selected packet ranges without constructing another full-size video copy in RAM.
 
-Save output is paced according to storage type, observed write service, and live capture pressure. This keeps SSD saves fast while preventing a large cached write burst from being deferred to file close, and lets foreground applications take priority when the storage device is busy.
+Save output is paced according to storage type, observed write service, and capture pressure added after the save begins. The measured storage service establishes a throughput floor, keeping SSD saves fast without allowing a large cached write burst to be deferred to file close.
 
 ## Requirements
 
@@ -163,4 +166,4 @@ Run a native engine smoke test with:
 '{"id":1,"type":"configure","fps":30,"bitrateMbps":40,"clipLengthSeconds":30,"monitorId":"primary"}' | .\build\engine\Release\clipture_engine.exe
 ```
 
-Diagnostics reports the requested and active capture backends, measured display refresh rate, fresh-frame rate, repeats, queue drops, and encoder-stage latency. If DXGI Desktop Duplication cannot start or recover, automatic mode quarantines it for that monitor and falls back to Windows.Graphics.Capture. A forced WGC failure such as `CreateForMonitor failed: HRESULT 0x80070424` is reported as degraded capture instead of silently treating the engine as armed.
+Diagnostics reports the requested and active capture backends, measured display refresh rate, fresh-frame rate, repeats, separately queued fresh/repeated encoder ticks, queue drops, and encoder-stage latency. If DXGI Desktop Duplication cannot start or recover, automatic mode quarantines it for that monitor and falls back to Windows.Graphics.Capture. A forced WGC failure such as `CreateForMonitor failed: HRESULT 0x80070424` is reported as degraded capture instead of silently treating the engine as armed.

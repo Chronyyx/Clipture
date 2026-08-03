@@ -52,6 +52,8 @@ export interface EngineDiagnostics {
   schedulerRepeatedFrames: number;
   encoderQueueDrops: number;
   encoderRepeatCoalesced: number;
+  encoderQueuedFreshFrames: number;
+  encoderQueuedRepeatFrames: number;
   nvencSurfaceDrops: number;
   nvencInputDrops: number;
   encoderBackpressureDrops: number;
