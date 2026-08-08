@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.2.4] - 2026-08-08
+
+### Replay Engine & Memory Management
+
+- Add resident payload budgeting and hybrid disk spilling to `ReplaySegmentStore`, automatically spilling older packet payloads to managed disk segments when RAM limits are reached while keeping packet index structures resident.
+- Report resident bytes, resident payload budget, resident packet counts, and disk-backed packet counts in engine diagnostics and telemetry.
+- Adjust tonemapper view cache limit and staging window allocation to scale smoothly based on target disk seek penalties.
+
+### Automatic Updates
+
+- Implement capture-aware update transfer policy (`CaptureAwareUpdater` and `UpdateTransferPolicy`) that automatically throttles or pauses background update downloads during active capture or high-load clip saving.
+- Include unit coverage for background download state transitions and capture pressure detection.
+
+### UI & Customization
+
+- Add full theme support (`Graphite`, `Light`, and `Custom` theme options) with customizable primary and accent color pickers in Settings.
+- Synchronize Electron window background and native title bar controls with active theme tokens.
+- Add system tray double-click interaction to restore and focus the application window.
+
+### Diagnostics & Validation
+
+- Expand save timing probes, log paths (`save-timing.log`), and diagnostic exports (`reportVersion: 2`) with post-save performance tracing.
+- Verified TypeScript typecheck, native packet architecture tests, update transfer suite, and clean release notes extraction.
+
 ## [1.2.3] - 2026-08-02
 
 ### Capture Performance

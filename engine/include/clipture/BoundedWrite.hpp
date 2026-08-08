@@ -16,6 +16,15 @@ enum class StorageSeekPenalty {
     Incurs
 };
 
+constexpr std::size_t muxStagingBytesForSource(
+    bool hasDiskBackedSource,
+    StorageSeekPenalty seekPenalty) {
+    if (!hasDiskBackedSource) return 512u * 1024u;
+    if (seekPenalty == StorageSeekPenalty::Incurs) return 64u * 1024u * 1024u;
+    if (seekPenalty == StorageSeekPenalty::DoesNotIncur) return 4u * 1024u * 1024u;
+    return 16u * 1024u * 1024u;
+}
+
 constexpr bool shouldUseAdaptiveWritePacing(
     bool storageAware,
     StorageSeekPenalty /*seekPenalty*/) {

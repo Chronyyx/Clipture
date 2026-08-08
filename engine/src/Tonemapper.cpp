@@ -6,7 +6,7 @@
 
 namespace clipture {
 
-constexpr std::size_t kMaximumCachedTonemapperViews = 24;
+constexpr std::size_t kMaximumCachedTonemapperViews = 6;
 
 const char* TonemapShaderCode = R"(
 Texture2D<float4> InputTexture : register(t0);

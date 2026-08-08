@@ -19,6 +19,7 @@ struct ReplaySegmentStoreOptions {
     int64_t targetSegmentDuration100ns = 8LL * 10'000'000LL;
     std::size_t targetSegmentBytes = 64u * 1024u * 1024u;
     std::size_t maximumWriteBytes = 512u * 1024u;
+    std::size_t residentPayloadBudgetBytes = 0;
     bool alignSegmentsToKeyframes = false;
     bool deleteOnClose = true;
 };
@@ -32,6 +33,10 @@ struct ReplaySegmentStoreStats {
     uint64_t diskBytes = 0;
     uint64_t queuedBytes = 0;
     uint64_t ramFallbackBytes = 0;
+    uint64_t residentPayloadBytes = 0;
+    uint64_t residentPayloadBudgetBytes = 0;
+    std::size_t residentPackets = 0;
+    std::size_t diskBackedPackets = 0;
     uint64_t persistedPackets = 0;
     uint64_t writeFailures = 0;
     std::size_t maximumWriteBytes = 0;
@@ -48,6 +53,7 @@ public:
     void start();
     void stop();
     void setRetention(int64_t retention100ns);
+    void setResidentPayloadBudget(std::size_t bytes);
     void push(const EncodedPacket& packet);
     std::vector<EncodedPacket> selectWindow(int64_t startPts100ns, int64_t endPts100ns) const;
     std::vector<EncodedPacket> snapshot() const;

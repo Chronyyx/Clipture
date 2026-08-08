@@ -16,13 +16,14 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 - Shared packet payloads that avoid copying the full replay buffer while saving.
 - MP4 muxing directly from buffered H.264 and AAC packets.
 - Adaptive storage-aware saves with preallocated files, low I/O priority, and writes capped at 512 KB.
+- Hybrid RAM/disk replay payload budgeting with automatic background disk spilling to preserve memory under high load.
 - Resolution-change segmentation and stream-copy stitching when compatible.
 - HDR-to-SDR tonemapping on supported HDR capture paths.
 - Searchable clip library with folder filters, multi-select deletion, renaming, and non-copying imported video directories.
 - Range-buffered playback with rolling mixed-audio chunks, fullscreen controls, and accelerated keyboard seeking.
 - Viewport-aware 480x270 thumbnails with bounded extraction concurrency and compressed RAM caching.
 - Persistent separate-app audio capture that follows supported multi-process application trees and reconnects after restarts.
-- Global save hotkey, tray operation, startup-on-login, notifications, and automatic updates.
+- Global save hotkey, tray operation, startup-on-login, notifications, customizable UI themes (Graphite, Light, Custom), and capture-aware background updates.
 
 ## Architecture
 

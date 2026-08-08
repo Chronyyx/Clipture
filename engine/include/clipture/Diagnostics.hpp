@@ -116,6 +116,10 @@ struct Diagnostics {
     bool audioReplayArchiveHealthy = false;
     uint64_t replayArchiveDiskBytes = 0;
     uint64_t replayArchiveRamFallbackBytes = 0;
+    uint64_t replayArchiveResidentBytes = 0;
+    uint64_t replayArchiveResidentBudgetBytes = 0;
+    int replayArchiveResidentPackets = 0;
+    int replayArchiveDiskBackedPackets = 0;
     uint64_t replayArchiveQueuedBytes = 0;
     uint64_t replayArchivePersistedPackets = 0;
     uint64_t replayArchiveWriteFailures = 0;

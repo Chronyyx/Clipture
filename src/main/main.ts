@@ -1,9 +1,8 @@
 import { app, BrowserWindow, globalShortcut, ipcMain, shell, Tray, Menu, nativeImage, dialog, screen } from "electron";
 import type { OpenDialogOptions } from "electron";
-import { autoUpdater } from "electron-updater";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
-import { appendFileSync, closeSync, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import {
   mkdir as mkdirAsync,
   readFile as readFileAsync,
@@ -20,6 +19,7 @@ import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { constants as osConstants, cpus, release as osRelease, setPriority, totalmem, version as osVersion } from "node:os";
 import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, SaveClipResult, ClipSoundOption, UpdateState } from "../shared/types";
+import { CaptureAwareNsisUpdater, CaptureAwareUpdateTransfer } from "./CaptureAwareUpdater";
 
 let consoleStdoutAvailable = true;
 let consoleStderrAvailable = true;
@@ -62,6 +62,9 @@ async function yieldForCapturePressure(): Promise<void> {
 }
 
 const defaultSettings: ClipSettings = {
+  uiTheme: "graphite",
+  customMainColor: "#101114",
+  customAccentColor: "#c8a6ff",
   clipLengthSeconds: 30,
   fps: 30,
   bitrateMbps: 40,
@@ -128,6 +131,36 @@ function formatSaveTimingValue(value: unknown): string {
 
 let saveTimingLogStream: ReturnType<typeof createWriteStream> | null = null;
 
+function readTextFileTail(filePath: string, maximumBytes = 512 * 1024): string {
+  let descriptor: number | undefined;
+  try {
+    const size = statSync(filePath).size;
+    const length = Math.min(size, Math.max(1, maximumBytes));
+    const offset = Math.max(0, size - length);
+    const buffer = Buffer.allocUnsafe(length);
+    descriptor = openSync(filePath, "r");
+    let totalRead = 0;
+    while (totalRead < length) {
+      const count = readSync(descriptor, buffer, totalRead, length - totalRead, offset + totalRead);
+      if (count === 0) break;
+      totalRead += count;
+    }
+
+    let text = buffer.subarray(0, totalRead).toString("utf8");
+    if (offset > 0) {
+      const firstCompleteLine = text.indexOf("\n");
+      if (firstCompleteLine >= 0) text = text.slice(firstCompleteLine + 1);
+    }
+    return text;
+  } catch {
+    return "";
+  } finally {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor); } catch { /* Diagnostic export is best effort. */ }
+    }
+  }
+}
+
 function appendSaveTimingLog(line: string): void {
   try {
     if (!saveTimingLogStream || saveTimingLogStream.destroyed) {
@@ -148,6 +181,11 @@ function logSaveTimingLine(line: string): void {
     console.log(line);
   }
   appendSaveTimingLog(line);
+}
+
+function normalizeHexColor(value: unknown, fallback: string): string {
+  if (typeof value !== "string" || !/^#[0-9a-f]{6}$/i.test(value.trim())) return fallback;
+  return value.trim().toLowerCase();
 }
 
 let engineStderrTimingRemainder = "";
@@ -188,6 +226,7 @@ function normalizeSettings(settings: ClipSettings): ClipSettings {
   const nvencPreset = [1, 2, 3, 4, 5].includes(Number(settings.nvencPreset)) ? Number(settings.nvencPreset) as ClipSettings["nvencPreset"] : defaultSettings.nvencPreset;
   const validResolutionPresets = new Set(["system", "144p", "360p", "720p", "1080p", "1440p", "4k"]);
   const resolutionPreset = validResolutionPresets.has(settings.resolutionPreset) ? settings.resolutionPreset : defaultSettings.resolutionPreset;
+  const uiTheme = settings.uiTheme === "light" || settings.uiTheme === "custom" ? settings.uiTheme : "graphite";
   const importedVideoDirectories = Array.from(new Set((settings.importedVideoDirectories ?? [])
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .map((value) => normalize(value.trim()))));
@@ -197,6 +236,9 @@ function normalizeSettings(settings: ClipSettings): ClipSettings {
   return {
     ...defaultSettings,
     ...settings,
+    uiTheme,
+    customMainColor: normalizeHexColor(settings.customMainColor, defaultSettings.customMainColor),
+    customAccentColor: normalizeHexColor(settings.customAccentColor, defaultSettings.customAccentColor),
     clipLengthSeconds: clampNumber(settings.clipLengthSeconds, defaultSettings.clipLengthSeconds, 5, 600),
     fps,
     nvencPreset,
@@ -364,6 +406,10 @@ class EngineClient {
     audioReplayArchiveHealthy: false,
     replayArchiveDiskBytes: 0,
     replayArchiveRamFallbackBytes: 0,
+    replayArchiveResidentBytes: 0,
+    replayArchiveResidentBudgetBytes: 0,
+    replayArchiveResidentPackets: 0,
+    replayArchiveDiskBackedPackets: 0,
     replayArchiveQueuedBytes: 0,
     replayArchivePersistedPackets: 0,
     replayArchiveWriteFailures: 0,
@@ -576,6 +622,13 @@ let notificationWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let isQuitting = false;
 const engine = new EngineClient();
+const updateTransfer = new CaptureAwareUpdateTransfer(
+  () => latestCapturePressure,
+  async () => {
+    await engine.diagnostics();
+  }
+);
+const autoUpdater = new CaptureAwareNsisUpdater(updateTransfer);
 let currentHotkey = "";
 const startHidden = process.argv.includes("--hidden") || process.argv.includes("--background");
 const updateCheckIntervalMs = 30 * 60 * 1000;
@@ -584,6 +637,7 @@ let updateCheckTimer: ReturnType<typeof setInterval> | undefined;
 let updateCheckInFlight = false;
 let updateReady = false;
 let updateListenersRegistered = false;
+let updateDownloadInProgress = false;
 let saveClipInProgress = false;
 
 app.setName("Clipture");
@@ -604,7 +658,7 @@ function updateVersion(version?: string): string | undefined {
 function installDownloadedUpdate(): void {
   if (!updateReady) return;
   isQuitting = true;
-  autoUpdater.quitAndInstall();
+  autoUpdater.quitAndInstall(true, true);
 }
 
 async function performUpdateCheck(): Promise<UpdateState> {
@@ -635,6 +689,35 @@ async function performUpdateCheck(): Promise<UpdateState> {
     updateCheckInFlight = false;
   }
   return updateState;
+}
+
+async function downloadAppUpdate(): Promise<void> {
+  if (updateDownloadInProgress) return;
+  updateDownloadInProgress = true;
+  setUpdateState({ ...updateState, status: "downloading", message: "Preparing update..." });
+  configureUpdateLogger();
+  const logger = autoUpdater.logger;
+  if (!logger) {
+    updateDownloadInProgress = false;
+    setUpdateState({ ...updateState, status: "error", message: "Update logging could not be initialized." });
+    return;
+  }
+
+  updateTransfer.start(autoUpdater.netSession, logger);
+  try {
+    await autoUpdater.downloadUpdate();
+  } catch (error) {
+    if (updateState.status !== "error") {
+      setUpdateState({
+        ...updateState,
+        status: "error",
+        message: error instanceof Error ? error.message : "Update download failed."
+      });
+    }
+  } finally {
+    updateTransfer.stop();
+    updateDownloadInProgress = false;
+  }
 }
 
 function registerUpdateListeners(): void {
@@ -670,7 +753,7 @@ function registerUpdateListeners(): void {
     setUpdateState({
       status: "downloading",
       version: updateState.version,
-      message: `Downloading update ${percent}%`,
+      message: `Preparing update ${percent}%`,
       checkedAt: updateState.checkedAt
     });
   });
@@ -698,6 +781,7 @@ function registerUpdateListeners(): void {
 }
 
 let updateLoggerConfigured = false;
+let updateLogStream: ReturnType<typeof createWriteStream> | null = null;
 function configureUpdateLogger() {
   if (updateLoggerConfigured) return;
   updateLoggerConfigured = true;
@@ -705,8 +789,15 @@ function configureUpdateLogger() {
   const logFile = appDataPath("updates.log");
   const logToFile = (level: string, ...args: any[]) => {
     try {
-      appendFileSync(logFile, `[${new Date().toISOString()}] [${level}] ${format(...args)}\n`);
-    } catch (e) {}
+      if (!updateLogStream || updateLogStream.destroyed) {
+        const stream = createWriteStream(logFile, { flags: "a" });
+        stream.on("error", () => {
+          if (updateLogStream === stream) updateLogStream = null;
+        });
+        updateLogStream = stream;
+      }
+      updateLogStream.write(`[${new Date().toISOString()}] [${level}] ${format(...args)}\n`);
+    } catch {}
   };
   
   logToFile("INFO", "Update logger initialized.");
@@ -721,7 +812,9 @@ function configureUpdateLogger() {
 
 function checkForAppUpdates(): void {
   autoUpdater.autoDownload = false;
-  autoUpdater.disableDifferentialDownload = true;
+  autoUpdater.disableDifferentialDownload = false;
+  autoUpdater.previousBlockmapBaseUrlOverride =
+    `https://github.com/Chronyyx/Clipture/releases/download/v${app.getVersion()}/`;
   configureUpdateLogger();
   registerUpdateListeners();
   void performUpdateCheck();
@@ -1454,6 +1547,7 @@ const thumbnailHeight = 270;
 const thumbnailCacheLimit = 64;
 const thumbnailDataUrlCache = new Map<string, { signature: string; dataUrl: string }>();
 const pendingThumbnailTasks = new Map<string, Promise<string>>();
+const recentSavedClipTimings = new Map<string, { saveId: string; savedAtMs: number }>();
 
 let iconProcessSnapshot: { expiresAt: number; promise: Promise<ProcessIconEntry[]> } | undefined;
 const processIconDataUrls = new Map<string, string>();
@@ -2267,6 +2361,9 @@ async function clipThumbnailUrl(filePath: string): Promise<string> {
   if (pending) return pending;
 
   const task = thumbnailTaskLimiter.run(async () => {
+    const thumbnailStartedAt = saveTimingNowMs();
+    const recentSave = recentSavedClipTimings.get(normalizedPathKey(filePath));
+    let outcome = "empty";
     try {
       const image = await nativeImage.createThumbnailFromPath(filePath, {
         width: thumbnailWidth,
@@ -2276,6 +2373,7 @@ async function clipThumbnailUrl(filePath: string): Promise<string> {
 
       const jpeg = image.toJPEG(76);
       const dataUrl = `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+      outcome = "ok";
       thumbnailDataUrlCache.set(cacheKey, { signature, dataUrl });
       while (thumbnailDataUrlCache.size > thumbnailCacheLimit) {
         const oldestKey = thumbnailDataUrlCache.keys().next().value;
@@ -2284,8 +2382,17 @@ async function clipThumbnailUrl(filePath: string): Promise<string> {
       }
       return dataUrl;
     } catch (err) {
+      outcome = "error";
       console.error(`Failed to generate thumbnail for ${filePath}:`, err);
       return "";
+    } finally {
+      if (recentSave) {
+        logSaveTiming(recentSave.saveId, "postsave.thumbnail", thumbnailStartedAt, {
+          outcome,
+          sinceSavedMs: Math.max(0, thumbnailStartedAt - recentSave.savedAtMs),
+          filePath
+        });
+      }
     }
   });
   pendingThumbnailTasks.set(cacheKey, task);
@@ -2301,20 +2408,52 @@ function readSettings(): ClipSettings {
   return normalizeSettings({ ...defaultSettings, ...JSON.parse(readFileSync(path, "utf8")) });
 }
 
+function isLightHexColor(value: string): boolean {
+  const hex = normalizeHexColor(value, "#101114").slice(1);
+  const channels = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  const [red, green, blue] = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+  return red * 0.2126 + green * 0.7152 + blue * 0.0722 > 0.34;
+}
+
+function windowAppearance(settings: ClipSettings): { backgroundColor: string; symbolColor: string } {
+  const isLight = settings.uiTheme === "light" || (settings.uiTheme === "custom" && isLightHexColor(settings.customMainColor));
+  return {
+    backgroundColor: settings.uiTheme === "light" ? "#f4f6f9" : settings.uiTheme === "custom" ? settings.customMainColor : "#101114",
+    symbolColor: isLight ? "#465265" : "#a5adba"
+  };
+}
+
+function applyWindowAppearance(settings: ClipSettings): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const appearance = windowAppearance(settings);
+  mainWindow.setBackgroundColor(appearance.backgroundColor);
+  mainWindow.setTitleBarOverlay({ color: "#00000000", symbolColor: appearance.symbolColor, height: 32 });
+}
+
 function saveSettings(settings: ClipSettings): ClipSettings {
+  const settingsFileExisted = existsSync(settingsPath());
+  const previous = readSettings();
   const normalized = normalizeSettings(settings);
   mkdirSync(normalized.saveFolder, { recursive: true });
   writeFileSync(settingsPath(), JSON.stringify(normalized, null, 2));
-  app.setLoginItemSettings({
-    openAtLogin: normalized.startOnLogin,
-    openAsHidden: true,
-    args: app.isPackaged ? ["--hidden"] : [app.getAppPath(), "--hidden"],
-  });
-  void engine.configure(normalized).catch((error) => {
-    console.error("Failed to configure engine:", error);
-  });
-  const hotkeyStatus = registerHotkey(normalized);
-  if (hotkeyStatus) console.log(`[settings] ${hotkeyStatus}`);
+  applyWindowAppearance(normalized);
+  if (!settingsFileExisted || previous.startOnLogin !== normalized.startOnLogin) {
+    app.setLoginItemSettings({
+      openAtLogin: normalized.startOnLogin,
+      openAsHidden: true,
+      args: app.isPackaged ? ["--hidden"] : [app.getAppPath(), "--hidden"],
+    });
+  }
+  const recordingSettings = ({ uiTheme: _uiTheme, customMainColor: _customMainColor, customAccentColor: _customAccentColor, ...value }: ClipSettings) => value;
+  if (JSON.stringify(recordingSettings(previous)) !== JSON.stringify(recordingSettings(normalized))) {
+    void engine.configure(normalized).catch((error) => {
+      console.error("Failed to configure engine:", error);
+    });
+  }
+  if (previous.hotkey !== normalized.hotkey) {
+    const hotkeyStatus = registerHotkey(normalized);
+    if (hotkeyStatus) console.log(`[settings] ${hotkeyStatus}`);
+  }
   return normalized;
 }
 
@@ -2635,6 +2774,36 @@ function triggerSaveClipFromBackground(): void {
   });
 }
 
+function schedulePostSaveTailProbes(saveId: string, savedAtMs: number): void {
+  for (const afterMs of [250, 1000, 3000, 8000]) {
+    const expectedAtMs = savedAtMs + afterMs;
+    const timer = setTimeout(() => {
+      const probeStartedAt = saveTimingNowMs();
+      const eventLoopDelayMs = Math.max(0, probeStartedAt - expectedAtMs);
+      void engine.diagnostics().then((diagnostics) => {
+        logSaveTiming(saveId, "postsave.tail", probeStartedAt, {
+          afterMs,
+          eventLoopDelayMs,
+          capturePressure: diagnostics.capturePressure,
+          droppedFrames: diagnostics.droppedFrames,
+          queuedFrames: diagnostics.queuedFrames,
+          recentPublishedFreshFps: diagnostics.recentPublishedFreshFps,
+          recentEncoderInputFps: diagnostics.recentEncoderInputFps,
+          recentEncoderOutputFps: diagnostics.recentEncoderOutputFps,
+          replayArchiveQueuedBytes: diagnostics.replayArchiveQueuedBytes
+        });
+      }).catch((error) => {
+        logSaveTiming(saveId, "postsave.tail", probeStartedAt, {
+          afterMs,
+          eventLoopDelayMs,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      });
+    }, afterMs);
+    timer.unref();
+  }
+}
+
 async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeconds): Promise<SaveClipResult> {
   const saveId = `save-${Date.now().toString(36)}`;
   if (saveClipInProgress) {
@@ -2758,13 +2927,37 @@ async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeco
         filePath: result.clip.filePath
       });
 
+      const savedAtMs = saveTimingNowMs();
+      const savedPathKey = normalizedPathKey(result.clip.filePath);
+      recentSavedClipTimings.set(savedPathKey, { saveId, savedAtMs });
+      const recentSaveCleanup = setTimeout(() => {
+        if (recentSavedClipTimings.get(savedPathKey)?.saveId === saveId) {
+          recentSavedClipTimings.delete(savedPathKey);
+        }
+      }, 30_000);
+      recentSaveCleanup.unref();
+
+      const notificationStartedAt = saveTimingNowMs();
       if (settings.showNotification && notificationWindow) {
         showNotificationWindow(settings.notificationPosition || "top-right");
         notificationWindow.webContents.send("show-notification", "", settings.notificationPosition || "top-right", "Clip saved!");
       }
+      logSaveTiming(saveId, "notification.dispatch", notificationStartedAt, {
+        shown: Boolean(settings.showNotification && notificationWindow)
+      });
 
       const addedClip = result.clip;
-      setTimeout(() => mainWindow?.webContents.send("library:changed", addedClip), 50);
+      const libraryDispatchScheduledAt = saveTimingNowMs();
+      const libraryTimer = setTimeout(() => {
+        const dispatchStartedAt = saveTimingNowMs();
+        mainWindow?.webContents.send("library:changed", addedClip);
+        logSaveTiming(saveId, "postsave.library_dispatch", dispatchStartedAt, {
+          timerDelayMs: Math.max(0, dispatchStartedAt - libraryDispatchScheduledAt),
+          windowVisible: Boolean(mainWindow?.isVisible())
+        });
+      }, 50);
+      libraryTimer.unref();
+      schedulePostSaveTailProbes(saveId, savedAtMs);
     } else if (settings.showNotification && notificationWindow) {
       showNotificationWindow(settings.notificationPosition || "top-right");
       notificationWindow.webContents.send("show-notification", "", settings.notificationPosition || "top-right", "Clip failed");
@@ -2811,6 +3004,7 @@ function resolveAssetPath(fileName: string): string | undefined {
 }
 
 async function createWindow(): Promise<void> {
+  const appearance = windowAppearance(readSettings());
   mainWindow = new BrowserWindow({
     width: 1240,
     height: 780,
@@ -2819,11 +3013,11 @@ async function createWindow(): Promise<void> {
     show: false,
     title: "Clipture",
     icon: resolveAssetPath("icon.ico"),
-    backgroundColor: "#101114",
+    backgroundColor: appearance.backgroundColor,
     titleBarStyle: "hidden",
     titleBarOverlay: {
       color: "#00000000",
-      symbolColor: "#a5adba",
+      symbolColor: appearance.symbolColor,
       height: 32
     },
     webPreferences: {
@@ -2912,6 +3106,14 @@ function showNotificationWindow(position: string): void {
   notificationWindow.setIgnoreMouseEvents(true, { forward: true });
 }
 
+function showMainWindow(): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
 function createTray(): void {
   const icoPath = resolveAssetPath("icon.ico");
   const svgPath = resolveAssetPath("svgviewer-output.svg");
@@ -2923,13 +3125,14 @@ function createTray(): void {
   tray.setToolTip("Clipture");
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Open Clipture", click: () => mainWindow?.show() },
+      { label: "Open Clipture", click: showMainWindow },
       { label: "Save Clip", click: () => triggerSaveClipFromBackground() },
       { label: "Open Clips Folder", click: () => shell.openPath(readSettings().saveFolder) },
       { type: "separator" },
       { label: "Exit", click: () => app.quit() }
     ])
   );
+  tray.on("double-click", showMainWindow);
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -2939,10 +3142,7 @@ if (!gotSingleInstanceLock) {
 
 app.on("second-instance", (_event, commandLine) => {
   if (commandLine.includes("--hidden") || commandLine.includes("--background")) return;
-  if (!mainWindow) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  showMainWindow();
 });
 
 app.whenReady().then(async () => {
@@ -2967,6 +3167,8 @@ app.on("window-all-closed", () => {});
 app.on("before-quit", () => {
   isQuitting = true;
   if (updateCheckTimer) clearInterval(updateCheckTimer);
+  updateTransfer.stop();
+  updateLogStream?.end();
   globalShortcut.unregisterAll();
   engine.stop();
 });
@@ -2987,8 +3189,9 @@ async function exportDiagnostics(): Promise<string | undefined> {
 
   const processors = cpus();
   const diagnostics = await engine.diagnostics();
+  const saveTimingLogPath = appDataPath("save-timing.log");
   const report = {
-    reportVersion: 1,
+    reportVersion: 2,
     exportedAt: exportedAt.toISOString(),
     application: {
       name: app.getName(),
@@ -3010,7 +3213,11 @@ async function exportDiagnostics(): Promise<string | undefined> {
       node: process.versions.node,
       v8: process.versions.v8
     },
-    diagnostics
+    diagnostics,
+    saveTiming: {
+      logPath: saveTimingLogPath,
+      tail: readTextFileTail(saveTimingLogPath)
+    }
   };
   writeFileSync(result.filePath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   return result.filePath;
@@ -3106,10 +3313,7 @@ ipcMain.handle("library:clipPlaybackUrl", (_event, filePath: string, audioTracks
 ipcMain.handle("library:releasePlaybackCache", () => releasePlaybackCache());
 ipcMain.handle("updates:getState", () => updateState);
 ipcMain.handle("updates:check", () => performUpdateCheck());
-ipcMain.handle("updates:download", () => {
-  setUpdateState({ ...updateState, status: "downloading", message: "Starting download..." });
-  return autoUpdater.downloadUpdate();
-});
+ipcMain.handle("updates:download", () => downloadAppUpdate());
 ipcMain.handle("updates:install", () => installDownloadedUpdate());
 ipcMain.handle("processes:list", () => listActiveProcesses());
 ipcMain.handle("processes:iconUrl", (_event, processName: string, executablePath?: string) => processIconUrl(processName, executablePath));

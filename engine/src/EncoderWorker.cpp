@@ -2316,8 +2316,8 @@ private:
     uint32_t frameIndex_ = 0;
     int64_t nextKeyframePts100ns_ = 0;
     std::size_t nextOutputSlot_ = 0;
-    static constexpr std::size_t maxRegisteredInputs_ = 32;
-    static constexpr std::size_t maximumInputViewCacheSize_ = 16;
+    static constexpr std::size_t maxRegisteredInputs_ = 8;
+    static constexpr std::size_t maximumInputViewCacheSize_ = 6;
     static constexpr std::size_t outputSlotCount_ = 12;
     static constexpr std::size_t syncOutputDelay_ = 3;
     static constexpr std::size_t minimumPreparedSubmissionDepth_ = 2;
@@ -2830,8 +2830,14 @@ void EncoderWorker::encodeLoop() {
     uint64_t activeCaptureEpoch = 0;
     auto pushPackets = [this](std::vector<EncodedPacket>& packets) {
         for (auto& packet : packets) {
-            if (replayStore_) replayStore_->push(packet);
-            packets_.push(std::move(packet));
+            if (replayStore_) {
+                replayStore_->push(packet);
+                EncodedPacket headerOnly = packet;
+                headerOnly.payload.reset();
+                packets_.push(std::move(headerOnly));
+            } else {
+                packets_.push(std::move(packet));
+            }
             ++framesEncoded_;
         }
         packets.clear();

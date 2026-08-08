@@ -191,17 +191,31 @@ private:
             recycledPayloads_.push_back(std::move(payload));
         }
 
+        void clear() {
+            std::lock_guard lock(mutex_);
+            recycledPayloads_.clear();
+            pooledBytes_ = 0;
+        }
+
         std::deque<std::unique_ptr<PacketPayload>> recycledPayloads_;
         std::size_t pooledBytes_ = 0;
         std::mutex mutex_;
-        static constexpr std::size_t maxRecycledPayloadBytes_ = 64u * 1024u * 1024u;
+        std::size_t maxRecycledPayloadBytes_ = 16u * 1024u * 1024u;
         static constexpr std::size_t maxSingleRecycledPayloadBytes_ = 4u * 1024u * 1024u;
     };
 
 public:
-    explicit PacketRingBuffer(int64_t retention100ns = 5LL * 60LL * 10'000'000LL)
+    explicit PacketRingBuffer(
+        int64_t retention100ns = 5LL * 60LL * 10'000'000LL,
+        std::size_t maxRecycledPayloadBytes = 16u * 1024u * 1024u)
         : retention100ns_(retention100ns),
-          payloadPool_(std::make_shared<PayloadPool>()) {}
+          payloadPool_(std::make_shared<PayloadPool>()) {
+        payloadPool_->maxRecycledPayloadBytes_ = maxRecycledPayloadBytes;
+    }
+
+    void clearPool() {
+        if (payloadPool_) payloadPool_->clear();
+    }
 
     void setRetention(int64_t retention100ns) {
         std::lock_guard lock(mutex_);

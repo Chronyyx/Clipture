@@ -89,6 +89,12 @@ std::string jsonEscape(const std::string& value) {
 using SaveTimingClock = std::chrono::steady_clock;
 constexpr int64_t kHotReplayRetention100ns = 12LL * 10'000'000LL;
 constexpr std::size_t kSaveWriteBurstBytes = 2u * 1024u * 1024u;
+constexpr uint64_t kMiB = 1024ULL * 1024ULL;
+
+struct ReplayMemoryBudgets {
+    std::size_t videoBytes = 0;
+    std::size_t audioBytes = 0;
+};
 
 ReplaySegmentStoreOptions replayStoreOptions(const std::string& streamName, bool video) {
     ReplaySegmentStoreOptions options;
@@ -98,6 +104,48 @@ ReplaySegmentStoreOptions replayStoreOptions(const std::string& streamName, bool
     options.maximumWriteBytes = 512u * 1024u;
     options.alignSegmentsToKeyframes = video;
     return options;
+}
+
+ReplayMemoryBudgets replayMemoryBudgets(const EngineSettings& settings) {
+    uint64_t totalCacheCap = 160ULL * kMiB;
+    MEMORYSTATUSEX memoryStatus {};
+    memoryStatus.dwLength = sizeof(memoryStatus);
+    if (GlobalMemoryStatusEx(&memoryStatus)) {
+        const uint64_t physicalCap = std::clamp<uint64_t>(
+            memoryStatus.ullTotalPhys / 64ULL,
+            96ULL * kMiB,
+            192ULL * kMiB);
+        const uint64_t availableCap = std::clamp<uint64_t>(
+            memoryStatus.ullAvailPhys / 32ULL,
+            64ULL * kMiB,
+            physicalCap);
+        totalCacheCap = std::min(physicalCap, availableCap);
+    }
+
+    const uint64_t retentionSeconds = static_cast<uint64_t>(
+        std::max(1, settings.clipLengthSeconds + 5));
+    const uint64_t encodedVideoBytes =
+        retentionSeconds * static_cast<uint64_t>(std::max(1, settings.bitrateMbps)) * 1'000'000ULL / 8ULL;
+    const uint64_t desiredVideoBytes =
+        encodedVideoBytes + encodedVideoBytes * 15ULL / 100ULL + 16ULL * kMiB;
+
+    std::size_t audioTrackCount = settings.appAudioProcesses.size();
+    if (settings.includeSystemAudio) ++audioTrackCount;
+    if (settings.includeMicrophoneAudio) ++audioTrackCount;
+    if (settings.captureGameAudio) ++audioTrackCount;
+    audioTrackCount = std::max<std::size_t>(audioTrackCount, 1);
+    const uint64_t desiredAudioBytes = std::clamp<uint64_t>(
+        retentionSeconds * static_cast<uint64_t>(audioTrackCount) * 24'000ULL + 4ULL * kMiB,
+        8ULL * kMiB,
+        16ULL * kMiB);
+    const uint64_t videoCap = totalCacheCap > desiredAudioBytes
+        ? totalCacheCap - desiredAudioBytes
+        : totalCacheCap * 3ULL / 4ULL;
+
+    return {
+        static_cast<std::size_t>(std::min(desiredVideoBytes, videoCap)),
+        static_cast<std::size_t>(desiredAudioBytes)
+    };
 }
 
 int64_t saveTimingElapsedMs(SaveTimingClock::time_point startedAt) {
@@ -654,9 +702,9 @@ std::vector<EncodedPacket> selectVideoWindowForClip(std::vector<EncodedPacket> v
 Engine::Engine()
     : diagnostics_(collectDiagnostics()),
       frameQueue_(8),
-      videoPackets_(5LL * 60LL * 10'000'000LL),
-      audioPackets_(5LL * 60LL * 10'000'000LL),
-      aacAudioPackets_(5LL * 60LL * 10'000'000LL),
+      videoPackets_(5LL * 60LL * 10'000'000LL, 16u * 1024u * 1024u),
+      audioPackets_(5LL * 60LL * 10'000'000LL, 4u * 1024u * 1024u),
+      aacAudioPackets_(5LL * 60LL * 10'000'000LL, 4u * 1024u * 1024u),
       videoReplayStore_(std::make_unique<ReplaySegmentStore>(replayStoreOptions("video", true))),
       aacReplayStore_(std::make_unique<ReplaySegmentStore>(replayStoreOptions("audio", false))),
       audioReplayCoordinator_(std::make_unique<AudioReplayCoordinator>(
@@ -1197,9 +1245,16 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
         : "Clip-aware system";
 
     const auto retention100ns = static_cast<int64_t>(settings_.clipLengthSeconds + 5) * 10'000'000LL;
+    const auto replayBudgets = replayMemoryBudgets(settings_);
     videoPackets_.setRetention(kHotReplayRetention100ns);
-    if (videoReplayStore_) videoReplayStore_->setRetention(retention100ns);
-    if (aacReplayStore_) aacReplayStore_->setRetention(retention100ns);
+    if (videoReplayStore_) {
+        videoReplayStore_->setRetention(retention100ns);
+        videoReplayStore_->setResidentPayloadBudget(replayBudgets.videoBytes);
+    }
+    if (aacReplayStore_) {
+        aacReplayStore_->setRetention(retention100ns);
+        aacReplayStore_->setResidentPayloadBudget(replayBudgets.audioBytes);
+    }
     if (audioReplayCoordinator_) {
         audioReplayCoordinator_->setRetention(retention100ns);
         aacAudioPackets_.setRetention(kHotReplayRetention100ns);
@@ -1554,6 +1609,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             " diskBacked=" + std::to_string(diskBackedVideoPackets) +
             " queued=" + std::to_string(videoArchiveStats.queuedPackets) +
             " queuedBytes=" + std::to_string(videoArchiveStats.queuedBytes) +
+            " residentBytes=" + std::to_string(videoArchiveStats.residentPayloadBytes) +
+            " residentBudgetBytes=" + std::to_string(videoArchiveStats.residentPayloadBudgetBytes) +
             " ramFallbackBytes=" + std::to_string(videoArchiveStats.ramFallbackBytes));
 
     const auto videoSelectStartedAt = SaveTimingClock::now();
@@ -2080,6 +2137,16 @@ void Engine::refreshPacketCounts() {
     diagnostics_.replayArchiveDiskBytes = videoArchive.diskBytes + audioArchive.diskBytes;
     diagnostics_.replayArchiveRamFallbackBytes =
         videoArchive.ramFallbackBytes + audioArchive.ramFallbackBytes;
+    diagnostics_.replayArchiveResidentBytes =
+        videoArchive.residentPayloadBytes + audioArchive.residentPayloadBytes;
+    diagnostics_.replayArchiveResidentBudgetBytes =
+        videoArchive.residentPayloadBudgetBytes + audioArchive.residentPayloadBudgetBytes;
+    diagnostics_.replayArchiveResidentPackets = static_cast<int>(std::min<std::size_t>(
+        videoArchive.residentPackets + audioArchive.residentPackets,
+        static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    diagnostics_.replayArchiveDiskBackedPackets = static_cast<int>(std::min<std::size_t>(
+        videoArchive.diskBackedPackets + audioArchive.diskBackedPackets,
+        static_cast<std::size_t>(std::numeric_limits<int>::max())));
     diagnostics_.replayArchiveQueuedBytes = videoArchive.queuedBytes + audioArchive.queuedBytes;
     diagnostics_.replayArchivePersistedPackets =
         videoArchive.persistedPackets + audioArchive.persistedPackets;

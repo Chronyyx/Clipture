@@ -247,6 +247,7 @@ struct ReplaySegmentStore::Impl {
     struct Entry {
         EncodedPacket packet;
         std::atomic<bool> retired { false };
+        bool persistenceQueued = false;
     };
 
     struct ActiveSegment {
@@ -272,6 +273,10 @@ struct ReplaySegmentStore::Impl {
         bool expected = false;
         if (!running.compare_exchange_strong(expected, true)) return;
         stopRequested = false;
+        {
+            std::lock_guard lock(segmentMutex);
+            healthy = true;
+        }
         worker = std::thread([this] { run(); });
     }
 
@@ -280,7 +285,7 @@ struct ReplaySegmentStore::Impl {
         {
             std::lock_guard lock(mutex);
             stopRequested = true;
-            for (const auto& entry : pending) entry->retired = true;
+            for (const auto& entry : entries) entry->retired = true;
             pending.clear();
             queuedBytes = 0;
         }
@@ -290,7 +295,7 @@ struct ReplaySegmentStore::Impl {
         {
             std::lock_guard lock(mutex);
             entries.clear();
-            ramFallbackBytes = 0;
+            residentPayloadBytes = 0;
         }
         {
             std::lock_guard lock(segmentMutex);
@@ -308,6 +313,13 @@ struct ReplaySegmentStore::Impl {
         wake.notify_one();
     }
 
+    void setResidentPayloadBudget(std::size_t bytes) {
+        std::lock_guard lock(mutex);
+        options.residentPayloadBudgetBytes = bytes;
+        scheduleSpillsLocked();
+        wake.notify_one();
+    }
+
     void push(const EncodedPacket& packet) {
         if (payloadEmpty(packet)) return;
         auto entry = std::make_shared<Entry>();
@@ -316,10 +328,9 @@ struct ReplaySegmentStore::Impl {
         {
             std::lock_guard lock(mutex);
             entries.push_back(entry);
-            pending.push_back(entry);
-            queuedBytes += bytes;
-            ramFallbackBytes += packet.payload ? bytes : 0;
+            if (packet.payload) residentPayloadBytes += bytes;
             trimLocked();
+            scheduleSpillsLocked();
         }
         wake.notify_one();
     }
@@ -352,7 +363,7 @@ struct ReplaySegmentStore::Impl {
         entries.clear();
         pending.clear();
         queuedBytes = 0;
-        ramFallbackBytes = 0;
+        residentPayloadBytes = 0;
         rotationRequested.store(true, std::memory_order_relaxed);
         wake.notify_one();
         idle.notify_all();
@@ -371,8 +382,15 @@ struct ReplaySegmentStore::Impl {
             result.packets = entries.size();
             result.queuedPackets = pending.size();
             result.queuedBytes = queuedBytes;
-            result.ramFallbackBytes = ramFallbackBytes;
+            result.residentPayloadBytes = residentPayloadBytes;
+            result.residentPayloadBudgetBytes = options.residentPayloadBudgetBytes;
             result.persistedPackets = persistedPackets;
+            for (const auto& entry : entries) {
+                if (entry->packet.payload) ++result.residentPackets;
+                if (!entry->packet.payload && entry->packet.payloadReader) {
+                    ++result.diskBackedPackets;
+                }
+            }
         }
         {
             std::lock_guard lock(segmentMutex);
@@ -384,6 +402,7 @@ struct ReplaySegmentStore::Impl {
                 result.diskBytes += segment->writtenBytes.load(std::memory_order_relaxed);
             }
         }
+        result.ramFallbackBytes = result.healthy ? 0 : result.queuedBytes;
         return result;
     }
 
@@ -401,10 +420,46 @@ struct ReplaySegmentStore::Impl {
             entries.pop_front();
             entry->retired = true;
             if (entry->packet.payload) {
-                ramFallbackBytes -= std::min<uint64_t>(
-                    ramFallbackBytes,
+                residentPayloadBytes -= std::min<uint64_t>(
+                    residentPayloadBytes,
                     static_cast<uint64_t>(entry->packet.payload->size()));
             }
+            const auto pendingEntry = std::find(pending.begin(), pending.end(), entry);
+            if (pendingEntry != pending.end()) {
+                queuedBytes -= std::min<uint64_t>(
+                    queuedBytes,
+                    static_cast<uint64_t>(payloadSize(entry->packet)));
+                pending.erase(pendingEntry);
+                entry->persistenceQueued = false;
+            }
+        }
+        if (pending.empty()) idle.notify_all();
+    }
+
+    void scheduleSpillsLocked() {
+        uint64_t projectedResidentBytes = residentPayloadBytes;
+        for (const auto& entry : entries) {
+            if (!entry->persistenceQueued || !entry->packet.payload) continue;
+            projectedResidentBytes -= std::min<uint64_t>(
+                projectedResidentBytes,
+                static_cast<uint64_t>(entry->packet.payload->size()));
+        }
+
+        const uint64_t budget = options.residentPayloadBudgetBytes;
+        if (projectedResidentBytes <= budget) return;
+
+        for (const auto& entry : entries) {
+            if (projectedResidentBytes <= budget) break;
+            if (entry->retired.load(std::memory_order_relaxed) ||
+                entry->persistenceQueued || !entry->packet.payload ||
+                entry->packet.payload->empty()) {
+                continue;
+            }
+            const auto bytes = static_cast<uint64_t>(entry->packet.payload->size());
+            entry->persistenceQueued = true;
+            pending.push_back(entry);
+            queuedBytes += bytes;
+            projectedResidentBytes -= std::min(projectedResidentBytes, bytes);
         }
     }
 
@@ -514,8 +569,9 @@ struct ReplaySegmentStore::Impl {
             if (!entry->retired.load(std::memory_order_relaxed)) {
                 entry->packet.payloadReader = std::move(reader);
                 entry->packet.payload.reset();
-                ramFallbackBytes -= std::min<uint64_t>(ramFallbackBytes, memory->size());
+                residentPayloadBytes -= std::min<uint64_t>(residentPayloadBytes, memory->size());
                 ++persistedPackets;
+                scheduleSpillsLocked();
             }
             healthy = true;
         }
@@ -526,8 +582,11 @@ struct ReplaySegmentStore::Impl {
         {
             std::lock_guard lock(mutex);
             const auto found = std::find(pending.begin(), pending.end(), entry);
-            if (found != pending.end()) pending.erase(found);
-            queuedBytes -= std::min<uint64_t>(queuedBytes, payloadSize(entry->packet));
+            if (found != pending.end()) {
+                pending.erase(found);
+                queuedBytes -= std::min<uint64_t>(queuedBytes, payloadSize(entry->packet));
+            }
+            entry->persistenceQueued = false;
             if (pending.empty()) idle.notify_all();
         }
         std::lock_guard segmentLock(segmentMutex);
@@ -611,7 +670,7 @@ struct ReplaySegmentStore::Impl {
     ActiveSegment active;
     uint64_t nextSegment = 0;
     uint64_t queuedBytes = 0;
-    uint64_t ramFallbackBytes = 0;
+    uint64_t residentPayloadBytes = 0;
     uint64_t persistedPackets = 0;
     uint64_t writeFailures = 0;
     std::size_t maximumWriteSize = 0;
@@ -625,6 +684,9 @@ ReplaySegmentStore::~ReplaySegmentStore() = default;
 void ReplaySegmentStore::start() { impl_->start(); }
 void ReplaySegmentStore::stop() { impl_->stop(); }
 void ReplaySegmentStore::setRetention(int64_t retention100ns) { impl_->setRetention(retention100ns); }
+void ReplaySegmentStore::setResidentPayloadBudget(std::size_t bytes) {
+    impl_->setResidentPayloadBudget(bytes);
+}
 void ReplaySegmentStore::push(const EncodedPacket& packet) { impl_->push(packet); }
 
 std::vector<EncodedPacket> ReplaySegmentStore::selectWindow(

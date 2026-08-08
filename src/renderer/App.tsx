@@ -1,9 +1,10 @@
-import { Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Clock, Download, Edit3, FolderOpen, Gamepad2, Library, Maximize2, Mic, Minus, Pause, Play, Plus, RefreshCw, Save, Search, SlidersHorizontal, Trash2, Upload, Volume2, X } from "lucide-react";
+import { Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Clock, Download, Edit3, FolderOpen, Gamepad2, Library, Maximize2, Mic, Minus, Moon, Paintbrush, Palette, Pause, Play, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sun, Trash2, Upload, Volume2, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 // @ts-ignore
 import logoUrl from "../../assets/svgviewer-output.svg";
-import type { KeyboardEvent } from "react";
+import type { CSSProperties, KeyboardEvent } from "react";
 import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, AudioSourceRule, ClipSoundOption, UpdateState } from "../shared/types";
+import { applyUiTheme, cacheAndApplyUiTheme, normalizeThemeColor } from "./theme";
 
 type Tab = "library" | "settings" | "diagnostics";
 
@@ -115,6 +116,10 @@ const defaultDiagnostics: EngineDiagnostics = {
     audioReplayArchiveHealthy: false,
     replayArchiveDiskBytes: 0,
     replayArchiveRamFallbackBytes: 0,
+    replayArchiveResidentBytes: 0,
+    replayArchiveResidentBudgetBytes: 0,
+    replayArchiveResidentPackets: 0,
+    replayArchiveDiskBackedPackets: 0,
     replayArchiveQueuedBytes: 0,
     replayArchivePersistedPackets: 0,
     replayArchiveWriteFailures: 0,
@@ -489,6 +494,11 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  useEffect(() => {
+    if (!settings) return;
+    cacheAndApplyUiTheme(settings);
+  }, [settings?.uiTheme, settings?.customMainColor, settings?.customAccentColor]);
+
   async function saveClip() {
     if (isSavingClip) return;
     const length = settings?.clipLengthSeconds ?? 30;
@@ -529,7 +539,11 @@ export function App() {
 
   async function updateSettings(patch: Partial<ClipSettings>) {
     if (!settings) return;
-    const saved = await window.clipture.saveSettings({ ...settings, ...patch });
+    const nextSettings = { ...settings, ...patch };
+    if (patch.uiTheme || patch.customMainColor || patch.customAccentColor) {
+      cacheAndApplyUiTheme(nextSettings);
+    }
+    const saved = await window.clipture.saveSettings(nextSettings);
     setSettings(saved);
     showNotice("Settings saved", "settings", 2200);
   }
@@ -2542,6 +2556,163 @@ function DraftNumberInput({
   );
 }
 
+function ThemeColorField({
+  label,
+  value,
+  onPreview,
+  onCommit
+}: {
+  label: string;
+  value: string;
+  onPreview: (value: string) => void;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [editing, setEditing] = useState(false);
+  const cancelCommit = useRef(false);
+
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [editing, value]);
+
+  const commit = (candidate: string) => {
+    const withHash = candidate.startsWith("#") ? candidate : `#${candidate}`;
+    const normalized = normalizeThemeColor(withHash, value);
+    setDraft(normalized);
+    onPreview(normalized);
+    if (normalized !== value) onCommit(normalized);
+  };
+
+  return (
+    <label className="theme-color-field">
+      <span>{label}</span>
+      <span className="theme-color-control">
+        <input
+          aria-label={`Choose ${label.toLowerCase()}`}
+          className="theme-color-picker"
+          type="color"
+          value={normalizeThemeColor(draft, value)}
+          onChange={(event) => {
+            const color = event.currentTarget.value.toLowerCase();
+            setDraft(color);
+            onPreview(color);
+          }}
+          onBlur={(event) => commit(event.currentTarget.value)}
+        />
+        <input
+          aria-label={`${label} hex value`}
+          className="theme-color-hex"
+          maxLength={7}
+          spellCheck={false}
+          value={draft}
+          onFocus={() => setEditing(true)}
+          onChange={(event) => {
+            const next = event.currentTarget.value;
+            if (!/^#?[0-9a-f]{0,6}$/i.test(next)) return;
+            setDraft(next);
+            const withHash = next.startsWith("#") ? next : `#${next}`;
+            if (/^#[0-9a-f]{6}$/i.test(withHash)) onPreview(withHash.toLowerCase());
+          }}
+          onBlur={() => {
+            setEditing(false);
+            if (cancelCommit.current) {
+              cancelCommit.current = false;
+              return;
+            }
+            commit(draft);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") {
+              cancelCommit.current = true;
+              setDraft(value);
+              onPreview(value);
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </span>
+    </label>
+  );
+}
+
+function CustomizeSettings({ settings, onChange }: { settings: ClipSettings; onChange: (patch: Partial<ClipSettings>) => void }) {
+  const [mainColor, setMainColor] = useState(settings.customMainColor);
+  const [accentColor, setAccentColor] = useState(settings.customAccentColor);
+  const themes = [
+    { id: "graphite", label: "Graphite", Icon: Moon },
+    { id: "light", label: "Light", Icon: Sun },
+    { id: "custom", label: "Custom", Icon: Palette }
+  ] as const;
+
+  useEffect(() => setMainColor(settings.customMainColor), [settings.customMainColor]);
+  useEffect(() => setAccentColor(settings.customAccentColor), [settings.customAccentColor]);
+
+  const previewCustom = (nextMain: string, nextAccent: string) => {
+    setMainColor(nextMain);
+    setAccentColor(nextAccent);
+    applyUiTheme({ uiTheme: "custom", customMainColor: nextMain, customAccentColor: nextAccent });
+  };
+
+  const customPreviewStyle = {
+    "--preview-main": mainColor,
+    "--preview-accent": accentColor
+  } as CSSProperties;
+
+  return (
+    <div className="settings-group single-column customize-settings-group">
+      <div className="customize-settings-panel">
+        <div className="audio-settings-heading">
+          <h2>Appearance</h2>
+        </div>
+
+        <div className="theme-options" role="radiogroup" aria-label="Interface theme">
+          {themes.map(({ id, label, Icon }) => (
+            <button
+              aria-checked={settings.uiTheme === id}
+              className={settings.uiTheme === id ? "theme-option selected" : "theme-option"}
+              key={id}
+              onClick={() => onChange({ uiTheme: id })}
+              role="radio"
+              type="button"
+            >
+              <span className={`theme-preview ${id}`} style={id === "custom" ? customPreviewStyle : undefined} aria-hidden="true">
+                <span className="theme-preview-sidebar" />
+                <span className="theme-preview-content">
+                  <span className="theme-preview-line" />
+                  <span className="theme-preview-button" />
+                </span>
+              </span>
+              <span className="theme-option-label"><Icon size={17} /> {label}</span>
+              {settings.uiTheme === id && <Check className="theme-option-check" size={17} aria-hidden="true" />}
+            </button>
+          ))}
+        </div>
+
+        {settings.uiTheme === "custom" && (
+          <div className="custom-colors">
+            <h3>Custom colors</h3>
+            <div className="theme-color-grid">
+              <ThemeColorField
+                label="Main color"
+                value={settings.customMainColor}
+                onPreview={(color) => previewCustom(color, accentColor)}
+                onCommit={(customMainColor) => onChange({ customMainColor })}
+              />
+              <ThemeColorField
+                label="Accent color"
+                value={settings.customAccentColor}
+                onPreview={(color) => previewCustom(mainColor, color)}
+                onCommit={(customAccentColor) => onChange({ customAccentColor })}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SettingsView({
   settings,
   clipSounds,
@@ -2567,7 +2738,7 @@ function SettingsView({
   const [configuringSystemAudio, setConfiguringSystemAudio] = useState(false);
   const [configuringAppAudio, setConfiguringAppAudio] = useState<string | null>(null);
   const [configuringMicAudio, setConfiguringMicAudio] = useState<string | null>(null);
-  const [activeCategory, setActiveCategory] = useState<"general" | "video" | "audio">("general");
+  const [activeCategory, setActiveCategory] = useState<"general" | "video" | "audio" | "customize">("general");
   const [editingClipLength, setEditingClipLength] = useState(false);
   const [clipLengthDraft, setClipLengthDraft] = useState(() => String(settings.clipLengthSeconds));
 
@@ -2696,6 +2867,7 @@ function SettingsView({
         <button className={activeCategory === 'general' ? 'settings-tab active' : 'settings-tab'} onClick={() => setActiveCategory('general')}>General</button>
         <button className={activeCategory === 'video' ? 'settings-tab active' : 'settings-tab'} onClick={() => setActiveCategory('video')}>Video</button>
         <button className={activeCategory === 'audio' ? 'settings-tab active' : 'settings-tab'} onClick={() => setActiveCategory('audio')}>Audio</button>
+        <button className={activeCategory === 'customize' ? 'settings-tab active' : 'settings-tab'} onClick={() => setActiveCategory('customize')}><Paintbrush size={16} /> Customize</button>
       </div>
 
       <div className="settings-content">
@@ -3060,6 +3232,8 @@ function SettingsView({
             </div>
           </div>
         )}
+
+        {activeCategory === 'customize' && <CustomizeSettings settings={settings} onChange={onChange} />}
       </div>
     </section>
   );
@@ -3120,6 +3294,8 @@ function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
     ["Audio packets", String(diagnostics.bufferedAudioPackets)],
     ["Replay archive video / audio", `${diagnostics.videoReplayArchiveHealthy ? "Healthy" : "RAM fallback"} / ${diagnostics.audioReplayArchiveHealthy ? "Healthy" : "RAM fallback"}`],
     ["Replay archive disk", replayMiB(diagnostics.replayArchiveDiskBytes)],
+    ["Replay RAM cache", `${replayMiB(diagnostics.replayArchiveResidentBytes)} / ${replayMiB(diagnostics.replayArchiveResidentBudgetBytes)}`],
+    ["Replay packets RAM / disk", `${diagnostics.replayArchiveResidentPackets} / ${diagnostics.replayArchiveDiskBackedPackets}`],
     ["Replay archive RAM fallback", replayMiB(diagnostics.replayArchiveRamFallbackBytes)],
     ["Replay archive queued", `${diagnostics.replayArchiveQueuedPackets} packets / ${replayMiB(diagnostics.replayArchiveQueuedBytes)}`],
     ["Replay archive segments", String(diagnostics.replayArchiveSegments)],

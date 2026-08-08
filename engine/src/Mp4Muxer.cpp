@@ -1766,18 +1766,23 @@ public:
 
     void flush() {
         if (buffer_.empty()) return;
-        prepareForWrite(buffer_.size());
-        const auto writeStartedAt = std::chrono::steady_clock::now();
-        const bool wrote = out_.write(std::span<const std::byte>(buffer_.data(), buffer_.size()));
-        const auto writeDurationUs = static_cast<uint64_t>(std::max<int64_t>(
-            0,
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - writeStartedAt).count()));
-        ++outputWriteCalls_;
-        outputWriteUs_ += writeDurationUs;
-        maximumOutputWriteUs_ = std::max(maximumOutputWriteUs_, writeDurationUs);
-        if (wrote && adaptiveRateEnabled_) {
-            rateController_.observeWrite(buffer_.size(), writeDurationUs);
+        constexpr std::size_t outputChunkBytes = 512u * 1024u;
+        std::size_t offset = 0;
+        while (offset < buffer_.size()) {
+            const std::size_t count = std::min(outputChunkBytes, buffer_.size() - offset);
+            prepareForWrite(count);
+            const auto writeStartedAt = std::chrono::steady_clock::now();
+            const bool wrote = out_.write(std::span<const std::byte>(buffer_.data() + offset, count));
+            const auto writeDurationUs = static_cast<uint64_t>(std::max<int64_t>(
+                0,
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - writeStartedAt).count()));
+            ++outputWriteCalls_;
+            outputWriteUs_ += writeDurationUs;
+            maximumOutputWriteUs_ = std::max(maximumOutputWriteUs_, writeDurationUs);
+            if (!wrote) break;
+            if (adaptiveRateEnabled_) rateController_.observeWrite(count, writeDurationUs);
+            offset += count;
         }
         buffer_.clear();
         ++flushes_;
@@ -2109,6 +2114,16 @@ MuxResult muxH264ToMp4(
     std::size_t writableNaluCount = 0;
     uint64_t videoSourceBytes = 0;
     uint64_t pcmSourceBytes = 0;
+    uint64_t residentEncodedSourceBytes = 0;
+    uint64_t diskBackedEncodedSourceBytes = 0;
+
+    auto countEncodedSourceStorage = [&](const EncodedPacket& packet) {
+        if (packet.payload) {
+            residentEncodedSourceBytes += payloadSize(packet);
+        } else if (packet.payloadReader) {
+            diskBackedEncodedSourceBytes += payloadSize(packet);
+        }
+    };
 
     const auto prepassStartedAt = SaveTimingClock::now();
     for (const auto& packet : packets) {
@@ -2116,6 +2131,7 @@ MuxResult muxH264ToMp4(
             hasVideoPacket = true;
             ++videoPacketCount;
             videoSourceBytes += payloadSize(packet);
+            countEncodedSourceStorage(packet);
             VideoSamplePlan sample;
             sample.packet = &packet;
             sample.info.keyframe = packet.keyframe;
@@ -2148,6 +2164,7 @@ MuxResult muxH264ToMp4(
             }
         } else if (isAacAudioPacket(packet)) {
             ++aacPacketCount;
+            countEncodedSourceStorage(packet);
             const auto& trackId = packetTrackId(packet);
             auto track = std::find_if(audioTracks.begin(), audioTracks.end(), [&](const AacAudioTrack& candidate) {
                 return candidate.sourceId == trackId &&
@@ -2214,7 +2231,9 @@ MuxResult muxH264ToMp4(
             " pcmTracks=" + std::to_string(pcmAudioTracks.size()) +
             " pcmBytes=" + std::to_string(pcmSourceBytes) +
             " aacPackets=" + std::to_string(aacPacketCount) +
-            " aacTracks=" + std::to_string(audioTracks.size()));
+            " aacTracks=" + std::to_string(audioTracks.size()) +
+            " residentEncodedBytes=" + std::to_string(residentEncodedSourceBytes) +
+            " diskBackedEncodedBytes=" + std::to_string(diskBackedEncodedSourceBytes));
     if (!hasVideoPacket) {
         result.message = "No encoded H.264 packets are buffered yet.";
         logMuxSaveTiming("total", totalStartedAt, "ok=false reason=no_video_packets");
@@ -2457,6 +2476,9 @@ MuxResult muxH264ToMp4(
         writeU32(out, static_cast<uint32_t>(mdatPayloadSize + 8));
         writeType(out, "mdat");
     }
+    const std::size_t saveStagingBytes = muxStagingBytesForSource(
+        diskBackedEncodedSourceBytes > 0,
+        out.storageSeekPenalty());
     logMuxSaveTiming(
         "write_header",
         headerStartedAt,
@@ -2466,16 +2488,16 @@ MuxResult muxH264ToMp4(
             " lowIoPriority=" + std::string(out.lowPriorityApplied() ? "true" : "false") +
             " ioPriority=" + ioPriorityName(out.ioPriorityHint()) +
             " storageSeekPenalty=" + storageSeekPenaltyName(out.storageSeekPenalty()) +
+            " stagingBytes=" + std::to_string(saveStagingBytes) +
             " adaptiveWritePacing=" + std::string(adaptiveWritePacing ? "true" : "false") +
             " initialRateMiBps=" + std::to_string(
                 adaptiveWritePacing
                     ? adaptiveRateConfig.initialBytesPerSecond / (1024ULL * 1024ULL)
                     : 0));
 
-    constexpr std::size_t liveSaveChunkBytes = 512u * 1024u;
     BufferedByteWriter bufferedOut(
         out,
-        liveSaveChunkBytes,
+        saveStagingBytes,
         std::move(pacing.samplePressure),
         adaptiveWritePacing,
         adaptiveRateConfig,

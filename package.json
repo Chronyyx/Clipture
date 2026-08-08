@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "private": true,
   "description": "NVENC-first Windows clipping app with Electron UI and native C++ capture engine.",
-  "releaseTitle": "Clipture 1.2.3: Stable 60 FPS Capture",
+  "releaseTitle": "Clipture 1.2.4: Hybrid Replay Buffer and Capture-Aware Updates",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {
@@ -15,6 +15,7 @@
     "pack:win": "npm run build && electron-builder --win --x64 --dir",
     "dist:win": "npm run build && electron-builder --win --x64",
     "typecheck": "tsc --noEmit",
+    "test:update-transfer": "npm run build:electron && node scripts/test-update-transfer.cjs",
     "start:dev": "node scripts/run-electron.cjs .",
     "start:packaged": "npm run pack:win && .\\release\\win-unpacked\\Clipture.exe",
     "start": "npm run build && node scripts/run-electron.cjs ."

@@ -350,7 +350,9 @@ struct AudioReplayCoordinator::Impl {
                 return packetEnd(packet) < latestPublished - kPcmRepairWindow100ns;
             }
             const auto found = committedByTrack.find(packet.logicalTrackId);
-            if (found == committedByTrack.end() || found->second == 0) return false;
+            if (found == committedByTrack.end() || found->second == 0) {
+                return packetEnd(packet) < latestPublished - kPcmRepairWindow100ns;
+            }
             int64_t trimBefore = found->second - kPcmRepairWindow100ns;
             if (frozenFrom > 0) trimBefore = std::min(trimBefore, frozenFrom);
             return packetEnd(packet) < trimBefore;
@@ -452,7 +454,8 @@ void AudioReplayCoordinator::updateRouting(std::map<std::string, std::string> so
 
 void AudioReplayCoordinator::setRetention(int64_t retention100ns) {
     impl_->aacPackets.setRetention(retention100ns);
-    impl_->rawPackets.setRetention(retention100ns);
+    const int64_t rawRetention100ns = std::min<int64_t>(retention100ns, 15LL * 10'000'000LL);
+    impl_->rawPackets.setRetention(rawRetention100ns);
 }
 
 bool AudioReplayCoordinator::waitUntil(int64_t pts100ns, std::chrono::milliseconds timeout) {

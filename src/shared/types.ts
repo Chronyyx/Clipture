@@ -102,6 +102,10 @@ export interface EngineDiagnostics {
   audioReplayArchiveHealthy: boolean;
   replayArchiveDiskBytes: number;
   replayArchiveRamFallbackBytes: number;
+  replayArchiveResidentBytes: number;
+  replayArchiveResidentBudgetBytes: number;
+  replayArchiveResidentPackets: number;
+  replayArchiveDiskBackedPackets: number;
   replayArchiveQueuedBytes: number;
   replayArchivePersistedPackets: number;
   replayArchiveWriteFailures: number;
@@ -119,6 +123,9 @@ export interface EngineDiagnostics {
 }
 
 export interface ClipSettings {
+  uiTheme: "graphite" | "light" | "custom";
+  customMainColor: string;
+  customAccentColor: string;
   clipLengthSeconds: number;
   fps: 24 | 30 | 60;
   bitrateMbps: number;

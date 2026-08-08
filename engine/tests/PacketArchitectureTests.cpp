@@ -94,8 +94,27 @@ bool testBoundedWrites() {
         total += request;
         ++writes;
     }
-    return require(total == 11u * 1024u * 1024u + 17u && writes == 23,
-                   "bounded writer should cover every byte without exceeding 512 KiB");
+    if (!require(total == 11u * 1024u * 1024u + 17u && writes == 23,
+                 "bounded writer should cover every byte without exceeding 512 KiB")) {
+        return false;
+    }
+    if (!require(
+            clipture::muxStagingBytesForSource(false, clipture::StorageSeekPenalty::Incurs) ==
+                512u * 1024u,
+            "RAM-only muxing should retain the small low-latency staging window")) {
+        return false;
+    }
+    if (!require(
+            clipture::muxStagingBytesForSource(true, clipture::StorageSeekPenalty::DoesNotIncur) ==
+                    4u * 1024u * 1024u &&
+                clipture::muxStagingBytesForSource(true, clipture::StorageSeekPenalty::Unknown) ==
+                    16u * 1024u * 1024u &&
+                clipture::muxStagingBytesForSource(true, clipture::StorageSeekPenalty::Incurs) ==
+                    64u * 1024u * 1024u,
+            "disk-backed mux staging should grow with the destination seek penalty")) {
+        return false;
+    }
+    return true;
 }
 
 bool testAdaptiveWriteRateController() {
@@ -1020,6 +1039,62 @@ bool testReplaySegmentStoreFallsBackToRam() {
     return preserved;
 }
 
+bool testReplaySegmentStoreSpillsOldestBeyondRamBudget() {
+    const auto root = uniqueReplayTestRoot("hybrid");
+    clipture::ReplaySegmentStoreOptions options;
+    options.streamName = "hybrid-video";
+    options.rootDirectory = root;
+    options.retention100ns = 10'000;
+    options.targetSegmentBytes = 1024;
+    options.maximumWriteBytes = 11;
+    options.residentPayloadBudgetBytes = 74;
+
+    clipture::PacketRingBuffer pool;
+    clipture::ReplaySegmentStore store(options);
+    store.start();
+    auto makePacket = [&](int64_t pts100ns, uint8_t seed) {
+        clipture::EncodedPacket packet;
+        packet.kind = clipture::PacketKind::Video;
+        packet.pts100ns = pts100ns;
+        packet.duration100ns = 100;
+        packet.payload = pool.acquirePayload(37);
+        std::fill(packet.payload->begin(), packet.payload->end(), static_cast<std::byte>(seed));
+        return packet;
+    };
+
+    store.push(makePacket(1'000, 1));
+    store.push(makePacket(1'100, 2));
+    store.push(makePacket(1'200, 3));
+    if (!require(store.waitUntilIdle(std::chrono::seconds(3)),
+                 "hybrid replay spill should drain promptly")) {
+        store.stop();
+        return false;
+    }
+
+    const auto snapshot = store.snapshot();
+    const auto stats = store.stats();
+    const bool layoutValid = require(
+        snapshot.size() == 3 && !snapshot[0].payload && snapshot[0].payloadReader &&
+            snapshot[1].payload && !snapshot[1].payloadReader &&
+            snapshot[2].payload && !snapshot[2].payloadReader,
+        "hybrid replay should spill only the oldest payload beyond its RAM budget");
+    const bool statsValid = require(
+        stats.healthy && stats.residentPayloadBytes == 74 &&
+            stats.residentPayloadBudgetBytes == 74 && stats.residentPackets == 2 &&
+            stats.diskBackedPackets == 1 && stats.ramFallbackBytes == 0,
+        "hybrid replay diagnostics should distinguish healthy RAM cache from disk spill");
+
+    std::vector<std::byte> restored;
+    const bool payloadValid = require(
+        clipture::copyPayloadRange(snapshot[0], 0, clipture::payloadSize(snapshot[0]), restored) &&
+            restored.size() == 37 && restored.front() == std::byte { 1 },
+        "a hybrid-spilled payload should round-trip exactly");
+    store.stop();
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    return layoutValid && statsValid && payloadValid;
+}
+
 bool testMp4MuxerStreamsDiskBackedVideo() {
     const auto root = uniqueReplayTestRoot("mux");
     clipture::ReplaySegmentStoreOptions options;
@@ -1112,6 +1187,7 @@ int main() {
     if (!testConcurrentPublishDoesNotTriggerRepair()) return 1;
     if (!testReplaySegmentStorePersistsAndRetainsSnapshots()) return 1;
     if (!testReplaySegmentStoreFallsBackToRam()) return 1;
+    if (!testReplaySegmentStoreSpillsOldestBeyondRamBudget()) return 1;
     if (!testMp4MuxerStreamsDiskBackedVideo()) return 1;
     std::cout << "Packet architecture tests passed.\n";
     return 0;
