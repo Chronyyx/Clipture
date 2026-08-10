@@ -18,7 +18,7 @@ import { basename, dirname, extname, join, parse, normalize } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { constants as osConstants, cpus, release as osRelease, setPriority, totalmem, version as osVersion } from "node:os";
-import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, SaveClipResult, ClipSoundOption, UpdateState } from "../shared/types";
+import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, SaveClipResult, ClipSoundOption, SaveIoAnalysis, SaveIoAnalyzerState, ThemeFontId, UpdateState } from "../shared/types";
 import { CaptureAwareNsisUpdater, CaptureAwareUpdateTransfer } from "./CaptureAwareUpdater";
 
 let consoleStdoutAvailable = true;
@@ -226,7 +226,9 @@ function normalizeSettings(settings: ClipSettings): ClipSettings {
   const nvencPreset = [1, 2, 3, 4, 5].includes(Number(settings.nvencPreset)) ? Number(settings.nvencPreset) as ClipSettings["nvencPreset"] : defaultSettings.nvencPreset;
   const validResolutionPresets = new Set(["system", "144p", "360p", "720p", "1080p", "1440p", "4k"]);
   const resolutionPreset = validResolutionPresets.has(settings.resolutionPreset) ? settings.resolutionPreset : defaultSettings.resolutionPreset;
-  const uiTheme = settings.uiTheme === "light" || settings.uiTheme === "custom" ? settings.uiTheme : "graphite";
+  const uiTheme = settings.uiTheme === "light" || settings.uiTheme === "glitten" || settings.uiTheme === "milate" || settings.uiTheme === "custom"
+    ? settings.uiTheme
+    : "graphite";
   const importedVideoDirectories = Array.from(new Set((settings.importedVideoDirectories ?? [])
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .map((value) => normalize(value.trim()))));
@@ -408,14 +410,17 @@ class EngineClient {
     replayArchiveRamFallbackBytes: 0,
     replayArchiveResidentBytes: 0,
     replayArchiveResidentBudgetBytes: 0,
+    replayArchiveReadCacheBytes: 0,
     replayArchiveResidentPackets: 0,
     replayArchiveDiskBackedPackets: 0,
     replayArchiveQueuedBytes: 0,
     replayArchivePersistedPackets: 0,
+    replayArchiveSpillCandidateInspections: 0,
     replayArchiveWriteFailures: 0,
     replayArchiveQueuedPackets: 0,
     replayArchiveSegments: 0,
     replayArchiveMaximumWriteBytes: 0,
+    pcmRecoveryActive: false,
     capturedFrames: 0,
     queuedFrames: 0,
     encoderAcceptedFrames: 0,
@@ -488,12 +493,20 @@ class EngineClient {
     }
   }
 
-  async saveClip(durationSeconds: number, saveFolder = readSettings().saveFolder): Promise<SaveClipResult> {
+  async saveClip(
+    durationSeconds: number,
+    saveFolder = readSettings().saveFolder,
+    analyzeIo = false
+  ): Promise<SaveClipResult> {
     if (!this.child) this.start();
     if (!this.child) {
       return { ok: false, message: this.lastDiagnostics.status };
     }
-    return this.request<SaveClipResult>("saveClip", { durationSeconds, saveFolder }, saveClipEngineTimeoutMs(durationSeconds));
+    return this.request<SaveClipResult>(
+      "saveClip",
+      { durationSeconds, saveFolder, analyzeIo },
+      saveClipEngineTimeoutMs(durationSeconds)
+    );
   }
 
   async configure(settings: ClipSettings): Promise<EngineDiagnostics> {
@@ -639,6 +652,23 @@ let updateReady = false;
 let updateListenersRegistered = false;
 let updateDownloadInProgress = false;
 let saveClipInProgress = false;
+let saveIoAnalyzerArmed = false;
+let lastSaveIoAnalysis: {
+  saveId: string;
+  capturedAt: string;
+  durationSeconds: number;
+  analyses: SaveIoAnalysis[];
+  clipFilePath?: string;
+} | undefined;
+
+function saveIoAnalyzerState(): SaveIoAnalyzerState {
+  return {
+    available: !app.isPackaged,
+    armed: !app.isPackaged && saveIoAnalyzerArmed,
+    traceReady: Boolean(lastSaveIoAnalysis),
+    capturedAt: lastSaveIoAnalysis?.capturedAt
+  };
+}
 
 app.setName("Clipture");
 if (process.platform === "win32") {
@@ -1540,11 +1570,15 @@ class AsyncTaskLimiter {
   }
 }
 
-const thumbnailTaskLimiter = new AsyncTaskLimiter(3, () => backgroundWorkLimit(3));
+// Thumbnail extraction seeks through large MP4s. Serializing it avoids turning
+// an HDD into a random-I/O workload and keeps the capture path responsive.
+const thumbnailTaskLimiter = new AsyncTaskLimiter(1);
 const iconTaskLimiter = new AsyncTaskLimiter(2, () => backgroundWorkLimit(2));
 const thumbnailWidth = 480;
 const thumbnailHeight = 270;
 const thumbnailCacheLimit = 64;
+const thumbnailMaximumOutputBytes = 2 * 1024 * 1024;
+const thumbnailReplayQuietBytes = 4 * 1024 * 1024;
 const thumbnailDataUrlCache = new Map<string, { signature: string; dataUrl: string }>();
 const pendingThumbnailTasks = new Map<string, Promise<string>>();
 const recentSavedClipTimings = new Map<string, { saveId: string; savedAtMs: number }>();
@@ -1985,7 +2019,18 @@ async function processClipFile(
     (actual.width !== target.width || actual.height !== target.height);
   const needsMix = systemMixTracks.length > 1;
 
-  if (!existsSync(filePath)) {
+  const inputProbeStartedAt = saveTimingNowMs();
+  let inputExists = false;
+  try {
+    await statAsync(filePath);
+    inputExists = true;
+  } catch {
+    inputExists = false;
+  }
+  if (saveTimingId) {
+    logSaveTiming(saveTimingId, "postprocess.input_probe", inputProbeStartedAt, { exists: inputExists });
+  }
+  if (!inputExists) {
     if (saveTimingId) {
       logSaveTiming(saveTimingId, "postprocess.missing_file", totalStartedAt, { filePath });
     }
@@ -2087,7 +2132,16 @@ async function processClipFile(
   if (saveTimingId) {
     logSaveTiming(saveTimingId, "postprocess.ffmpeg", ffmpegStartedAt, { ok: ffmpeg.ok });
   }
-  if (!ffmpeg.ok || !existsSync(outputPath)) {
+  let outputExists = false;
+  if (ffmpeg.ok) {
+    try {
+      await statAsync(outputPath);
+      outputExists = true;
+    } catch {
+      outputExists = false;
+    }
+  }
+  if (!ffmpeg.ok || !outputExists) {
     if (saveTimingId) {
       logSaveTiming(saveTimingId, "postprocess.total", totalStartedAt, { ok: false, reason: ffmpeg.message });
     }
@@ -2095,8 +2149,8 @@ async function processClipFile(
   }
 
   try {
-    unlinkSync(filePath);
-    renameSync(outputPath, filePath);
+    await rmAsync(filePath, { force: true });
+    await renameAsync(outputPath, filePath);
   } catch (error) {
     if (saveTimingId) {
       logSaveTiming(saveTimingId, "postprocess.total", totalStartedAt, { ok: false, reason: "replace_failed" });
@@ -2338,6 +2392,103 @@ function releasePlaybackCache(): boolean {
   return false;
 }
 
+function waitMilliseconds(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, milliseconds)));
+}
+
+async function waitForPostSaveThumbnailWindow(
+  recentSave: { saveId: string; savedAtMs: number } | undefined
+): Promise<{ waitedMs: number; archiveQueuedBytes: number; capturePressure: CapturePressure }> {
+  if (!recentSave) {
+    return { waitedMs: 0, archiveQueuedBytes: 0, capturePressure: latestCapturePressure };
+  }
+
+  const waitStartedAt = saveTimingNowMs();
+  const earliestStart = recentSave.savedAtMs + 750;
+  if (saveTimingNowMs() < earliestStart) {
+    await waitMilliseconds(earliestStart - saveTimingNowMs());
+  }
+
+  const deadline = waitStartedAt + 8_000;
+  let archiveQueuedBytes = 0;
+  let capturePressure = latestCapturePressure;
+  while (saveTimingNowMs() < deadline) {
+    const diagnostics = await engine.diagnostics();
+    archiveQueuedBytes = diagnostics.replayArchiveQueuedBytes;
+    capturePressure = diagnostics.capturePressure;
+    if (capturePressure === "healthy" && archiveQueuedBytes <= thumbnailReplayQuietBytes) break;
+    await waitMilliseconds(250);
+  }
+
+  return {
+    waitedMs: saveTimingElapsedMs(waitStartedAt),
+    archiveQueuedBytes,
+    capturePressure
+  };
+}
+
+function extractThumbnailJpeg(filePath: string): Promise<{ jpeg: Buffer; message: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(resolveFfmpegPath(), [
+      "-nostdin",
+      "-hide_banner",
+      "-loglevel", "error",
+      "-threads", "1",
+      "-ss", "0.1",
+      "-i", filePath,
+      "-map", "0:v:0",
+      "-frames:v", "1",
+      "-an",
+      "-sn",
+      "-dn",
+      "-vf", `scale=${thumbnailWidth}:${thumbnailHeight}:force_original_aspect_ratio=decrease,pad=${thumbnailWidth}:${thumbnailHeight}:(ow-iw)/2:(oh-ih)/2:color=0x171a20`,
+      "-threads", "1",
+      "-q:v", "5",
+      "-c:v", "mjpeg",
+      "-f", "image2pipe",
+      "pipe:1"
+    ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    lowerProcessPriority(child);
+
+    const chunks: Buffer[] = [];
+    let outputBytes = 0;
+    let stderr = "";
+    let settled = false;
+    const finish = (jpeg: Buffer, message: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve({ jpeg, message });
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish(Buffer.alloc(0), "Thumbnail extraction timed out.");
+    }, 15_000);
+    timeout.unref();
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > thumbnailMaximumOutputBytes) {
+        child.kill();
+        finish(Buffer.alloc(0), "Thumbnail output exceeded its memory limit.");
+        return;
+      }
+      chunks.push(chunk);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (stderr.length < 16_384) stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) => finish(Buffer.alloc(0), error.message));
+    child.on("close", (code) => {
+      if (code !== 0 || outputBytes === 0) {
+        finish(Buffer.alloc(0), stderr.trim() || `ffmpeg exited with code ${code}.`);
+        return;
+      }
+      finish(Buffer.concat(chunks, outputBytes), "ok");
+    });
+  });
+}
+
 async function clipThumbnailUrl(filePath: string): Promise<string> {
   if (!existsSync(filePath)) return "";
   const cacheKey = lowerPath(filePath);
@@ -2364,14 +2515,15 @@ async function clipThumbnailUrl(filePath: string): Promise<string> {
     const thumbnailStartedAt = saveTimingNowMs();
     const recentSave = recentSavedClipTimings.get(normalizedPathKey(filePath));
     let outcome = "empty";
+    let readiness = { waitedMs: 0, archiveQueuedBytes: 0, capturePressure: latestCapturePressure };
     try {
-      const image = await nativeImage.createThumbnailFromPath(filePath, {
-        width: thumbnailWidth,
-        height: thumbnailHeight
-      });
-      if (image.isEmpty()) return "";
-
-      const jpeg = image.toJPEG(76);
+      readiness = await waitForPostSaveThumbnailWindow(recentSave);
+      const extracted = await extractThumbnailJpeg(filePath);
+      const jpeg = extracted.jpeg;
+      if (jpeg.length === 0) {
+        if (extracted.message) console.error(`Failed to generate thumbnail for ${filePath}: ${extracted.message}`);
+        return "";
+      }
       const dataUrl = `data:image/jpeg;base64,${jpeg.toString("base64")}`;
       outcome = "ok";
       thumbnailDataUrlCache.set(cacheKey, { signature, dataUrl });
@@ -2390,6 +2542,10 @@ async function clipThumbnailUrl(filePath: string): Promise<string> {
         logSaveTiming(recentSave.saveId, "postsave.thumbnail", thumbnailStartedAt, {
           outcome,
           sinceSavedMs: Math.max(0, thumbnailStartedAt - recentSave.savedAtMs),
+          waitMs: readiness.waitedMs,
+          archiveQueuedBytes: readiness.archiveQueuedBytes,
+          capturePressure: readiness.capturePressure,
+          extractor: "ffmpeg-child",
           filePath
         });
       }
@@ -2416,10 +2572,20 @@ function isLightHexColor(value: string): boolean {
 }
 
 function windowAppearance(settings: ClipSettings): { backgroundColor: string; symbolColor: string } {
-  const isLight = settings.uiTheme === "light" || (settings.uiTheme === "custom" && isLightHexColor(settings.customMainColor));
+  const isGlitten = settings.uiTheme === "glitten";
+  const isMilate = settings.uiTheme === "milate";
+  const isLight = settings.uiTheme === "light" || isGlitten || (settings.uiTheme === "custom" && isLightHexColor(settings.customMainColor));
   return {
-    backgroundColor: settings.uiTheme === "light" ? "#f4f6f9" : settings.uiTheme === "custom" ? settings.customMainColor : "#101114",
-    symbolColor: isLight ? "#465265" : "#a5adba"
+    backgroundColor: settings.uiTheme === "light"
+      ? "#f4f6f9"
+      : isGlitten
+        ? "#e8decd"
+        : isMilate
+          ? "#4b4e24"
+        : settings.uiTheme === "custom"
+          ? settings.customMainColor
+          : "#101114",
+    symbolColor: isGlitten ? "#4d4035" : isMilate ? "#f3e6bd" : isLight ? "#465265" : "#a5adba"
   };
 }
 
@@ -2812,6 +2978,8 @@ async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeco
   }
 
   saveClipInProgress = true;
+  const analyzeIo = !app.isPackaged && saveIoAnalyzerArmed;
+  if (analyzeIo) saveIoAnalyzerArmed = false;
   const totalStartedAt = saveTimingNowMs();
   let finalStatus = "unknown";
   try {
@@ -2820,7 +2988,8 @@ async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeco
       durationSeconds,
       resolutionPreset: settings.resolutionPreset,
       fps: settings.fps,
-      audioSources: settings.audioSources.filter((source) => source.enabled).length
+      audioSources: settings.audioSources.filter((source) => source.enabled).length,
+      analyzeIo
     });
 
     if (settings.clipSound && settings.clipSound !== "none") {
@@ -2833,8 +3002,17 @@ async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeco
     }
 
     const engineStartedAt = saveTimingNowMs();
-    const result = await engine.saveClip(durationSeconds);
+    const result = await engine.saveClip(durationSeconds, settings.saveFolder, analyzeIo);
     logSaveTiming(saveId, "engine.saveClip", engineStartedAt, { ok: result.ok });
+    if (analyzeIo && result.saveIoAnalysis?.length) {
+      lastSaveIoAnalysis = {
+        saveId,
+        capturedAt: new Date().toISOString(),
+        durationSeconds,
+        analyses: result.saveIoAnalysis,
+        clipFilePath: result.clip?.filePath
+      };
+    }
     if (result.ok && result.clip) {
       const presetResolution = recordingOutputResolution(settings);
       const actualResolution = parseResolutionLabel(result.clip.resolution);
@@ -2919,6 +3097,9 @@ async function saveClipAndRecord(durationSeconds = readSettings().clipLengthSeco
       }
 
       result.clip = enrichSavedClip(result.clip, settings);
+      if (analyzeIo && lastSaveIoAnalysis?.saveId === saveId) {
+        lastSaveIoAnalysis.clipFilePath = result.clip.filePath;
+      }
       const recordStartedAt = saveTimingNowMs();
       await appendSavedClip(result.clip);
       logSaveTiming(saveId, "finalize.record", recordStartedAt);
@@ -3063,7 +3244,7 @@ async function createNotificationWindow(): Promise<void> {
     }
   });
 
-  notificationWindow.setIgnoreMouseEvents(true, { forward: true });
+  applyNotificationWindowPolicy(notificationWindow);
   notificationWindow.setMenu(null);
 
   ipcMain.on("hide-notification", () => {
@@ -3079,8 +3260,26 @@ async function createNotificationWindow(): Promise<void> {
   }
 }
 
+function applyNotificationWindowPolicy(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+
+  // "screen-saver" is Electron's highest practical Windows z-order level.
+  // Reapply it whenever the transient overlay is shown because display-mode
+  // and foreground-window transitions can disturb topmost ordering.
+  window.setAlwaysOnTop(true, "screen-saver");
+  window.setSkipTaskbar(true);
+  window.setFocusable(false);
+  window.setIgnoreMouseEvents(true, { forward: true });
+
+  if (process.platform === "win32") {
+    // Electron maps this to WDA_EXCLUDEFROMCAPTURE on supported Windows builds.
+    window.setContentProtection(true);
+  }
+}
+
 function showNotificationWindow(position: string): void {
-  if (!notificationWindow) return;
+  const window = notificationWindow;
+  if (!window || window.isDestroyed()) return;
   const workArea = screen.getPrimaryDisplay().workArea;
   const winWidth = 350;
   const winHeight = 100;
@@ -3101,9 +3300,11 @@ function showNotificationWindow(position: string): void {
     y = workArea.y + workArea.height - winHeight - yPadding;
   }
 
-  notificationWindow.setBounds({ x: Math.round(x), y: Math.round(y), width: winWidth, height: winHeight });
-  notificationWindow.showInactive();
-  notificationWindow.setIgnoreMouseEvents(true, { forward: true });
+  window.setBounds({ x: Math.round(x), y: Math.round(y), width: winWidth, height: winHeight });
+  applyNotificationWindowPolicy(window);
+  window.showInactive();
+  applyNotificationWindowPolicy(window);
+  window.moveTop();
 }
 
 function showMainWindow(): void {
@@ -3191,7 +3392,7 @@ async function exportDiagnostics(): Promise<string | undefined> {
   const diagnostics = await engine.diagnostics();
   const saveTimingLogPath = appDataPath("save-timing.log");
   const report = {
-    reportVersion: 2,
+    reportVersion: 3,
     exportedAt: exportedAt.toISOString(),
     application: {
       name: app.getName(),
@@ -3214,6 +3415,7 @@ async function exportDiagnostics(): Promise<string | undefined> {
       v8: process.versions.v8
     },
     diagnostics,
+    saveIoAnalysis: lastSaveIoAnalysis ?? null,
     saveTiming: {
       logPath: saveTimingLogPath,
       tail: readTextFileTail(saveTimingLogPath)
@@ -3225,6 +3427,13 @@ async function exportDiagnostics(): Promise<string | undefined> {
 
 ipcMain.handle("engine:getDiagnostics", () => engine.diagnostics());
 ipcMain.handle("engine:exportDiagnostics", () => exportDiagnostics());
+ipcMain.handle("engine:getSaveIoAnalyzerState", () => saveIoAnalyzerState());
+ipcMain.handle("engine:setSaveIoAnalyzerArmed", (_event, armed: boolean) => {
+  if (app.isPackaged) return saveIoAnalyzerState();
+  saveIoAnalyzerArmed = Boolean(armed);
+  if (saveIoAnalyzerArmed) lastSaveIoAnalysis = undefined;
+  return saveIoAnalyzerState();
+});
 ipcMain.handle("engine:saveClip", async (_event, durationSeconds: number) => {
   return await saveClipAndRecord(durationSeconds);
 });
@@ -3315,6 +3524,16 @@ ipcMain.handle("updates:getState", () => updateState);
 ipcMain.handle("updates:check", () => performUpdateCheck());
 ipcMain.handle("updates:download", () => downloadAppUpdate());
 ipcMain.handle("updates:install", () => installDownloadedUpdate());
+const themeFontDownloadUrls: Record<ThemeFontId, string> = {
+  glitten: "https://www.dafont.com/glitten.font",
+  milate: "https://www.dafont.com/dh-milate.font"
+};
+
+ipcMain.handle("theme:openFontDownload", async (_event, theme: string) => {
+  const url = themeFontDownloadUrls[theme as ThemeFontId];
+  if (!url) throw new Error(`Unknown theme font: ${theme}`);
+  await shell.openExternal(url);
+});
 ipcMain.handle("processes:list", () => listActiveProcesses());
 ipcMain.handle("processes:iconUrl", (_event, processName: string, executablePath?: string) => processIconUrl(processName, executablePath));
 ipcMain.handle("audio:listInputDevices", () => engine.listAudioInputDevices());

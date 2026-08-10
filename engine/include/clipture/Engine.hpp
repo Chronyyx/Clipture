@@ -24,6 +24,7 @@ namespace clipture {
 struct SaveClipRequest {
     int durationSeconds = 30;
     std::string saveFolder;
+    bool analyzeIo = false;
 };
 
 struct EngineSettings {
@@ -57,6 +58,7 @@ struct SaveClipResult {
     bool ok = false;
     std::string message;
     std::string clipJson;
+    std::string ioAnalysisJson;
 };
 
 class Engine {
@@ -86,6 +88,7 @@ private:
     PacketRingBuffer aacAudioPackets_;
     std::unique_ptr<ReplaySegmentStore> videoReplayStore_;
     std::unique_ptr<ReplaySegmentStore> aacReplayStore_;
+    std::unique_ptr<ReplaySegmentStore> pcmRecoveryStore_;
     std::unique_ptr<AudioReplayCoordinator> audioReplayCoordinator_;
     std::unique_ptr<CaptureSession> captureSession_;
     std::unique_ptr<EncoderWorker> encoderWorker_;

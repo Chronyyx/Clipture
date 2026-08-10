@@ -6,7 +6,8 @@
 
 namespace clipture {
 
-constexpr std::size_t kMaximumCachedTonemapperViews = 6;
+// Capture rotates through 12 output textures, so a smaller cache recreates views every frame.
+constexpr std::size_t kMaximumCachedTonemapperViews = 16;
 
 const char* TonemapShaderCode = R"(
 Texture2D<float4> InputTexture : register(t0);

@@ -149,7 +149,10 @@ bool testAdaptiveWriteRateController() {
     if (!require(
             solidStateConfig.initialBytesPerSecond == 640ULL * 1024ULL * 1024ULL &&
                 solidStateConfig.maximumLearnedBytesPerSecond == 768ULL * 1024ULL * 1024ULL &&
-                solidStateConfig.adjustmentWindowBytes == 128u * 1024u * 1024u,
+                solidStateConfig.adjustmentWindowBytes == 128u * 1024u * 1024u &&
+                solidStateConfig.writeLatencyBackoffUs == 16'000 &&
+                solidStateConfig.severeWriteLatencyBackoffUs == 100'000 &&
+                solidStateConfig.latencyRecoveryBytes == 256u * 1024u * 1024u,
             "solid-state pacing should stay fast while bounding dirty-cache growth")) {
         return false;
     }
@@ -233,17 +236,37 @@ bool testAdaptiveWriteRateController() {
     const uint64_t criticalRate = controller.currentBytesPerSecond();
     if (!require(
             criticalRate < elevatedRate &&
-                criticalRate >= controller.dynamicMinimumRate(),
-            "critical pressure should back off without falling below the measured service floor")) {
+                criticalRate >= config.minimumBytesPerSecond,
+            "critical pressure should back off without falling below the configured safe floor")) {
         return false;
     }
     controller.observePressure(clipture::AdaptiveWritePressure::Healthy);
     controller.observeWrite(static_cast<std::size_t>(mib), 4'000);
+    if (!require(
+            controller.currentBytesPerSecond() > criticalRate &&
+                controller.pressureBackoffs() == 2 &&
+                controller.measuredWrites() == 2,
+            "stable capture should recover gradually after pressure subsides")) {
+        return false;
+    }
+
+    auto latencyConfig = config;
+    latencyConfig.initialBytesPerSecond = 128 * mib;
+    latencyConfig.writeLatencyBackoffUs = 10'000;
+    latencyConfig.severeWriteLatencyBackoffUs = 50'000;
+    latencyConfig.latencyRecoveryBytes = static_cast<std::size_t>(2 * mib);
+    clipture::AdaptiveWriteRateController latencyController(latencyConfig);
+    latencyController.observeIoLatency(100'000);
+    const uint64_t latencyBackoffRate = latencyController.currentBytesPerSecond();
+    if (!require(
+            latencyBackoffRate == 64 * mib && latencyController.latencyBackoffs() == 1,
+            "a severe read or write stall should halve the aggregate I/O rate")) {
+        return false;
+    }
+    latencyController.observeWrite(static_cast<std::size_t>(mib), 4'000);
     return require(
-        controller.currentBytesPerSecond() > criticalRate &&
-            controller.pressureBackoffs() == 2 &&
-            controller.measuredWrites() == 2,
-        "stable capture should recover gradually after pressure subsides");
+        latencyController.currentBytesPerSecond() == latencyBackoffRate,
+        "the rate should remain reduced while the latency recovery window drains");
 }
 
 bool testPcmContainerConversion() {
@@ -1081,7 +1104,8 @@ bool testReplaySegmentStoreSpillsOldestBeyondRamBudget() {
     const bool statsValid = require(
         stats.healthy && stats.residentPayloadBytes == 74 &&
             stats.residentPayloadBudgetBytes == 74 && stats.residentPackets == 2 &&
-            stats.diskBackedPackets == 1 && stats.ramFallbackBytes == 0,
+            stats.diskBackedPackets == 1 && stats.ramFallbackBytes == 0 &&
+            stats.spillCandidateInspections == 1,
         "hybrid replay diagnostics should distinguish healthy RAM cache from disk spill");
 
     std::vector<std::byte> restored;
@@ -1093,6 +1117,156 @@ bool testReplaySegmentStoreSpillsOldestBeyondRamBudget() {
     std::error_code ignored;
     std::filesystem::remove_all(root, ignored);
     return layoutValid && statsValid && payloadValid;
+}
+
+bool testReplaySpillSchedulingStaysLinear() {
+    const auto root = uniqueReplayTestRoot("linear-spill");
+    clipture::ReplaySegmentStoreOptions options;
+    options.streamName = "linear-spill";
+    options.rootDirectory = root;
+    options.retention100ns = 1'000'000;
+    options.targetSegmentBytes = 1024 * 1024;
+    options.maximumWriteBytes = 4096;
+    options.residentPayloadBudgetBytes = 4 * 32;
+
+    constexpr std::size_t packetCount = 2'000;
+    clipture::PacketRingBuffer pool;
+    clipture::ReplaySegmentStore store(options);
+    store.start();
+    for (std::size_t index = 0; index < packetCount; ++index) {
+        clipture::EncodedPacket packet;
+        packet.kind = clipture::PacketKind::Video;
+        packet.codec = clipture::PacketCodec::H264AnnexB;
+        packet.pts100ns = 1'000 + static_cast<int64_t>(index);
+        packet.duration100ns = 1;
+        packet.payload = pool.acquirePayload(32);
+        std::fill(packet.payload->begin(), packet.payload->end(), static_cast<std::byte>(index & 0xFF));
+        store.push(packet);
+    }
+    if (!require(store.waitUntilIdle(std::chrono::seconds(5)), "linear replay spill should drain")) {
+        store.stop();
+        return false;
+    }
+
+    const auto stats = store.stats();
+    const bool valid = require(
+        stats.packets == packetCount &&
+            stats.residentPayloadBytes <= options.residentPayloadBudgetBytes &&
+            stats.residentPackets + stats.diskBackedPackets == packetCount &&
+            stats.spillCandidateInspections <= packetCount,
+        "each retained packet should be inspected at most once by the spill scheduler");
+    store.stop();
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    return valid;
+}
+
+bool testReplaySegmentsShareOneReadCache() {
+    const auto root = uniqueReplayTestRoot("shared-read-cache");
+    clipture::ReplaySegmentStoreOptions options;
+    options.streamName = "shared-read-cache";
+    options.rootDirectory = root;
+    options.retention100ns = 10'000;
+    options.targetSegmentBytes = 32;
+    options.maximumWriteBytes = 16;
+    options.residentPayloadBudgetBytes = 0;
+
+    clipture::PacketRingBuffer pool;
+    clipture::ReplaySegmentStore store(options);
+    store.start();
+    for (int index = 0; index < 10; ++index) {
+        clipture::EncodedPacket packet;
+        packet.kind = clipture::PacketKind::Video;
+        packet.codec = clipture::PacketCodec::H264AnnexB;
+        packet.pts100ns = 1'000 + index * 100;
+        packet.duration100ns = 100;
+        packet.keyframe = true;
+        packet.payload = pool.acquirePayload(32);
+        std::fill(packet.payload->begin(), packet.payload->end(), static_cast<std::byte>(index));
+        store.push(packet);
+    }
+    if (!require(store.waitUntilIdle(std::chrono::seconds(3)), "segmented replay should drain")) {
+        store.stop();
+        return false;
+    }
+
+    const auto snapshot = store.snapshot();
+    bool payloadsValid = snapshot.size() == 10;
+    std::vector<std::byte> restored;
+    for (std::size_t index = 0; index < snapshot.size(); ++index) {
+        payloadsValid = payloadsValid &&
+            clipture::copyPayloadRange(snapshot[index], 0, clipture::payloadSize(snapshot[index]), restored) &&
+            restored.size() == 32 && restored.front() == static_cast<std::byte>(index);
+    }
+    const auto stats = store.stats();
+    const bool valid = require(payloadsValid, "payloads from every replay segment should remain readable") &&
+        require(
+            stats.activeSegments >= 5 && stats.readCacheBytes > 0 &&
+                stats.readCacheBytes <= 2u * 1024u * 1024u,
+            "many replay segments should share one bounded read-ahead allocation");
+    store.stop();
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    return valid;
+}
+
+bool testPcmRecoveryWindowMergesHotAndDiskPackets() {
+    const auto root = uniqueReplayTestRoot("pcm-recovery");
+    clipture::ReplaySegmentStoreOptions options;
+    options.streamName = "pcm-recovery";
+    options.rootDirectory = root;
+    options.retention100ns = 10'000;
+    options.maximumWriteBytes = 16;
+    options.residentPayloadBudgetBytes = 0;
+
+    clipture::PacketRingBuffer rawPackets;
+    clipture::PacketRingBuffer aacPackets;
+    clipture::ReplaySegmentStore recovery(options);
+    clipture::AudioReplayCoordinator coordinator(rawPackets, aacPackets, nullptr, &recovery);
+    recovery.start();
+
+    auto makePcm = [](int64_t pts100ns, int16_t value) {
+        clipture::EncodedPacket packet;
+        packet.kind = clipture::PacketKind::Audio;
+        packet.codec = clipture::PacketCodec::PcmS16;
+        packet.pts100ns = pts100ns;
+        packet.duration100ns = 100;
+        packet.sourceId = "microphone-pcm";
+        packet.logicalTrackId = "microphone-pcm";
+        packet.sampleRate = 48'000;
+        packet.channelCount = 1;
+        packet.bitsPerSample = 16;
+        packet.audioFrameCount = 4;
+        packet.audible = true;
+        packet.payload = std::make_shared<clipture::PacketPayload>(4 * sizeof(int16_t));
+        auto* samples = reinterpret_cast<int16_t*>(packet.payload->data());
+        std::fill(samples, samples + 4, value);
+        return packet;
+    };
+
+    const auto duplicate = makePcm(1'000, 10);
+    recovery.push(duplicate);
+    recovery.push(makePcm(1'100, 20));
+    rawPackets.push(duplicate);
+    if (!require(recovery.waitUntilIdle(std::chrono::seconds(3)), "PCM recovery spill should drain")) {
+        recovery.stop();
+        return false;
+    }
+
+    const auto selected = coordinator.selectPcmWindow(900, 1'200);
+    std::vector<std::byte> restored;
+    const bool valid = require(
+        selected.size() == 2 && selected[0].payload &&
+            !selected[1].payload && selected[1].payloadReader,
+        "PCM selection should deduplicate the hot packet and retain older disk recovery") &&
+        require(
+            clipture::copyPayloadRange(selected[1], 0, clipture::payloadSize(selected[1]), restored) &&
+                restored.size() == 4 * sizeof(int16_t),
+            "disk-backed PCM recovery should remain readable without materializing the window");
+    recovery.stop();
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    return valid;
 }
 
 bool testMp4MuxerStreamsDiskBackedVideo() {
@@ -1135,6 +1309,7 @@ bool testMp4MuxerStreamsDiskBackedVideo() {
     clipture::MuxWritePacing pacing;
     pacing.presentationStartPts100ns = packet.pts100ns;
     pacing.presentationEndPts100ns = packet.pts100ns + packet.duration100ns;
+    pacing.analyzeIo = true;
     const auto mux = clipture::muxH264ToMp4(
         archived,
         (root / "output").string(),
@@ -1155,8 +1330,15 @@ bool testMp4MuxerStreamsDiskBackedVideo() {
         std::istreambuf_iterator<char>());
     const std::array<char, 4> editType { 'e', 'l', 's', 't' };
     const bool hasEditList = std::search(bytes.begin(), bytes.end(), editType.begin(), editType.end()) != bytes.end();
+    const auto ioJson = clipture::saveIoAnalysisToJson(mux.ioAnalysis);
     const bool valid = require(bytes.size() > 100 && hasEditList,
-                               "disk-backed mux output should contain MP4 metadata and an exact-range edit list");
+                               "disk-backed mux output should contain MP4 metadata and an exact-range edit list") &&
+        require(
+            mux.ioAnalysis.enabled && !mux.ioAnalysis.timeline.empty() &&
+                mux.ioAnalysis.diskBackedSourceBytes > 0 &&
+                ioJson.find(R"("timeline")") != std::string::npos &&
+                ioJson.find(R"("replayReadBytes")") != std::string::npos,
+            "armed mux I/O analysis should report bounded disk reads and valid JSON");
     std::error_code ignored;
     std::filesystem::remove_all(root, ignored);
     return valid;
@@ -1188,6 +1370,9 @@ int main() {
     if (!testReplaySegmentStorePersistsAndRetainsSnapshots()) return 1;
     if (!testReplaySegmentStoreFallsBackToRam()) return 1;
     if (!testReplaySegmentStoreSpillsOldestBeyondRamBudget()) return 1;
+    if (!testReplaySpillSchedulingStaysLinear()) return 1;
+    if (!testReplaySegmentsShareOneReadCache()) return 1;
+    if (!testPcmRecoveryWindowMergesHotAndDiskPackets()) return 1;
     if (!testMp4MuxerStreamsDiskBackedVideo()) return 1;
     std::cout << "Packet architecture tests passed.\n";
     return 0;

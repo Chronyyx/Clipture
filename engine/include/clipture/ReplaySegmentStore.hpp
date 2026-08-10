@@ -35,9 +35,11 @@ struct ReplaySegmentStoreStats {
     uint64_t ramFallbackBytes = 0;
     uint64_t residentPayloadBytes = 0;
     uint64_t residentPayloadBudgetBytes = 0;
+    uint64_t readCacheBytes = 0;
     std::size_t residentPackets = 0;
     std::size_t diskBackedPackets = 0;
     uint64_t persistedPackets = 0;
+    uint64_t spillCandidateInspections = 0;
     uint64_t writeFailures = 0;
     std::size_t maximumWriteBytes = 0;
 };

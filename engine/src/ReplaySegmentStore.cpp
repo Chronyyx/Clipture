@@ -114,24 +114,52 @@ struct ReplaySessionDirectory {
 
 bool applyLowIoPriority(HANDLE handle);
 
+struct SegmentBacking;
+
+struct SegmentReadCache {
+    ~SegmentReadCache() {
+        std::lock_guard lock(mutex);
+        closeLocked();
+    }
+
+    void closeLocked() {
+        if (handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(handle);
+            handle = INVALID_HANDLE_VALUE;
+        }
+        owner = nullptr;
+        fileOffset = 0;
+        fileOffsetKnown = false;
+        readAheadOffset = 0;
+        readAheadSize = 0;
+    }
+
+    uint64_t capacityBytes() const {
+        std::lock_guard lock(mutex);
+        return static_cast<uint64_t>(readAhead.capacity());
+    }
+
+    mutable std::mutex mutex;
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    const SegmentBacking* owner = nullptr;
+    uint64_t fileOffset = 0;
+    bool fileOffsetKnown = false;
+    uint64_t readAheadOffset = 0;
+    std::size_t readAheadSize = 0;
+    std::vector<std::byte> readAhead;
+};
+
 struct SegmentBacking {
     std::shared_ptr<ReplaySessionDirectory> session;
+    std::shared_ptr<SegmentReadCache> readCache;
     std::filesystem::path path;
     std::atomic<uint64_t> writtenBytes { 0 };
-    mutable std::mutex readMutex;
-    mutable HANDLE readHandle = INVALID_HANDLE_VALUE;
-    mutable uint64_t readFileOffset = 0;
-    mutable bool readFileOffsetKnown = false;
-    mutable uint64_t readAheadOffset = 0;
-    mutable std::size_t readAheadSize = 0;
-    mutable std::vector<std::byte> readAhead;
 
     ~SegmentBacking() {
-        {
-            std::lock_guard lock(readMutex);
-            if (readHandle != INVALID_HANDLE_VALUE) {
-                CloseHandle(readHandle);
-                readHandle = INVALID_HANDLE_VALUE;
+        if (readCache) {
+            std::lock_guard lock(readCache->mutex);
+            if (readCache->owner == this) {
+                readCache->closeLocked();
             }
         }
         if (!session || !session->deleteOnClose || path.empty()) return;
@@ -143,10 +171,12 @@ struct SegmentBacking {
         if (offset > static_cast<uint64_t>(std::numeric_limits<LONGLONG>::max())) return false;
         const uint64_t availableBytes = writtenBytes.load(std::memory_order_acquire);
         if (offset > availableBytes || destination.size() > availableBytes - offset) return false;
+        if (!readCache) return false;
 
-        std::lock_guard lock(readMutex);
-        if (readHandle == INVALID_HANDLE_VALUE) {
-            readHandle = CreateFileW(
+        std::lock_guard lock(readCache->mutex);
+        if (readCache->owner != this || readCache->handle == INVALID_HANDLE_VALUE) {
+            readCache->closeLocked();
+            readCache->handle = CreateFileW(
                 path.c_str(),
                 GENERIC_READ,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -154,19 +184,23 @@ struct SegmentBacking {
                 OPEN_EXISTING,
                 FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
                 nullptr);
-            if (readHandle == INVALID_HANDLE_VALUE) return false;
-            applyLowIoPriority(readHandle);
-            readFileOffset = 0;
-            readFileOffsetKnown = true;
-            readAhead.reserve(kReadAheadBytes);
+            if (readCache->handle == INVALID_HANDLE_VALUE) return false;
+            applyLowIoPriority(readCache->handle);
+            readCache->owner = this;
+            readCache->fileOffset = 0;
+            readCache->fileOffsetKnown = true;
+            readCache->readAhead.reserve(kReadAheadBytes);
         }
 
         uint64_t currentOffset = offset;
         while (!destination.empty()) {
-            if (currentOffset >= readAheadOffset && currentOffset - readAheadOffset < readAheadSize) {
-                const std::size_t cacheOffset = static_cast<std::size_t>(currentOffset - readAheadOffset);
-                const std::size_t copyBytes = std::min(destination.size(), readAheadSize - cacheOffset);
-                std::memcpy(destination.data(), readAhead.data() + cacheOffset, copyBytes);
+            if (currentOffset >= readCache->readAheadOffset &&
+                currentOffset - readCache->readAheadOffset < readCache->readAheadSize) {
+                const std::size_t cacheOffset =
+                    static_cast<std::size_t>(currentOffset - readCache->readAheadOffset);
+                const std::size_t copyBytes =
+                    std::min(destination.size(), readCache->readAheadSize - cacheOffset);
+                std::memcpy(destination.data(), readCache->readAhead.data() + cacheOffset, copyBytes);
                 destination = destination.subspan(copyBytes);
                 currentOffset += copyBytes;
                 continue;
@@ -179,32 +213,32 @@ struct SegmentBacking {
                 readableBytes - currentOffset));
             if (request == 0) return false;
 
-            if (!readFileOffsetKnown || readFileOffset != currentOffset) {
+            if (!readCache->fileOffsetKnown || readCache->fileOffset != currentOffset) {
                 LARGE_INTEGER position {};
                 position.QuadPart = static_cast<LONGLONG>(currentOffset);
-                if (!SetFilePointerEx(readHandle, position, nullptr, FILE_BEGIN)) {
-                    readFileOffsetKnown = false;
+                if (!SetFilePointerEx(readCache->handle, position, nullptr, FILE_BEGIN)) {
+                    readCache->fileOffsetKnown = false;
                     return false;
                 }
-                readFileOffset = currentOffset;
-                readFileOffsetKnown = true;
+                readCache->fileOffset = currentOffset;
+                readCache->fileOffsetKnown = true;
             }
 
-            readAhead.resize(request);
+            readCache->readAhead.resize(request);
             DWORD readBytes = 0;
             if (!ReadFile(
-                    readHandle,
-                    readAhead.data(),
+                    readCache->handle,
+                    readCache->readAhead.data(),
                     static_cast<DWORD>(request),
                     &readBytes,
                     nullptr) || readBytes != request) {
-                readFileOffsetKnown = false;
-                readAheadSize = 0;
+                readCache->fileOffsetKnown = false;
+                readCache->readAheadSize = 0;
                 return false;
             }
-            readFileOffset += readBytes;
-            readAheadOffset = currentOffset;
-            readAheadSize = readBytes;
+            readCache->fileOffset += readBytes;
+            readCache->readAheadOffset = currentOffset;
+            readCache->readAheadSize = readBytes;
         }
         return true;
     }
@@ -248,6 +282,7 @@ struct ReplaySegmentStore::Impl {
         EncodedPacket packet;
         std::atomic<bool> retired { false };
         bool persistenceQueued = false;
+        std::size_t payloadBytes = 0;
     };
 
     struct ActiveSegment {
@@ -287,7 +322,10 @@ struct ReplaySegmentStore::Impl {
             stopRequested = true;
             for (const auto& entry : entries) entry->retired = true;
             pending.clear();
+            queuedPackets = 0;
             queuedBytes = 0;
+            queuedResidentBytes = 0;
+            nextSpillCandidate = 0;
         }
         wake.notify_all();
         idle.notify_all();
@@ -296,6 +334,8 @@ struct ReplaySegmentStore::Impl {
             std::lock_guard lock(mutex);
             entries.clear();
             residentPayloadBytes = 0;
+            residentPackets = 0;
+            diskBackedPackets = 0;
         }
         {
             std::lock_guard lock(segmentMutex);
@@ -324,11 +364,17 @@ struct ReplaySegmentStore::Impl {
         if (payloadEmpty(packet)) return;
         auto entry = std::make_shared<Entry>();
         entry->packet = packet;
-        const auto bytes = static_cast<uint64_t>(payloadSize(packet));
+        entry->payloadBytes = payloadSize(packet);
+        const auto bytes = static_cast<uint64_t>(entry->payloadBytes);
         {
             std::lock_guard lock(mutex);
             entries.push_back(entry);
-            if (packet.payload) residentPayloadBytes += bytes;
+            if (packet.payload) {
+                residentPayloadBytes += bytes;
+                ++residentPackets;
+            } else if (packet.payloadReader) {
+                ++diskBackedPackets;
+            }
             trimLocked();
             scheduleSpillsLocked();
         }
@@ -362,8 +408,13 @@ struct ReplaySegmentStore::Impl {
         for (const auto& entry : entries) entry->retired = true;
         entries.clear();
         pending.clear();
+        queuedPackets = 0;
         queuedBytes = 0;
+        queuedResidentBytes = 0;
         residentPayloadBytes = 0;
+        residentPackets = 0;
+        diskBackedPackets = 0;
+        nextSpillCandidate = 0;
         rotationRequested.store(true, std::memory_order_relaxed);
         wake.notify_one();
         idle.notify_all();
@@ -380,17 +431,14 @@ struct ReplaySegmentStore::Impl {
         {
             std::lock_guard lock(mutex);
             result.packets = entries.size();
-            result.queuedPackets = pending.size();
+            result.queuedPackets = queuedPackets;
             result.queuedBytes = queuedBytes;
             result.residentPayloadBytes = residentPayloadBytes;
             result.residentPayloadBudgetBytes = options.residentPayloadBudgetBytes;
             result.persistedPackets = persistedPackets;
-            for (const auto& entry : entries) {
-                if (entry->packet.payload) ++result.residentPackets;
-                if (!entry->packet.payload && entry->packet.payloadReader) {
-                    ++result.diskBackedPackets;
-                }
-            }
+            result.residentPackets = residentPackets;
+            result.diskBackedPackets = diskBackedPackets;
+            result.spillCandidateInspections = spillCandidateInspections;
         }
         {
             std::lock_guard lock(segmentMutex);
@@ -402,6 +450,7 @@ struct ReplaySegmentStore::Impl {
                 result.diskBytes += segment->writtenBytes.load(std::memory_order_relaxed);
             }
         }
+        result.readCacheBytes = readCache ? readCache->capacityBytes() : 0;
         result.ramFallbackBytes = result.healthy ? 0 : result.queuedBytes;
         return result;
     }
@@ -418,18 +467,26 @@ struct ReplaySegmentStore::Impl {
         while (!entries.empty() && entries.front()->packet.pts100ns < oldestAllowed100ns) {
             auto entry = std::move(entries.front());
             entries.pop_front();
+            if (nextSpillCandidate > 0) --nextSpillCandidate;
             entry->retired = true;
             if (entry->packet.payload) {
                 residentPayloadBytes -= std::min<uint64_t>(
                     residentPayloadBytes,
                     static_cast<uint64_t>(entry->packet.payload->size()));
+                if (residentPackets > 0) --residentPackets;
+            } else if (entry->packet.payloadReader && diskBackedPackets > 0) {
+                --diskBackedPackets;
             }
-            const auto pendingEntry = std::find(pending.begin(), pending.end(), entry);
-            if (pendingEntry != pending.end()) {
+            if (entry->persistenceQueued) {
                 queuedBytes -= std::min<uint64_t>(
                     queuedBytes,
-                    static_cast<uint64_t>(payloadSize(entry->packet)));
-                pending.erase(pendingEntry);
+                    static_cast<uint64_t>(entry->payloadBytes));
+                if (entry->packet.payload) {
+                    queuedResidentBytes -= std::min<uint64_t>(
+                        queuedResidentBytes,
+                        static_cast<uint64_t>(entry->payloadBytes));
+                }
+                if (queuedPackets > 0) --queuedPackets;
                 entry->persistenceQueued = false;
             }
         }
@@ -437,19 +494,15 @@ struct ReplaySegmentStore::Impl {
     }
 
     void scheduleSpillsLocked() {
-        uint64_t projectedResidentBytes = residentPayloadBytes;
-        for (const auto& entry : entries) {
-            if (!entry->persistenceQueued || !entry->packet.payload) continue;
-            projectedResidentBytes -= std::min<uint64_t>(
-                projectedResidentBytes,
-                static_cast<uint64_t>(entry->packet.payload->size()));
-        }
+        uint64_t projectedResidentBytes = residentPayloadBytes -
+            std::min(residentPayloadBytes, queuedResidentBytes);
 
         const uint64_t budget = options.residentPayloadBudgetBytes;
         if (projectedResidentBytes <= budget) return;
 
-        for (const auto& entry : entries) {
-            if (projectedResidentBytes <= budget) break;
+        while (projectedResidentBytes > budget && nextSpillCandidate < entries.size()) {
+            const auto& entry = entries[nextSpillCandidate++];
+            ++spillCandidateInspections;
             if (entry->retired.load(std::memory_order_relaxed) ||
                 entry->persistenceQueued || !entry->packet.payload ||
                 entry->packet.payload->empty()) {
@@ -458,7 +511,9 @@ struct ReplaySegmentStore::Impl {
             const auto bytes = static_cast<uint64_t>(entry->packet.payload->size());
             entry->persistenceQueued = true;
             pending.push_back(entry);
+            ++queuedPackets;
             queuedBytes += bytes;
+            queuedResidentBytes += bytes;
             projectedResidentBytes -= std::min(projectedResidentBytes, bytes);
         }
     }
@@ -488,6 +543,7 @@ struct ReplaySegmentStore::Impl {
         if (!ensureSession()) return false;
         auto backing = std::make_shared<SegmentBacking>();
         backing->session = session;
+        backing->readCache = readCache;
         backing->path = session->path / (
             safeStreamName(options.streamName) + L"-" + std::to_wstring(nextSegment++) + L".bin");
 
@@ -570,6 +626,9 @@ struct ReplaySegmentStore::Impl {
                 entry->packet.payloadReader = std::move(reader);
                 entry->packet.payload.reset();
                 residentPayloadBytes -= std::min<uint64_t>(residentPayloadBytes, memory->size());
+                queuedResidentBytes -= std::min<uint64_t>(queuedResidentBytes, memory->size());
+                if (residentPackets > 0) --residentPackets;
+                ++diskBackedPackets;
                 ++persistedPackets;
                 scheduleSpillsLocked();
             }
@@ -581,12 +640,24 @@ struct ReplaySegmentStore::Impl {
     void discardCompletedPending(const std::shared_ptr<Entry>& entry) {
         {
             std::lock_guard lock(mutex);
-            const auto found = std::find(pending.begin(), pending.end(), entry);
-            if (found != pending.end()) {
-                pending.erase(found);
-                queuedBytes -= std::min<uint64_t>(queuedBytes, payloadSize(entry->packet));
+            if (!pending.empty() && pending.front() == entry) {
+                pending.pop_front();
+            } else {
+                const auto found = std::find(pending.begin(), pending.end(), entry);
+                if (found != pending.end()) pending.erase(found);
             }
-            entry->persistenceQueued = false;
+            if (entry->persistenceQueued) {
+                queuedBytes -= std::min<uint64_t>(
+                    queuedBytes,
+                    static_cast<uint64_t>(entry->payloadBytes));
+                if (entry->packet.payload) {
+                    queuedResidentBytes -= std::min<uint64_t>(
+                        queuedResidentBytes,
+                        static_cast<uint64_t>(entry->payloadBytes));
+                }
+                if (queuedPackets > 0) --queuedPackets;
+                entry->persistenceQueued = false;
+            }
             if (pending.empty()) idle.notify_all();
         }
         std::lock_guard segmentLock(segmentMutex);
@@ -666,12 +737,19 @@ struct ReplaySegmentStore::Impl {
     std::deque<std::shared_ptr<Entry>> entries;
     std::deque<std::shared_ptr<Entry>> pending;
     std::shared_ptr<ReplaySessionDirectory> session;
+    std::shared_ptr<SegmentReadCache> readCache = std::make_shared<SegmentReadCache>();
     std::vector<std::shared_ptr<SegmentBacking>> segments;
     ActiveSegment active;
     uint64_t nextSegment = 0;
+    std::size_t queuedPackets = 0;
     uint64_t queuedBytes = 0;
+    uint64_t queuedResidentBytes = 0;
     uint64_t residentPayloadBytes = 0;
+    std::size_t residentPackets = 0;
+    std::size_t diskBackedPackets = 0;
+    std::size_t nextSpillCandidate = 0;
     uint64_t persistedPackets = 0;
+    uint64_t spillCandidateInspections = 0;
     uint64_t writeFailures = 0;
     std::size_t maximumWriteSize = 0;
 };

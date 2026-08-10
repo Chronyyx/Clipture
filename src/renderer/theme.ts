@@ -1,8 +1,39 @@
-import type { ClipSettings } from "../shared/types";
+import type { ClipSettings, ThemeFontId } from "../shared/types";
 
 export type UiAppearance = Pick<ClipSettings, "uiTheme" | "customMainColor" | "customAccentColor">;
+type UiTheme = ClipSettings["uiTheme"];
 
 const storageKey = "clipture.ui-appearance.v1";
+type LocalThemeFontState = {
+  face?: FontFace;
+  load?: Promise<boolean>;
+  generation: number;
+};
+
+const localThemeFontSpecs: Record<ThemeFontId, {
+  familyPrefix: string;
+  source: string;
+  cssProperty: string;
+  weight: string;
+}> = {
+  glitten: {
+    familyPrefix: "Clipture Glitten Local",
+    source: 'local("Glitten"), local("Glitten Regular"), local("Glitten-Regular")',
+    cssProperty: "--glitten-local-font",
+    weight: "400"
+  },
+  milate: {
+    familyPrefix: "Clipture Milate Local",
+    source: 'local("Dh Milate"), local("Dh Milate DEMO"), local("Dh Milate Regular"), local("Milate"), local("Milate Regular")',
+    cssProperty: "--milate-local-font",
+    weight: "500"
+  }
+};
+
+const localThemeFontStates: Record<ThemeFontId, LocalThemeFontState> = {
+  glitten: { generation: 0 },
+  milate: { generation: 0 }
+};
 const customProperties = [
   "--app-bg",
   "--sidebar-bg",
@@ -84,6 +115,40 @@ function clearCustomProperties(root: HTMLElement): void {
   root.style.removeProperty("color-scheme");
 }
 
+function normalizeUiTheme(value: unknown): UiTheme {
+  return value === "light" || value === "glitten" || value === "milate" || value === "custom" ? value : "graphite";
+}
+
+export function refreshLocalThemeFont(theme: ThemeFontId): Promise<boolean> {
+  const spec = localThemeFontSpecs[theme];
+  const state = localThemeFontStates[theme];
+  if (state.face?.status === "loaded") {
+    document.documentElement.style.setProperty(spec.cssProperty, `"${state.face.family}"`);
+    return Promise.resolve(true);
+  }
+  if (state.load) return state.load;
+
+  state.load = (async () => {
+    const family = `${spec.familyPrefix} ${++state.generation}`;
+    const face = new FontFace(family, spec.source, { style: "normal", weight: spec.weight });
+
+    try {
+      await face.load();
+      document.fonts.add(face);
+      if (state.face) document.fonts.delete(state.face);
+      state.face = face;
+      document.documentElement.style.setProperty(spec.cssProperty, `"${family}"`);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      state.load = undefined;
+    }
+  })();
+
+  return state.load;
+}
+
 function customThemeProperties(mainColor: string, accentColor: string): Record<(typeof customProperties)[number], string> {
   const main = normalizeThemeColor(mainColor, "#101114");
   const accent = normalizeThemeColor(accentColor, "#c8a6ff");
@@ -129,7 +194,7 @@ function customThemeProperties(mainColor: string, accentColor: string): Record<(
 
 export function applyUiTheme(appearance: UiAppearance): void {
   const root = document.documentElement;
-  const theme = appearance.uiTheme === "light" || appearance.uiTheme === "custom" ? appearance.uiTheme : "graphite";
+  const theme = normalizeUiTheme(appearance.uiTheme);
   clearCustomProperties(root);
   root.dataset.theme = theme;
 
@@ -154,7 +219,7 @@ export function applyCachedUiTheme(): void {
     const cached = JSON.parse(localStorage.getItem(storageKey) ?? "null") as Partial<UiAppearance> | null;
     if (!cached) return;
     cacheAndApplyUiTheme({
-      uiTheme: cached.uiTheme === "light" || cached.uiTheme === "custom" ? cached.uiTheme : "graphite",
+      uiTheme: normalizeUiTheme(cached.uiTheme),
       customMainColor: normalizeThemeColor(cached.customMainColor, "#101114"),
       customAccentColor: normalizeThemeColor(cached.customAccentColor, "#c8a6ff")
     });

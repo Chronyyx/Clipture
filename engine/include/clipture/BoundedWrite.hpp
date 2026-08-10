@@ -48,6 +48,9 @@ struct AdaptiveWritePacerConfig {
     uint32_t targetUtilizationPercent = 75;
     uint32_t minimumMeasuredServicePercent = 20;
     uint64_t minimumMeasuredWriteUs = 250;
+    uint64_t writeLatencyBackoffUs = 50'000;
+    uint64_t severeWriteLatencyBackoffUs = 200'000;
+    std::size_t latencyRecoveryBytes = 64u * 1024u * 1024u;
 };
 
 constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
@@ -59,6 +62,9 @@ constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
     constexpr uint64_t solidStateInitialRate = 640ULL * mib;
     constexpr uint64_t solidStateMaximumRate = 768ULL * mib;
     constexpr std::size_t solidStateAdjustmentWindow = 128u * 1024u * 1024u;
+    constexpr uint64_t solidStateLatencyBackoffUs = 16'000;
+    constexpr uint64_t solidStateSevereLatencyBackoffUs = 100'000;
+    constexpr std::size_t solidStateLatencyRecoveryBytes = 256u * 1024u * 1024u;
 
     config.maximumLearnedBytesPerSecond = std::min(
         config.maximumLearnedBytesPerSecond,
@@ -69,6 +75,15 @@ constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
     config.adjustmentWindowBytes = std::max(
         config.adjustmentWindowBytes,
         solidStateAdjustmentWindow);
+    config.writeLatencyBackoffUs = std::min(
+        config.writeLatencyBackoffUs,
+        solidStateLatencyBackoffUs);
+    config.severeWriteLatencyBackoffUs = std::min(
+        config.severeWriteLatencyBackoffUs,
+        solidStateSevereLatencyBackoffUs);
+    config.latencyRecoveryBytes = std::max(
+        config.latencyRecoveryBytes,
+        solidStateLatencyRecoveryBytes);
     return config;
 }
 
@@ -155,6 +170,13 @@ public:
             1,
             config_.targetUtilizationPercent);
         config_.minimumMeasuredWriteUs = std::max<uint64_t>(config_.minimumMeasuredWriteUs, 1);
+        config_.writeLatencyBackoffUs = std::max<uint64_t>(config_.writeLatencyBackoffUs, 1);
+        config_.severeWriteLatencyBackoffUs = std::max(
+            config_.severeWriteLatencyBackoffUs,
+            config_.writeLatencyBackoffUs);
+        config_.latencyRecoveryBytes = std::max<std::size_t>(
+            config_.latencyRecoveryBytes,
+            config_.adjustmentWindowBytes);
 
         currentBytesPerSecond_ = config_.initialBytesPerSecond;
         minimumRateSeen_ = currentBytesPerSecond_;
@@ -169,13 +191,13 @@ public:
         healthyBytes_ = 0;
 
         if (pressure == AdaptiveWritePressure::Critical) {
-            setRate(std::max(dynamicMinimumBytesPerSecond(), currentBytesPerSecond_ / 2));
+            setRate(std::max(config_.minimumBytesPerSecond, currentBytesPerSecond_ / 2));
             ++pressureBackoffs_;
         } else if (
             pressure == AdaptiveWritePressure::Elevated &&
             previousPressure == AdaptiveWritePressure::Healthy) {
             setRate(std::max(
-                dynamicMinimumBytesPerSecond(),
+                config_.minimumBytesPerSecond,
                 currentBytesPerSecond_ - currentBytesPerSecond_ / 4));
             ++pressureBackoffs_;
         } else if (
@@ -210,7 +232,16 @@ public:
             }
         }
 
+        applyLatencyBackoff(durationUs);
+
         if (pressure_ != AdaptiveWritePressure::Healthy) return;
+        if (latencyRecoveryBytesRemaining_ > 0) {
+            latencyRecoveryBytesRemaining_ =
+                bytes >= latencyRecoveryBytesRemaining_
+                    ? 0
+                    : latencyRecoveryBytesRemaining_ - bytes;
+            return;
+        }
         healthyBytes_ += bytes;
         if (healthyBytes_ < config_.adjustmentWindowBytes) return;
         healthyBytes_ %= config_.adjustmentWindowBytes;
@@ -233,6 +264,10 @@ public:
         }
     }
 
+    void observeIoLatency(uint64_t durationUs) {
+        applyLatencyBackoff(durationUs);
+    }
+
     uint64_t currentBytesPerSecond() const { return currentBytesPerSecond_; }
     uint64_t observedServiceBytesPerSecond() const { return observedServiceBytesPerSecond_; }
     uint64_t minimumRateSeen() const { return minimumRateSeen_; }
@@ -240,9 +275,25 @@ public:
     uint64_t dynamicMinimumRate() const { return dynamicMinimumBytesPerSecond(); }
     std::size_t rateAdjustments() const { return rateAdjustments_; }
     std::size_t pressureBackoffs() const { return pressureBackoffs_; }
+    std::size_t latencyBackoffs() const { return latencyBackoffs_; }
     std::size_t measuredWrites() const { return measuredWrites_; }
 
 private:
+    void applyLatencyBackoff(uint64_t durationUs) {
+        if (durationUs < config_.writeLatencyBackoffUs) return;
+
+        const uint64_t reducedRate =
+            durationUs >= config_.severeWriteLatencyBackoffUs
+                ? currentBytesPerSecond_ / 2
+                : currentBytesPerSecond_ - currentBytesPerSecond_ / 4;
+        setRate(std::max(config_.minimumBytesPerSecond, reducedRate));
+        healthyBytes_ = 0;
+        latencyRecoveryBytesRemaining_ = std::max(
+            latencyRecoveryBytesRemaining_,
+            config_.latencyRecoveryBytes);
+        ++latencyBackoffs_;
+    }
+
     uint64_t dynamicMinimumBytesPerSecond() const {
         if (observedServiceBytesPerSecond_ == 0) return config_.minimumBytesPerSecond;
         return std::clamp(
@@ -272,6 +323,8 @@ private:
     std::size_t healthyBytes_ = 0;
     std::size_t rateAdjustments_ = 0;
     std::size_t pressureBackoffs_ = 0;
+    std::size_t latencyBackoffs_ = 0;
+    std::size_t latencyRecoveryBytesRemaining_ = 0;
     std::size_t measuredWrites_ = 0;
 };
 

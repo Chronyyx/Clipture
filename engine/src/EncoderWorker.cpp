@@ -2316,8 +2316,9 @@ private:
     uint32_t frameIndex_ = 0;
     int64_t nextKeyframePts100ns_ = 0;
     std::size_t nextOutputSlot_ = 0;
-    static constexpr std::size_t maxRegisteredInputs_ = 8;
-    static constexpr std::size_t maximumInputViewCacheSize_ = 6;
+    // The encoder rotates through 12 surfaces; keep every warm registration plus headroom.
+    static constexpr std::size_t maxRegisteredInputs_ = 16;
+    static constexpr std::size_t maximumInputViewCacheSize_ = 16;
     static constexpr std::size_t outputSlotCount_ = 12;
     static constexpr std::size_t syncOutputDelay_ = 3;
     static constexpr std::size_t minimumPreparedSubmissionDepth_ = 2;

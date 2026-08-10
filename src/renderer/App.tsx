@@ -1,10 +1,10 @@
-import { Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Clock, Download, Edit3, FolderOpen, Gamepad2, Library, Maximize2, Mic, Minus, Moon, Paintbrush, Palette, Pause, Play, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sun, Trash2, Upload, Volume2, X } from "lucide-react";
+import { Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Clock, Download, Edit3, ExternalLink, Feather, FolderOpen, Gamepad2, Leaf, Library, Maximize2, Mic, Minus, Moon, Paintbrush, Palette, Pause, Play, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sun, Trash2, Upload, Volume2, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 // @ts-ignore
 import logoUrl from "../../assets/svgviewer-output.svg";
 import type { CSSProperties, KeyboardEvent } from "react";
-import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, AudioSourceRule, ClipSoundOption, UpdateState } from "../shared/types";
-import { applyUiTheme, cacheAndApplyUiTheme, normalizeThemeColor } from "./theme";
+import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, AudioSourceRule, ClipSoundOption, SaveIoAnalyzerState, ThemeFontId, UpdateState } from "../shared/types";
+import { applyUiTheme, cacheAndApplyUiTheme, normalizeThemeColor, refreshLocalThemeFont } from "./theme";
 
 type Tab = "library" | "settings" | "diagnostics";
 
@@ -118,14 +118,17 @@ const defaultDiagnostics: EngineDiagnostics = {
     replayArchiveRamFallbackBytes: 0,
     replayArchiveResidentBytes: 0,
     replayArchiveResidentBudgetBytes: 0,
+    replayArchiveReadCacheBytes: 0,
     replayArchiveResidentPackets: 0,
     replayArchiveDiskBackedPackets: 0,
     replayArchiveQueuedBytes: 0,
     replayArchivePersistedPackets: 0,
+    replayArchiveSpillCandidateInspections: 0,
     replayArchiveWriteFailures: 0,
     replayArchiveQueuedPackets: 0,
     replayArchiveSegments: 0,
     replayArchiveMaximumWriteBytes: 0,
+    pcmRecoveryActive: false,
     capturedFrames: 0,
     queuedFrames: 0,
     encoderAcceptedFrames: 0,
@@ -430,6 +433,11 @@ export function App() {
   const [updateState, setUpdateState] = useState<UpdateState>(defaultUpdateState);
   const [isSavingClip, setIsSavingClip] = useState(false);
   const [isExportingDiagnostics, setIsExportingDiagnostics] = useState(false);
+  const [saveIoAnalyzer, setSaveIoAnalyzer] = useState<SaveIoAnalyzerState>({
+    available: false,
+    armed: false,
+    traceReady: false
+  });
   const clipSoundUrlsRef = useRef<Record<string, string>>({});
 
   function showNotice(message: string, tab?: Tab, durationMs = 4000) {
@@ -437,16 +445,18 @@ export function App() {
   }
 
   async function refresh() {
-    const [nextDiagnostics, nextSettings, nextClips, nextClipSounds] = await Promise.all([
+    const [nextDiagnostics, nextSettings, nextClips, nextClipSounds, nextSaveIoAnalyzer] = await Promise.all([
       window.clipture.getDiagnostics(),
       window.clipture.getSettings(),
       window.clipture.listClips(),
-      window.clipture.listClipSounds()
+      window.clipture.listClipSounds(),
+      window.clipture.getSaveIoAnalyzerState()
     ]);
     setDiagnostics(nextDiagnostics);
     setSettings(nextSettings);
     setClips(nextClips);
     setClipSounds(nextClipSounds);
+    setSaveIoAnalyzer(nextSaveIoAnalyzer);
     clipSoundUrlsRef.current = Object.fromEntries(nextClipSounds.filter((sound) => sound.url).map((sound) => [sound.id, sound.url as string]));
   }
 
@@ -505,7 +515,11 @@ export function App() {
     setIsSavingClip(true);
     try {
       const result = await window.clipture.saveClip(length);
-      showNotice(result.message, activeTab);
+      showNotice(
+        result.saveIoAnalysis?.length ? result.message + " I/O trace ready." : result.message,
+        activeTab
+      );
+      setSaveIoAnalyzer(await window.clipture.getSaveIoAnalyzerState());
       if (result.clip) {
         setClips((current) => [result.clip!, ...current.filter((clip) => clip.id !== result.clip!.id)]);
       }
@@ -513,6 +527,18 @@ export function App() {
       showNotice(error instanceof Error ? error.message : "Could not save clip.", activeTab, 6000);
     } finally {
       setIsSavingClip(false);
+      void window.clipture.getSaveIoAnalyzerState().then(setSaveIoAnalyzer).catch(() => {});
+    }
+  }
+
+  async function toggleSaveIoAnalyzer() {
+    if (!saveIoAnalyzer.available || isSavingClip) return;
+    try {
+      const nextState = await window.clipture.setSaveIoAnalyzerArmed(!saveIoAnalyzer.armed);
+      setSaveIoAnalyzer(nextState);
+      showNotice(nextState.armed ? "Next save I/O trace armed" : "I/O trace canceled", "diagnostics");
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "Could not change I/O tracing.", "diagnostics", 6000);
     }
   }
 
@@ -615,6 +641,15 @@ export function App() {
                   disabled={isExportingDiagnostics}
                 >
                   <Download size={18} /> {isExportingDiagnostics ? "Exporting..." : "Export diagnostics"}
+                </button>
+              )}
+              {activeTab === "diagnostics" && saveIoAnalyzer.available && (
+                <button
+                  className="secondary-button"
+                  onClick={() => void toggleSaveIoAnalyzer()}
+                  disabled={isSavingClip}
+                >
+                  <Activity size={18} /> {saveIoAnalyzer.armed ? "Cancel I/O trace" : "Analyze next save"}
                 </button>
               )}
             </div>
@@ -2639,14 +2674,43 @@ function ThemeColorField({
 function CustomizeSettings({ settings, onChange }: { settings: ClipSettings; onChange: (patch: Partial<ClipSettings>) => void }) {
   const [mainColor, setMainColor] = useState(settings.customMainColor);
   const [accentColor, setAccentColor] = useState(settings.customAccentColor);
+  const [themeFontAvailable, setThemeFontAvailable] = useState<boolean>();
   const themes = [
     { id: "graphite", label: "Graphite", Icon: Moon },
     { id: "light", label: "Light", Icon: Sun },
+    { id: "glitten", label: "Glitten", Icon: Feather },
+    { id: "milate", label: "Milate", Icon: Leaf },
     { id: "custom", label: "Custom", Icon: Palette }
   ] as const;
+  const selectedThemeFont: ThemeFontId | undefined = settings.uiTheme === "glitten" || settings.uiTheme === "milate"
+    ? settings.uiTheme
+    : undefined;
+  const selectedThemeFontLabel = selectedThemeFont === "glitten" ? "Glitten" : "Milate";
 
   useEffect(() => setMainColor(settings.customMainColor), [settings.customMainColor]);
   useEffect(() => setAccentColor(settings.customAccentColor), [settings.customAccentColor]);
+
+  useEffect(() => {
+    if (!selectedThemeFont) {
+      setThemeFontAvailable(undefined);
+      return;
+    }
+
+    let active = true;
+    const refresh = () => {
+      setThemeFontAvailable(undefined);
+      void refreshLocalThemeFont(selectedThemeFont).then((available) => {
+        if (active) setThemeFontAvailable(available);
+      });
+    };
+
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refresh);
+    };
+  }, [selectedThemeFont]);
 
   const previewCustom = (nextMain: string, nextAccent: string) => {
     setMainColor(nextMain);
@@ -2688,6 +2752,30 @@ function CustomizeSettings({ settings, onChange }: { settings: ClipSettings; onC
             </button>
           ))}
         </div>
+
+        {selectedThemeFont && (
+          <div className="theme-font-tools">
+            <div className="theme-font-status">
+              <strong>{selectedThemeFontLabel} typeface</strong>
+              <span>{themeFontAvailable === undefined ? "Checking..." : themeFontAvailable ? "Installed" : "Fallback active"}</span>
+            </div>
+            <div className="theme-font-actions">
+              <button className="secondary-button" type="button" onClick={() => void window.clipture.openThemeFontDownload(selectedThemeFont)}>
+                <ExternalLink size={16} /> Get {selectedThemeFontLabel}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  setThemeFontAvailable(undefined);
+                  void refreshLocalThemeFont(selectedThemeFont).then(setThemeFontAvailable);
+                }}
+              >
+                <RefreshCw size={16} /> Refresh font
+              </button>
+            </div>
+          </div>
+        )}
 
         {settings.uiTheme === "custom" && (
           <div className="custom-colors">
@@ -3295,11 +3383,14 @@ function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
     ["Replay archive video / audio", `${diagnostics.videoReplayArchiveHealthy ? "Healthy" : "RAM fallback"} / ${diagnostics.audioReplayArchiveHealthy ? "Healthy" : "RAM fallback"}`],
     ["Replay archive disk", replayMiB(diagnostics.replayArchiveDiskBytes)],
     ["Replay RAM cache", `${replayMiB(diagnostics.replayArchiveResidentBytes)} / ${replayMiB(diagnostics.replayArchiveResidentBudgetBytes)}`],
+    ["Replay read cache", replayMiB(diagnostics.replayArchiveReadCacheBytes)],
     ["Replay packets RAM / disk", `${diagnostics.replayArchiveResidentPackets} / ${diagnostics.replayArchiveDiskBackedPackets}`],
     ["Replay archive RAM fallback", replayMiB(diagnostics.replayArchiveRamFallbackBytes)],
     ["Replay archive queued", `${diagnostics.replayArchiveQueuedPackets} packets / ${replayMiB(diagnostics.replayArchiveQueuedBytes)}`],
     ["Replay archive segments", String(diagnostics.replayArchiveSegments)],
     ["Replay archive persisted", String(diagnostics.replayArchivePersistedPackets)],
+    ["Replay spill inspections", String(diagnostics.replayArchiveSpillCandidateInspections)],
+    ["PCM recovery", diagnostics.pcmRecoveryActive ? "Active" : "Standby"],
     ["Replay archive write failures", String(diagnostics.replayArchiveWriteFailures)],
     ["Replay archive max write", replayMiB(diagnostics.replayArchiveMaximumWriteBytes)],
     ["Dropped frames", String(diagnostics.droppedFrames)],

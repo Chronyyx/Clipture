@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.3.0] - 2026-08-09
+
+### New Features
+
+- Add the Glitten and Milate visual themes with coordinated colors, typography, previews, and native window appearance.
+- Add a shared theme-font workflow that opens the personal-use download page without bundling restricted font files.
+- Detect installed Glitten and Dh Milate fonts at runtime and activate them without restarting Clipture after installation.
+- Add automatic font refresh when Clipture regains focus, plus a manual Refresh font control for systems that update their font catalog slowly.
+
+### UI And Reliability
+
+- Keep the bundled fallback typefaces available when a personal font is not installed.
+- Include the exact Milate demo family name in local-font detection so the downloaded personal-use font is recognized reliably.
+- Consolidate Glitten and Milate font IPC, renderer loading, and status handling into one allowlisted implementation.
+
 ## [1.2.4] - 2026-08-08
 
 ### Replay Engine & Memory Management

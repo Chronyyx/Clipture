@@ -1,4 +1,5 @@
 export type EncoderName = "NVENC" | "Media Foundation Hardware" | "Software" | "Unavailable";
+export type ThemeFontId = "glitten" | "milate";
 
 export interface EngineDiagnostics {
   captureApi: string;
@@ -104,14 +105,17 @@ export interface EngineDiagnostics {
   replayArchiveRamFallbackBytes: number;
   replayArchiveResidentBytes: number;
   replayArchiveResidentBudgetBytes: number;
+  replayArchiveReadCacheBytes: number;
   replayArchiveResidentPackets: number;
   replayArchiveDiskBackedPackets: number;
   replayArchiveQueuedBytes: number;
   replayArchivePersistedPackets: number;
+  replayArchiveSpillCandidateInspections: number;
   replayArchiveWriteFailures: number;
   replayArchiveQueuedPackets: number;
   replayArchiveSegments: number;
   replayArchiveMaximumWriteBytes: number;
+  pcmRecoveryActive: boolean;
   capturedFrames: number;
   queuedFrames: number;
   encoderAcceptedFrames: number;
@@ -123,7 +127,7 @@ export interface EngineDiagnostics {
 }
 
 export interface ClipSettings {
-  uiTheme: "graphite" | "light" | "custom";
+  uiTheme: "graphite" | "light" | ThemeFontId | "custom";
   customMainColor: string;
   customAccentColor: string;
   clipLengthSeconds: number;
@@ -215,10 +219,67 @@ export interface ClipRecord {
   focusedApps?: string[];
 }
 
+export interface SaveIoTimelineBucket {
+  startMs: number;
+  replayReadBytes: number;
+  outputWriteBytes: number;
+  replayReadBusyUs: number;
+  outputWriteBusyUs: number;
+  pacingWaitUs: number;
+  replayReadCalls: number;
+  outputWriteCalls: number;
+  pacingWaitCalls: number;
+  maximumReplayReadUs: number;
+  maximumOutputWriteUs: number;
+  maximumPacingWaitUs: number;
+  pressureLevel: number;
+  frameQueueDepth: number;
+  encoderQueueDepth: number;
+  nvencInFlight: number;
+  droppedFramesDelta: number;
+  captureGap100ns: number;
+  capturePublicationAge100ns: number;
+}
+
+export interface SaveIoSlowOperation {
+  operation: string;
+  startMs: number;
+  durationUs: number;
+  bytes: number;
+}
+
+export interface SaveIoAnalysis {
+  bucketMs: number;
+  elapsedMs: number;
+  timelineTruncated: boolean;
+  omittedSlowOperations: number;
+  storageSeekPenalty: string;
+  ioPriority: string;
+  lowIoPriorityApplied: boolean;
+  preallocated: boolean;
+  finalFileBytes: number;
+  diskBackedSourceBytes: number;
+  processReadOperationsDelta: number;
+  processWriteOperationsDelta: number;
+  processReadBytesDelta: number;
+  processWriteBytesDelta: number;
+  processOtherBytesDelta: number;
+  timeline: SaveIoTimelineBucket[];
+  slowOperations: SaveIoSlowOperation[];
+}
+
+export interface SaveIoAnalyzerState {
+  available: boolean;
+  armed: boolean;
+  traceReady: boolean;
+  capturedAt?: string;
+}
+
 export interface SaveClipResult {
   ok: boolean;
   message: string;
   clip?: ClipRecord;
+  saveIoAnalysis?: SaveIoAnalysis[];
 }
 
 export type UpdateStatus = "idle" | "checking" | "available" | "downloading" | "ready" | "error";
@@ -239,6 +300,8 @@ export interface ActiveProcess {
 export interface CliptureApi {
   getDiagnostics(): Promise<EngineDiagnostics>;
   exportDiagnostics(): Promise<string | undefined>;
+  getSaveIoAnalyzerState(): Promise<SaveIoAnalyzerState>;
+  setSaveIoAnalyzerArmed(armed: boolean): Promise<SaveIoAnalyzerState>;
   getSettings(): Promise<ClipSettings>;
   saveSettings(settings: ClipSettings): Promise<ClipSettings>;
   saveClip(durationSeconds: number): Promise<SaveClipResult>;
@@ -263,6 +326,7 @@ export interface CliptureApi {
   checkForUpdates(): Promise<UpdateState>;
   downloadUpdate(): Promise<void>;
   installUpdate(): Promise<void>;
+  openThemeFontDownload(theme: ThemeFontId): Promise<void>;
   onLibraryChanged: (callback: (addedClip?: ClipRecord) => void) => () => void;
   onUpdateStateChanged: (callback: (state: UpdateState) => void) => () => void;
   onPlaySound: (callback: (sound: string) => void) => () => void;

@@ -94,6 +94,7 @@ constexpr uint64_t kMiB = 1024ULL * 1024ULL;
 struct ReplayMemoryBudgets {
     std::size_t videoBytes = 0;
     std::size_t audioBytes = 0;
+    std::size_t pcmRecoveryBytes = 0;
 };
 
 ReplaySegmentStoreOptions replayStoreOptions(const std::string& streamName, bool video) {
@@ -144,6 +145,7 @@ ReplayMemoryBudgets replayMemoryBudgets(const EngineSettings& settings) {
 
     return {
         static_cast<std::size_t>(std::min(desiredVideoBytes, videoCap)),
+        static_cast<std::size_t>(desiredAudioBytes),
         static_cast<std::size_t>(desiredAudioBytes)
     };
 }
@@ -707,10 +709,12 @@ Engine::Engine()
       aacAudioPackets_(5LL * 60LL * 10'000'000LL, 4u * 1024u * 1024u),
       videoReplayStore_(std::make_unique<ReplaySegmentStore>(replayStoreOptions("video", true))),
       aacReplayStore_(std::make_unique<ReplaySegmentStore>(replayStoreOptions("audio", false))),
+      pcmRecoveryStore_(std::make_unique<ReplaySegmentStore>(replayStoreOptions("pcm-recovery", false))),
       audioReplayCoordinator_(std::make_unique<AudioReplayCoordinator>(
           audioPackets_,
           aacAudioPackets_,
-          aacReplayStore_.get())),
+          aacReplayStore_.get(),
+          pcmRecoveryStore_.get())),
       captureSession_(std::make_unique<CaptureSession>()),
       encoderWorker_(std::make_unique<EncoderWorker>(
           frameQueue_,
@@ -728,6 +732,7 @@ Engine::~Engine() {
     if (audioReplayCoordinator_) audioReplayCoordinator_->stop();
     if (captureSession_) captureSession_->stop();
     if (encoderWorker_) encoderWorker_->stop();
+    if (pcmRecoveryStore_) pcmRecoveryStore_->stop();
     if (aacReplayStore_) aacReplayStore_->stop();
     if (videoReplayStore_) videoReplayStore_->stop();
 }
@@ -1255,6 +1260,10 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
         aacReplayStore_->setRetention(retention100ns);
         aacReplayStore_->setResidentPayloadBudget(replayBudgets.audioBytes);
     }
+    if (pcmRecoveryStore_) {
+        pcmRecoveryStore_->setRetention(retention100ns);
+        pcmRecoveryStore_->setResidentPayloadBudget(replayBudgets.pcmRecoveryBytes);
+    }
     if (audioReplayCoordinator_) {
         audioReplayCoordinator_->setRetention(retention100ns);
         aacAudioPackets_.setRetention(kHotReplayRetention100ns);
@@ -1292,8 +1301,7 @@ std::vector<EncodedPacket> mixPcmPackets(
     if (clipStart >= clipEnd || sampleRate == 0 || channels == 0) return {};
 
     struct PcmInputView {
-        std::span<const std::byte> bytes;
-        const int16_t* samples = nullptr;
+        const EncodedPacket* packet = nullptr;
         int64_t startFrame = 0;
         int64_t endFrame = 0;
         int frames = 0;
@@ -1315,26 +1323,16 @@ std::vector<EncodedPacket> mixPcmPackets(
         if (!packet) continue;
         const auto& p = *packet;
         if (p.sampleRate != sampleRate || p.channelCount != channels) continue;
-        const auto bytes = payloadBytes(p);
-        if (bytes.empty()) continue;
+        if (!p.audible || payloadEmpty(p)) continue;
 
-        const int frames = static_cast<int>(bytes.size() / static_cast<std::size_t>(bytesPerFrame));
+        const int frames = static_cast<int>(payloadSize(p) / static_cast<std::size_t>(bytesPerFrame));
         if (frames <= 0) continue;
         const int64_t startFrame = timelineFrameFrom100ns(p.pts100ns - clipStart);
         const int64_t endFrame = startFrame + frames;
         if (endFrame <= 0 || startFrame >= totalSamples) continue;
 
-        const auto* pcm = reinterpret_cast<const int16_t*>(bytes.data());
-        if (!hasAudio) {
-            const std::size_t sampleCount = bytes.size() / sizeof(int16_t);
-            for (std::size_t i = 0; i < sampleCount; ++i) {
-                if (pcm[i] != 0) {
-                    hasAudio = true;
-                    break;
-                }
-            }
-        }
-        inputs.push_back(PcmInputView { bytes, pcm, startFrame, endFrame, frames });
+        hasAudio = true;
+        inputs.push_back(PcmInputView { &p, startFrame, endFrame, frames });
     }
 
     if (inputs.empty() || !hasAudio) {
@@ -1349,6 +1347,7 @@ std::vector<EncodedPacket> mixPcmPackets(
     const int framesPerPacket = std::max(1, sampleRate / 100);
     mixed.reserve(static_cast<std::size_t>((totalSamples + framesPerPacket - 1) / framesPerPacket));
     mixScratch.resize(static_cast<std::size_t>(framesPerPacket) * static_cast<std::size_t>(channels));
+    std::vector<std::byte> inputReadScratch;
 
     std::size_t firstCandidate = 0;
     for (int64_t sampleOffset = 0; sampleOffset < totalSamples; sampleOffset += framesPerPacket) {
@@ -1380,11 +1379,29 @@ std::vector<EncodedPacket> mixPcmPackets(
             });
             if (copyFrames <= 0) continue;
 
+            const std::size_t inputByteOffset =
+                static_cast<std::size_t>(inputStartFrame) * static_cast<std::size_t>(bytesPerFrame);
+            const std::size_t inputByteCount =
+                static_cast<std::size_t>(copyFrames) * static_cast<std::size_t>(bytesPerFrame);
+            const int16_t* inputSamples = nullptr;
+            const auto residentBytes = payloadBytes(*input.packet);
+            if (!residentBytes.empty()) {
+                if (inputByteOffset > residentBytes.size() ||
+                    inputByteCount > residentBytes.size() - inputByteOffset) {
+                    continue;
+                }
+                inputSamples = reinterpret_cast<const int16_t*>(residentBytes.data() + inputByteOffset);
+            } else {
+                inputReadScratch.resize(inputByteCount);
+                if (!readPayload(*input.packet, inputByteOffset, inputReadScratch)) continue;
+                inputSamples = reinterpret_cast<const int16_t*>(inputReadScratch.data());
+            }
+
             for (int64_t frame = 0; frame < copyFrames; ++frame) {
                 for (int ch = 0; ch < channels; ++ch) {
                     const std::size_t outIndex = static_cast<std::size_t>((outputStartFrame + frame) * channels + ch);
-                    const std::size_t inIndex = static_cast<std::size_t>((inputStartFrame + frame) * channels + ch);
-                    mixScratch[outIndex] += input.samples[inIndex];
+                    const std::size_t inIndex = static_cast<std::size_t>(frame * channels + ch);
+                    mixScratch[outIndex] += inputSamples[inIndex];
                 }
             }
         }
@@ -1565,6 +1582,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     };
     savePacing.burstBytes = kSaveWriteBurstBytes;
     savePacing.storageAwareRate = true;
+    savePacing.analyzeIo = request.analyzeIo;
     logEngineSaveTiming(
         "stutter_baseline",
         totalStartedAt,
@@ -1767,23 +1785,31 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     auto encodedAudioPackets = aacReplayStore_
         ? aacReplayStore_->selectWindow(audioSelectionStart, clipEnd)
         : aacAudioPackets_.selectWindow(audioSelectionStart, clipEnd);
-    auto capturedAudioPackets = audioPackets_.selectWindow(audioSelectionStart, clipEnd);
+    auto capturedAudioPackets = audioReplayCoordinator_
+        ? audioReplayCoordinator_->selectPcmWindow(audioSelectionStart, clipEnd)
+        : audioPackets_.selectWindow(audioSelectionStart, clipEnd);
     const auto diskBackedAudioPackets = std::count_if(
         encodedAudioPackets.begin(),
         encodedAudioPackets.end(),
+        [](const EncodedPacket& packet) { return !packet.payload && packet.payloadReader; });
+    const auto diskBackedPcmPackets = std::count_if(
+        capturedAudioPackets.begin(),
+        capturedAudioPackets.end(),
         [](const EncodedPacket& packet) { return !packet.payload && packet.payloadReader; });
     const auto replayStats = audioReplayCoordinator_ ? audioReplayCoordinator_->stats() : AudioReplayStats {};
     logEngineSaveTiming(
         "audio_select",
         audioSelectStartedAt,
-        "aacPackets=" + std::to_string(encodedAudioPackets.size()) +
+            "aacPackets=" + std::to_string(encodedAudioPackets.size()) +
             " diskBackedAac=" + std::to_string(diskBackedAudioPackets) +
             " pcmFallbackPackets=" + std::to_string(capturedAudioPackets.size()) +
+            " diskBackedPcm=" + std::to_string(diskBackedPcmPackets) +
             " liveCaughtUp=" + std::string(liveAudioCaughtUp ? "true" : "false") +
             " queue=" + std::to_string(replayStats.queuedPackets) +
             " queueHighWatermark=" + std::to_string(replayStats.queueHighWatermark) +
             " queueOverflows=" + std::to_string(replayStats.queueOverflows) +
             " encoderRestarts=" + std::to_string(replayStats.encoderRestarts) +
+            " pcmRecoveryActive=" + std::string(replayStats.pcmRecoveryActive ? "true" : "false") +
             " committedPts100ns=" + std::to_string(replayStats.committedPts100ns));
 
     const auto audioGroupStartedAt = SaveTimingClock::now();
@@ -1867,6 +1893,19 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     std::string outputFilePath;
     std::string muxMessage;
     const std::size_t selectedVideoPacketCount = clipPackets.size();
+    std::vector<std::string> ioAnalysisEntries;
+    auto rememberIoAnalysis = [&](const MuxResult& mux) {
+        if (!mux.ioAnalysis.enabled) return;
+        ioAnalysisEntries.push_back(saveIoAnalysisToJson(mux.ioAnalysis));
+        std::ostringstream json;
+        json << '[';
+        for (std::size_t i = 0; i < ioAnalysisEntries.size(); ++i) {
+            if (i > 0) json << ',';
+            json << ioAnalysisEntries[i];
+        }
+        json << ']';
+        result.ioAnalysisJson = json.str();
+    };
 
     if (videoSegments.size() > 1) {
         for (const auto& segment : videoSegments) {
@@ -1900,6 +1939,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                 diagnostics_.fps,
                 diagnostics_.bitrateMbps,
                 std::move(segmentPacing));
+            rememberIoAnalysis(segmentMux);
             logEngineSaveTiming(
                 "mux_segment",
                 muxStartedAt,
@@ -1933,6 +1973,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             diagnostics_.fps,
             diagnostics_.bitrateMbps,
             savePacing);
+        rememberIoAnalysis(mux);
         logEngineSaveTiming(
             "mux",
             muxStartedAt,
@@ -2078,6 +2119,7 @@ void Engine::arm() {
 
     if (videoReplayStore_) videoReplayStore_->start();
     if (aacReplayStore_) aacReplayStore_->start();
+    if (pcmRecoveryStore_) pcmRecoveryStore_->start();
     encoderWorker_->start();
     {
         const auto [maxEncodeWidth, maxEncodeHeight] = encoderMaxDimensions(settings_);
@@ -2132,34 +2174,52 @@ void Engine::refreshPacketCounts() {
     diagnostics_.bufferedAudioPackets = static_cast<int>(audioPackets_.size());
     const auto videoArchive = videoReplayStore_ ? videoReplayStore_->stats() : ReplaySegmentStoreStats {};
     const auto audioArchive = aacReplayStore_ ? aacReplayStore_->stats() : ReplaySegmentStoreStats {};
+    const auto pcmRecoveryArchive = pcmRecoveryStore_ ? pcmRecoveryStore_->stats() : ReplaySegmentStoreStats {};
+    const auto audioReplay = audioReplayCoordinator_ ? audioReplayCoordinator_->stats() : AudioReplayStats {};
     diagnostics_.videoReplayArchiveHealthy = videoArchive.healthy;
-    diagnostics_.audioReplayArchiveHealthy = audioArchive.healthy;
-    diagnostics_.replayArchiveDiskBytes = videoArchive.diskBytes + audioArchive.diskBytes;
+    diagnostics_.audioReplayArchiveHealthy = audioArchive.healthy && pcmRecoveryArchive.healthy;
+    diagnostics_.replayArchiveDiskBytes =
+        videoArchive.diskBytes + audioArchive.diskBytes + pcmRecoveryArchive.diskBytes;
     diagnostics_.replayArchiveRamFallbackBytes =
-        videoArchive.ramFallbackBytes + audioArchive.ramFallbackBytes;
+        videoArchive.ramFallbackBytes + audioArchive.ramFallbackBytes + pcmRecoveryArchive.ramFallbackBytes;
     diagnostics_.replayArchiveResidentBytes =
-        videoArchive.residentPayloadBytes + audioArchive.residentPayloadBytes;
+        videoArchive.residentPayloadBytes + audioArchive.residentPayloadBytes +
+        pcmRecoveryArchive.residentPayloadBytes;
     diagnostics_.replayArchiveResidentBudgetBytes =
-        videoArchive.residentPayloadBudgetBytes + audioArchive.residentPayloadBudgetBytes;
+        videoArchive.residentPayloadBudgetBytes + audioArchive.residentPayloadBudgetBytes +
+        (audioReplay.pcmRecoveryActive ? pcmRecoveryArchive.residentPayloadBudgetBytes : 0);
+    diagnostics_.replayArchiveReadCacheBytes =
+        videoArchive.readCacheBytes + audioArchive.readCacheBytes + pcmRecoveryArchive.readCacheBytes;
     diagnostics_.replayArchiveResidentPackets = static_cast<int>(std::min<std::size_t>(
-        videoArchive.residentPackets + audioArchive.residentPackets,
+        videoArchive.residentPackets + audioArchive.residentPackets + pcmRecoveryArchive.residentPackets,
         static_cast<std::size_t>(std::numeric_limits<int>::max())));
     diagnostics_.replayArchiveDiskBackedPackets = static_cast<int>(std::min<std::size_t>(
-        videoArchive.diskBackedPackets + audioArchive.diskBackedPackets,
+        videoArchive.diskBackedPackets + audioArchive.diskBackedPackets +
+            pcmRecoveryArchive.diskBackedPackets,
         static_cast<std::size_t>(std::numeric_limits<int>::max())));
-    diagnostics_.replayArchiveQueuedBytes = videoArchive.queuedBytes + audioArchive.queuedBytes;
+    diagnostics_.replayArchiveQueuedBytes =
+        videoArchive.queuedBytes + audioArchive.queuedBytes + pcmRecoveryArchive.queuedBytes;
     diagnostics_.replayArchivePersistedPackets =
-        videoArchive.persistedPackets + audioArchive.persistedPackets;
-    diagnostics_.replayArchiveWriteFailures = videoArchive.writeFailures + audioArchive.writeFailures;
+        videoArchive.persistedPackets + audioArchive.persistedPackets + pcmRecoveryArchive.persistedPackets;
+    diagnostics_.replayArchiveSpillCandidateInspections =
+        videoArchive.spillCandidateInspections + audioArchive.spillCandidateInspections +
+        pcmRecoveryArchive.spillCandidateInspections;
+    diagnostics_.replayArchiveWriteFailures =
+        videoArchive.writeFailures + audioArchive.writeFailures + pcmRecoveryArchive.writeFailures;
     diagnostics_.replayArchiveQueuedPackets = static_cast<int>(std::min<std::size_t>(
-        videoArchive.queuedPackets + audioArchive.queuedPackets,
+        videoArchive.queuedPackets + audioArchive.queuedPackets + pcmRecoveryArchive.queuedPackets,
         static_cast<std::size_t>(std::numeric_limits<int>::max())));
     diagnostics_.replayArchiveSegments = static_cast<int>(std::min<std::size_t>(
-        videoArchive.activeSegments + audioArchive.activeSegments,
+        videoArchive.activeSegments + audioArchive.activeSegments + pcmRecoveryArchive.activeSegments,
         static_cast<std::size_t>(std::numeric_limits<int>::max())));
     diagnostics_.replayArchiveMaximumWriteBytes = static_cast<int>(std::min<std::size_t>(
-        std::max(videoArchive.maximumWriteBytes, audioArchive.maximumWriteBytes),
+        std::max({
+            videoArchive.maximumWriteBytes,
+            audioArchive.maximumWriteBytes,
+            pcmRecoveryArchive.maximumWriteBytes
+        }),
         static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    diagnostics_.pcmRecoveryActive = audioReplay.pcmRecoveryActive;
     diagnostics_.queuedFrames = static_cast<int>(frameQueue_.size());
     diagnostics_.capturedFrames = captureSession_ ? captureSession_->capturedFrames() : 0;
     diagnostics_.encoderAcceptedFrames = encoderWorker_ ? encoderWorker_->framesAccepted() : 0;

@@ -24,6 +24,8 @@ namespace {
 
 constexpr int64_t kAlignmentWindow100ns = 2'000'000LL;
 constexpr int64_t kPcmRepairWindow100ns = 20'000'000LL;
+constexpr int64_t kPcmHotRetention100ns = 50'000'000LL;
+constexpr auto kPcmRecoveryStablePeriod = std::chrono::seconds(5);
 constexpr std::size_t kCoordinatorQueueCapacity = 32'768;
 
 int64_t packetEnd(const EncodedPacket& packet) {
@@ -43,6 +45,7 @@ struct AudioReplayCoordinator::Impl {
         uint32_t epoch = 1;
         std::vector<EncodedPacket> pending;
         std::vector<float> mixScratch;
+        std::vector<std::byte> readScratch;
         std::vector<std::byte> batch;
         uint32_t batchFrames = 0;
         int64_t batchPts100ns = 0;
@@ -52,6 +55,7 @@ struct AudioReplayCoordinator::Impl {
     PacketRingBuffer& rawPackets;
     PacketRingBuffer& aacPackets;
     ReplaySegmentStore* replayStore = nullptr;
+    ReplaySegmentStore* pcmRecoveryStore = nullptr;
     std::atomic<std::shared_ptr<const std::map<std::string, std::string>>> routing;
     std::atomic<bool> running { false };
     std::thread worker;
@@ -64,24 +68,85 @@ struct AudioReplayCoordinator::Impl {
     std::atomic<uint64_t> queueOverflows { 0 };
     std::atomic<uint64_t> encoderRestarts { 0 };
     std::atomic<int64_t> repairFromPts100ns { 0 };
+    std::atomic<int64_t> pcmRecoveryFromPts100ns { 0 };
+    std::atomic<bool> pcmRecoveryActive { false };
+    std::atomic<uint64_t> repairGeneration { 0 };
     std::atomic<int64_t> latestPublishedPts100ns { 0 };
     std::atomic<int64_t> committedPts100ns { 0 };
     std::chrono::steady_clock::time_point nextRepairAttempt {};
     std::chrono::steady_clock::time_point lastPrune {};
     std::chrono::steady_clock::time_point lastRepairLog {};
+    std::chrono::steady_clock::time_point recoveryStableSince {};
+    uint64_t observedRepairGeneration = 0;
+    bool pcmRecoverySeeded = false;
     uint64_t suppressedRepairLogs = 0;
 
-    Impl(PacketRingBuffer& raw, PacketRingBuffer& aac, ReplaySegmentStore* replay)
-        : rawPackets(raw), aacPackets(aac), replayStore(replay) {
+    Impl(
+        PacketRingBuffer& raw,
+        PacketRingBuffer& aac,
+        ReplaySegmentStore* replay,
+        ReplaySegmentStore* pcmRecovery)
+        : rawPackets(raw),
+          aacPackets(aac),
+          replayStore(replay),
+          pcmRecoveryStore(pcmRecovery) {
         routing.store(std::make_shared<const std::map<std::string, std::string>>());
     }
 
     void requestRepair(int64_t pts100ns) {
+        pts100ns = std::max<int64_t>(1, pts100ns);
         int64_t current = repairFromPts100ns.load();
         while ((current == 0 || pts100ns < current) &&
                !repairFromPts100ns.compare_exchange_weak(current, pts100ns)) {
         }
+        if (pcmRecoveryStore) {
+            const int64_t recoveryFrom = std::max<int64_t>(1, pts100ns - kPcmRepairWindow100ns);
+            current = pcmRecoveryFromPts100ns.load();
+            while ((current == 0 || recoveryFrom < current) &&
+                   !pcmRecoveryFromPts100ns.compare_exchange_weak(current, recoveryFrom)) {
+            }
+            pcmRecoveryActive.store(true, std::memory_order_release);
+        }
+        repairGeneration.fetch_add(1, std::memory_order_relaxed);
         queueCv.notify_one();
+    }
+
+    std::vector<EncodedPacket> selectPcmWindow(int64_t startPts100ns, int64_t endPts100ns) const {
+        std::vector<EncodedPacket> selected;
+        if (pcmRecoveryStore) {
+            selected = pcmRecoveryStore->selectWindow(startPts100ns, endPts100ns);
+        }
+        auto hot = rawPackets.selectWindow(startPts100ns, endPts100ns);
+        selected.reserve(selected.size() + hot.size());
+        selected.insert(
+            selected.end(),
+            std::make_move_iterator(hot.begin()),
+            std::make_move_iterator(hot.end()));
+        std::erase_if(selected, [](const EncodedPacket& packet) {
+            return packet.codec != PacketCodec::PcmS16;
+        });
+        auto less = [](const EncodedPacket& left, const EncodedPacket& right) {
+            if (left.pts100ns != right.pts100ns) return left.pts100ns < right.pts100ns;
+            if (left.sourceId != right.sourceId) return left.sourceId < right.sourceId;
+            if (left.logicalTrackId != right.logicalTrackId) return left.logicalTrackId < right.logicalTrackId;
+            if (left.duration100ns != right.duration100ns) return left.duration100ns < right.duration100ns;
+            if (left.sampleRate != right.sampleRate) return left.sampleRate < right.sampleRate;
+            if (left.channelCount != right.channelCount) return left.channelCount < right.channelCount;
+            if (payloadSize(left) != payloadSize(right)) return payloadSize(left) < payloadSize(right);
+            return static_cast<bool>(left.payload) > static_cast<bool>(right.payload);
+        };
+        auto samePacket = [](const EncodedPacket& left, const EncodedPacket& right) {
+            return left.pts100ns == right.pts100ns &&
+                left.sourceId == right.sourceId &&
+                left.logicalTrackId == right.logicalTrackId &&
+                left.duration100ns == right.duration100ns &&
+                left.sampleRate == right.sampleRate &&
+                left.channelCount == right.channelCount &&
+                payloadSize(left) == payloadSize(right);
+        };
+        std::sort(selected.begin(), selected.end(), less);
+        selected.erase(std::unique(selected.begin(), selected.end(), samePacket), selected.end());
+        return selected;
     }
 
     void emitFrames(TrackState& track, std::vector<AacEncodedFrame>& frames) {
@@ -192,7 +257,15 @@ struct AudioReplayCoordinator::Impl {
         for (const auto& packet : track.pending) {
             if (packet.pts100ns >= blockEnd) break;
             if (packet.sampleRate != track.sampleRate || packet.channelCount != track.channels) continue;
-            const auto bytes = payloadBytes(packet);
+            auto bytes = payloadBytes(packet);
+            if (bytes.empty() && packet.payloadReader) {
+                track.readScratch.resize(payloadSize(packet));
+                if (!readPayload(packet, 0, track.readScratch)) {
+                    requestRepair(packet.pts100ns);
+                    return false;
+                }
+                bytes = track.readScratch;
+            }
             const auto* input = reinterpret_cast<const int16_t*>(bytes.data());
             const int64_t inputFrames = static_cast<int64_t>(bytes.size() / (sizeof(int16_t) * track.channels));
             const int64_t relativeStart =
@@ -291,6 +364,19 @@ struct AudioReplayCoordinator::Impl {
         }
         if (repairFrom == 0) return;
 
+        if (pcmRecoveryStore && !pcmRecoverySeeded) {
+            const int64_t recoveryFrom = std::max<int64_t>(
+                1,
+                pcmRecoveryFromPts100ns.load(std::memory_order_acquire));
+            auto seedPackets = rawPackets.selectWindow(
+                recoveryFrom,
+                std::numeric_limits<int64_t>::max());
+            for (const auto& packet : seedPackets) {
+                if (packet.codec == PacketCodec::PcmS16) pcmRecoveryStore->push(packet);
+            }
+            pcmRecoverySeeded = true;
+        }
+
         for (auto& [_, track] : tracks) {
             if (track.encoder) track.encoder->reset();
         }
@@ -298,7 +384,7 @@ struct AudioReplayCoordinator::Impl {
         aacPackets.eraseIf([&](const EncodedPacket& packet) {
             return packet.codec == PacketCodec::AacLc && packet.pts100ns >= repairFrom;
         });
-        incoming = rawPackets.selectWindow(repairFrom, std::numeric_limits<int64_t>::max());
+        incoming = selectPcmWindow(repairFrom, std::numeric_limits<int64_t>::max());
         int64_t snapshotEnd100ns = repairFrom;
         for (const auto& packet : incoming) snapshotEnd100ns = std::max(snapshotEnd100ns, packetEnd(packet));
         std::deque<EncodedPacket> queuedDuringSnapshot;
@@ -319,6 +405,8 @@ struct AudioReplayCoordinator::Impl {
         }
         ++encoderRestarts;
         const auto now = std::chrono::steady_clock::now();
+        observedRepairGeneration = repairGeneration.load(std::memory_order_relaxed);
+        recoveryStableSince = now;
         if (lastRepairLog.time_since_epoch().count() == 0 || now - lastRepairLog >= std::chrono::seconds(10)) {
             std::cerr << "[audio-replay] repairing AAC coverage fromPts100ns=" << repairFrom
                       << " pcmPackets=" << incoming.size()
@@ -354,9 +442,36 @@ struct AudioReplayCoordinator::Impl {
                 return packetEnd(packet) < latestPublished - kPcmRepairWindow100ns;
             }
             int64_t trimBefore = found->second - kPcmRepairWindow100ns;
-            if (frozenFrom > 0) trimBefore = std::min(trimBefore, frozenFrom);
+            if (!pcmRecoveryStore && frozenFrom > 0) trimBefore = std::min(trimBefore, frozenFrom);
             return packetEnd(packet) < trimBefore;
         });
+    }
+
+    void finishStablePcmRecovery() {
+        if (!pcmRecoveryStore || !pcmRecoveryActive.load(std::memory_order_acquire)) return;
+        const auto now = std::chrono::steady_clock::now();
+        const uint64_t generation = repairGeneration.load(std::memory_order_relaxed);
+        if (generation != observedRepairGeneration) {
+            observedRepairGeneration = generation;
+            recoveryStableSince = now;
+            return;
+        }
+        if (repairFromPts100ns.load(std::memory_order_relaxed) != 0) return;
+        if (recoveryStableSince.time_since_epoch().count() == 0) {
+            recoveryStableSince = now;
+            return;
+        }
+        if (now - recoveryStableSince < kPcmRecoveryStablePeriod) return;
+        {
+            std::lock_guard lock(queueMutex);
+            if (!queue.empty()) return;
+        }
+        if (generation != repairGeneration.load(std::memory_order_relaxed)) return;
+
+        pcmRecoveryActive.store(false, std::memory_order_release);
+        pcmRecoveryFromPts100ns.store(0, std::memory_order_relaxed);
+        pcmRecoverySeeded = false;
+        pcmRecoveryStore->clear();
     }
 
     void run() {
@@ -380,6 +495,7 @@ struct AudioReplayCoordinator::Impl {
             rebuildIfNeeded(incoming);
             processPackets(incoming, false);
             pruneRawPcm();
+            finishStablePcmRecovery();
         }
 
         std::deque<EncodedPacket> drained;
@@ -404,8 +520,13 @@ struct AudioReplayCoordinator::Impl {
 AudioReplayCoordinator::AudioReplayCoordinator(
     PacketRingBuffer& rawPcmPackets,
     PacketRingBuffer& aacPackets,
-    ReplaySegmentStore* replayStore)
-    : impl_(std::make_unique<Impl>(rawPcmPackets, aacPackets, replayStore)) {}
+    ReplaySegmentStore* replayStore,
+    ReplaySegmentStore* pcmRecoveryStore)
+    : impl_(std::make_unique<Impl>(
+          rawPcmPackets,
+          aacPackets,
+          replayStore,
+          pcmRecoveryStore)) {}
 
 AudioReplayCoordinator::~AudioReplayCoordinator() {
     stop();
@@ -427,6 +548,9 @@ void AudioReplayCoordinator::publish(EncodedPacket packet) {
     static const std::map<std::string, std::string> emptyRoutes;
     prepareAudioReplayPacket(packet, routes ? *routes : emptyRoutes);
 
+    if (impl_->pcmRecoveryStore && impl_->pcmRecoveryActive.load(std::memory_order_acquire)) {
+        impl_->pcmRecoveryStore->push(packet);
+    }
     impl_->rawPackets.push(packet);
     int64_t latest = impl_->latestPublishedPts100ns.load();
     const int64_t endPts100ns = packetEnd(packet);
@@ -454,8 +578,16 @@ void AudioReplayCoordinator::updateRouting(std::map<std::string, std::string> so
 
 void AudioReplayCoordinator::setRetention(int64_t retention100ns) {
     impl_->aacPackets.setRetention(retention100ns);
-    const int64_t rawRetention100ns = std::min<int64_t>(retention100ns, 15LL * 10'000'000LL);
+    const int64_t rawRetention100ns = impl_->pcmRecoveryStore
+        ? std::min<int64_t>(retention100ns, kPcmHotRetention100ns)
+        : retention100ns;
     impl_->rawPackets.setRetention(rawRetention100ns);
+}
+
+std::vector<EncodedPacket> AudioReplayCoordinator::selectPcmWindow(
+    int64_t startPts100ns,
+    int64_t endPts100ns) const {
+    return impl_->selectPcmWindow(startPts100ns, endPts100ns);
 }
 
 bool AudioReplayCoordinator::waitUntil(int64_t pts100ns, std::chrono::milliseconds timeout) {
@@ -472,7 +604,8 @@ AudioReplayStats AudioReplayCoordinator::stats() const {
         impl_->queueHighWatermark,
         impl_->queueOverflows.load(),
         impl_->encoderRestarts.load(),
-        impl_->committedPts100ns.load()
+        impl_->committedPts100ns.load(),
+        impl_->pcmRecoveryActive.load(std::memory_order_acquire)
     };
 }
 

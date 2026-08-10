@@ -23,7 +23,7 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 - Range-buffered playback with rolling mixed-audio chunks, fullscreen controls, and accelerated keyboard seeking.
 - Viewport-aware 480x270 thumbnails with bounded extraction concurrency and compressed RAM caching.
 - Persistent separate-app audio capture that follows supported multi-process application trees and reconnects after restarts.
-- Global save hotkey, tray operation, startup-on-login, notifications, customizable UI themes (Graphite, Light, Custom), and capture-aware background updates.
+- Global save hotkey, tray operation, startup-on-login, notifications, customizable UI themes (Graphite, Light, Glitten, Milate, Custom), and capture-aware background updates.
 
 ## Architecture
 
@@ -140,6 +140,8 @@ npm.cmd start
 `npm.cmd start` does not rewrite `release/win-unpacked`, so a running packaged or tray instance cannot lock development startup. Use `npm.cmd run start:packaged` only when testing the unpacked packaged application itself; exit any copy running from `release/win-unpacked` before rebuilding that directory.
 
 Development builds can temporarily use substantial CPU, disk, and memory and should not be used to judge installed-app startup performance.
+
+The Customize settings tab includes Glitten and Milate themes. Their personal-use demo fonts are opened from their download pages rather than bundled with Clipture. After installing a font, return to Clipture or use Refresh font; the typeface is detected and applied without restarting the app.
 
 Installed startup with `--hidden` opens Clipture in the tray while the native capture engine begins filling the replay buffer.
 

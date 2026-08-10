@@ -1,9 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { ClipRecord, ClipSettings, CliptureApi } from "../shared/types";
+import type { ClipRecord, ClipSettings, CliptureApi, ThemeFontId } from "../shared/types";
 
 const api: CliptureApi = {
   getDiagnostics: () => ipcRenderer.invoke("engine:getDiagnostics"),
   exportDiagnostics: () => ipcRenderer.invoke("engine:exportDiagnostics"),
+  getSaveIoAnalyzerState: () => ipcRenderer.invoke("engine:getSaveIoAnalyzerState"),
+  setSaveIoAnalyzerArmed: (armed: boolean) => ipcRenderer.invoke("engine:setSaveIoAnalyzerArmed", armed),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (settings: ClipSettings) => ipcRenderer.invoke("settings:save", settings),
   saveClip: (durationSeconds: number) => ipcRenderer.invoke("engine:saveClip", durationSeconds),
@@ -28,6 +30,7 @@ const api: CliptureApi = {
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
   downloadUpdate: () => ipcRenderer.invoke("updates:download"),
   installUpdate: () => ipcRenderer.invoke("updates:install"),
+  openThemeFontDownload: (theme: ThemeFontId) => ipcRenderer.invoke("theme:openFontDownload", theme),
   onLibraryChanged: (callback: (addedClip?: ClipRecord) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, addedClip?: ClipRecord) => callback(addedClip);
     ipcRenderer.on("library:changed", listener);

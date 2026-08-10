@@ -222,11 +222,18 @@ int main() {
                 clipture::SaveClipResult result;
                 {
                     SavePriorityGuard savePriority;
-                    result = engine.saveClip({ extractDuration(line), extractString(line, "saveFolder") });
+                    result = engine.saveClip({
+                        extractDuration(line),
+                        extractString(line, "saveFolder"),
+                        extractBool(line, "analyzeIo", false)
+                    });
                 }
                 std::cout << "{\"id\":" << id << ",\"payload\":{"
                           << "\"ok\":" << (result.ok ? "true" : "false") << ","
                           << "\"message\":\"" << result.message << "\"";
+                if (!result.ioAnalysisJson.empty()) {
+                    std::cout << ",\"saveIoAnalysis\":" << result.ioAnalysisJson;
+                }
                 if (result.ok) {
                     std::cout << ",\"clip\":" << result.clipJson;
                 }

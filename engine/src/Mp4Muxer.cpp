@@ -1563,6 +1563,197 @@ const char* ioPriorityName(PRIORITY_HINT value) {
     }
 }
 
+class SaveIoRecorder {
+public:
+    using Clock = std::chrono::steady_clock;
+
+    SaveIoRecorder(
+        bool enabled,
+        SaveIoAnalysis& analysis,
+        Clock::time_point startedAt)
+        : enabled_(enabled),
+          analysis_(analysis),
+          startedAt_(startedAt) {
+        analysis_ = {};
+        analysis_.enabled = enabled_;
+        analysis_.bucketMs = bucketMilliseconds_;
+        if (enabled_) {
+            haveStartingIoCounters_ =
+                GetProcessIoCounters(GetCurrentProcess(), &startingIoCounters_) != FALSE;
+        }
+    }
+
+    void setFileContext(
+        const char* storageSeekPenalty,
+        const char* ioPriority,
+        bool lowIoPriorityApplied,
+        bool preallocated,
+        uint64_t finalFileBytes,
+        uint64_t diskBackedSourceBytes) {
+        if (!enabled_) return;
+        analysis_.storageSeekPenalty = storageSeekPenalty;
+        analysis_.ioPriority = ioPriority;
+        analysis_.lowIoPriorityApplied = lowIoPriorityApplied;
+        analysis_.preallocated = preallocated;
+        analysis_.finalFileBytes = finalFileBytes;
+        analysis_.diskBackedSourceBytes = diskBackedSourceBytes;
+    }
+
+    void recordReplayRead(
+        Clock::time_point startedAt,
+        uint64_t durationUs,
+        uint64_t bytes) {
+        if (!enabled_) return;
+        auto& bucket = bucketFor(startedAt);
+        bucket.replayReadBytes += bytes;
+        bucket.replayReadBusyUs += durationUs;
+        ++bucket.replayReadCalls;
+        bucket.maximumReplayReadUs = std::max(bucket.maximumReplayReadUs, durationUs);
+        recordSlowOperation("replay_read", startedAt, durationUs, bytes, false);
+    }
+
+    void recordOutputWrite(
+        Clock::time_point startedAt,
+        uint64_t durationUs,
+        uint64_t bytes,
+        const char* operation = "output_write") {
+        if (!enabled_) return;
+        auto& bucket = bucketFor(startedAt);
+        bucket.outputWriteBytes += bytes;
+        bucket.outputWriteBusyUs += durationUs;
+        ++bucket.outputWriteCalls;
+        bucket.maximumOutputWriteUs = std::max(bucket.maximumOutputWriteUs, durationUs);
+        recordSlowOperation(operation, startedAt, durationUs, bytes, false);
+    }
+
+    void recordPacingWait(
+        Clock::time_point startedAt,
+        uint64_t durationUs,
+        const char* operation) {
+        if (!enabled_ || durationUs == 0) return;
+        auto& bucket = bucketFor(startedAt);
+        bucket.pacingWaitUs += durationUs;
+        ++bucket.pacingWaitCalls;
+        bucket.maximumPacingWaitUs = std::max(bucket.maximumPacingWaitUs, durationUs);
+        recordSlowOperation(operation, startedAt, durationUs, 0, false);
+    }
+
+    void recordStructuralOperation(
+        const char* operation,
+        Clock::time_point startedAt,
+        uint64_t durationUs,
+        uint64_t bytes = 0) {
+        if (!enabled_) return;
+        recordSlowOperation(operation, startedAt, durationUs, bytes, true);
+    }
+
+    void recordPressure(Clock::time_point sampledAt, const MuxPressureSample& sample) {
+        if (!enabled_) return;
+        auto& bucket = bucketFor(sampledAt);
+        bucket.pressureLevel = std::max(bucket.pressureLevel, static_cast<int>(sample.level));
+        bucket.frameQueueDepth = std::max(bucket.frameQueueDepth, sample.frameQueueDepth);
+        bucket.encoderQueueDepth = std::max(bucket.encoderQueueDepth, sample.encoderQueueDepth);
+        bucket.nvencInFlight = std::max(bucket.nvencInFlight, sample.nvencInFlight);
+        bucket.droppedFramesDelta = std::max(bucket.droppedFramesDelta, sample.droppedFramesDelta);
+        bucket.captureGap100ns = std::max(bucket.captureGap100ns, sample.captureGap100ns);
+        bucket.capturePublicationAge100ns = std::max(
+            bucket.capturePublicationAge100ns,
+            sample.capturePublicationAge100ns);
+    }
+
+    void finish() {
+        if (!enabled_ || finished_) return;
+        finished_ = true;
+        analysis_.elapsedMs = static_cast<uint64_t>(std::max<int64_t>(
+            0,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                Clock::now() - startedAt_).count()));
+
+        IO_COUNTERS endingIoCounters {};
+        if (haveStartingIoCounters_ &&
+            GetProcessIoCounters(GetCurrentProcess(), &endingIoCounters) != FALSE) {
+            analysis_.processReadOperationsDelta = positiveDelta(
+                endingIoCounters.ReadOperationCount,
+                startingIoCounters_.ReadOperationCount);
+            analysis_.processWriteOperationsDelta = positiveDelta(
+                endingIoCounters.WriteOperationCount,
+                startingIoCounters_.WriteOperationCount);
+            analysis_.processReadBytesDelta = positiveDelta(
+                endingIoCounters.ReadTransferCount,
+                startingIoCounters_.ReadTransferCount);
+            analysis_.processWriteBytesDelta = positiveDelta(
+                endingIoCounters.WriteTransferCount,
+                startingIoCounters_.WriteTransferCount);
+            analysis_.processOtherBytesDelta = positiveDelta(
+                endingIoCounters.OtherTransferCount,
+                startingIoCounters_.OtherTransferCount);
+        }
+    }
+
+private:
+    static constexpr uint32_t bucketMilliseconds_ = 50;
+    static constexpr std::size_t maximumBuckets_ = 1200;
+    static constexpr std::size_t maximumSlowOperations_ = 256;
+    static constexpr uint64_t slowOperationThresholdUs_ = 8'000;
+
+    static uint64_t positiveDelta(uint64_t current, uint64_t previous) {
+        return current >= previous ? current - previous : 0;
+    }
+
+    uint64_t relativeMicroseconds(Clock::time_point timestamp) const {
+        return static_cast<uint64_t>(std::max<int64_t>(
+            0,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                timestamp - startedAt_).count()));
+    }
+
+    SaveIoTimelineBucket& bucketFor(Clock::time_point timestamp) {
+        const uint64_t offsetMs = relativeMicroseconds(timestamp) / 1000;
+        std::size_t index = static_cast<std::size_t>(offsetMs / bucketMilliseconds_);
+        if (index >= maximumBuckets_) {
+            index = maximumBuckets_ - 1;
+            analysis_.timelineTruncated = true;
+        }
+        if (analysis_.timeline.size() <= index) {
+            const std::size_t previousSize = analysis_.timeline.size();
+            analysis_.timeline.resize(index + 1);
+            for (std::size_t i = previousSize; i <= index; ++i) {
+                analysis_.timeline[i].startMs =
+                    static_cast<uint32_t>(i * bucketMilliseconds_);
+            }
+        }
+        return analysis_.timeline[index];
+    }
+
+    void recordSlowOperation(
+        const char* operation,
+        Clock::time_point startedAt,
+        uint64_t durationUs,
+        uint64_t bytes,
+        bool force) {
+        if (!force && durationUs < slowOperationThresholdUs_) return;
+        if (analysis_.slowOperations.size() >= maximumSlowOperations_) {
+            ++analysis_.omittedSlowOperations;
+            return;
+        }
+        analysis_.slowOperations.push_back({
+            operation,
+            static_cast<uint32_t>(std::min<uint64_t>(
+                relativeMicroseconds(startedAt) / 1000,
+                std::numeric_limits<uint32_t>::max())),
+            durationUs,
+            bytes
+        });
+    }
+
+    bool enabled_ = false;
+    bool finished_ = false;
+    bool haveStartingIoCounters_ = false;
+    SaveIoAnalysis& analysis_;
+    Clock::time_point startedAt_;
+    IO_COUNTERS startingIoCounters_ {};
+};
+
 class Win32FileWriter {
 public:
     static constexpr DWORD maxWriteBytes = 512u * 1024u;
@@ -1698,15 +1889,17 @@ public:
         std::function<MuxPressureSample()> samplePressure = {},
         bool adaptiveRateEnabled = false,
         AdaptiveWritePacerConfig adaptiveRate = {},
-        std::size_t burstBytes = 0)
+        std::size_t burstBytes = 0,
+        SaveIoRecorder* ioRecorder = nullptr)
         : out_(out),
           capacity_(std::max<std::size_t>(capacity, 1)),
           samplePressure_(std::move(samplePressure)),
           adaptiveRateEnabled_(adaptiveRateEnabled),
           rateController_(adaptiveRate),
           burstBytes_(adaptiveRateEnabled
-              ? std::max<std::size_t>(burstBytes, capacity_)
-              : 0) {
+              ? std::max<std::size_t>(burstBytes, ioChunkBytes_)
+              : 0),
+          ioRecorder_(ioRecorder) {
         buffer_.reserve(capacity_);
     }
 
@@ -1739,9 +1932,12 @@ public:
                 continue;
             }
 
-            const std::size_t count = std::min(available, size);
+            const std::size_t count = std::min({ available, size, sourceReadChunkBytes_ });
             const std::size_t previousSize = buffer_.size();
             buffer_.resize(previousSize + count);
+            // Replay reads and final MP4 writes compete for the same storage,
+            // so both consume one aggregate I/O budget.
+            paceToTarget(count);
             const auto readStartedAt = std::chrono::steady_clock::now();
             const bool read = reader.read(
                 offset,
@@ -1753,10 +1949,14 @@ public:
             ++sourceReadCalls_;
             sourceReadUs_ += readUs;
             maximumSourceReadUs_ = std::max(maximumSourceReadUs_, readUs);
+            if (ioRecorder_) {
+                ioRecorder_->recordReplayRead(readStartedAt, readUs, read ? count : 0);
+            }
             if (!read) {
                 buffer_.resize(previousSize);
                 return false;
             }
+            if (adaptiveRateEnabled_) rateController_.observeIoLatency(readUs);
             sourceReadBytes_ += count;
             offset += count;
             size -= count;
@@ -1766,10 +1966,9 @@ public:
 
     void flush() {
         if (buffer_.empty()) return;
-        constexpr std::size_t outputChunkBytes = 512u * 1024u;
         std::size_t offset = 0;
         while (offset < buffer_.size()) {
-            const std::size_t count = std::min(outputChunkBytes, buffer_.size() - offset);
+            const std::size_t count = std::min(ioChunkBytes_, buffer_.size() - offset);
             prepareForWrite(count);
             const auto writeStartedAt = std::chrono::steady_clock::now();
             const bool wrote = out_.write(std::span<const std::byte>(buffer_.data() + offset, count));
@@ -1780,6 +1979,9 @@ public:
             ++outputWriteCalls_;
             outputWriteUs_ += writeDurationUs;
             maximumOutputWriteUs_ = std::max(maximumOutputWriteUs_, writeDurationUs);
+            if (ioRecorder_) {
+                ioRecorder_->recordOutputWrite(writeStartedAt, writeDurationUs, wrote ? count : 0);
+            }
             if (!wrote) break;
             if (adaptiveRateEnabled_) rateController_.observeWrite(count, writeDurationUs);
             offset += count;
@@ -1825,6 +2027,9 @@ public:
     std::size_t pressureBackoffs() const {
         return adaptiveRateEnabled_ ? rateController_.pressureBackoffs() : 0;
     }
+    std::size_t latencyBackoffs() const {
+        return adaptiveRateEnabled_ ? rateController_.latencyBackoffs() : 0;
+    }
     std::size_t measuredWrites() const {
         return adaptiveRateEnabled_ ? rateController_.measuredWrites() : 0;
     }
@@ -1853,6 +2058,9 @@ public:
     int64_t maximumCapturePublicationAge100ns() const { return maximumCapturePublicationAge100ns_; }
 
 private:
+    static constexpr std::size_t ioChunkBytes_ = 512u * 1024u;
+    static constexpr std::size_t sourceReadChunkBytes_ = 2u * 1024u * 1024u;
+
     static uint64_t steadyNowUs() {
         return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -1891,6 +2099,7 @@ private:
 
     MuxPressureSample observePressure() {
         const auto sample = samplePressure_();
+        if (ioRecorder_) ioRecorder_->recordPressure(std::chrono::steady_clock::now(), sample);
         maximumQueueAge100ns_ = std::max(maximumQueueAge100ns_, sample.oldestFrameAge100ns);
         maximumEncoderQueueDepth_ = std::max(maximumEncoderQueueDepth_, sample.encoderQueueDepth);
         maximumNvencInFlight_ = std::max(maximumNvencInFlight_, sample.nvencInFlight);
@@ -1940,6 +2149,16 @@ private:
                     0,
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - waitStartedAt).count()));
+                if (ioRecorder_) {
+                    const auto waitedUs = static_cast<uint64_t>(std::max<int64_t>(
+                        0,
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - waitStartedAt).count()));
+                    ioRecorder_->recordPacingWait(
+                        waitStartedAt,
+                        waitedUs,
+                        "capture_pressure_wait");
+                }
                 if (sample.level == MuxPressureLevel::Elevated) {
                     paceElevated(pendingBytes);
                 }
@@ -1964,22 +2183,28 @@ private:
                 static_cast<double>(pendingBytes) / static_cast<double>(bytesPerSecond)));
 
         if (!rateLimitStarted_) {
-            nextRateLimitedWrite_ = now - burstDuration;
+            nextRateLimitedIo_ = now - burstDuration;
             rateLimitStarted_ = true;
         } else {
-            nextRateLimitedWrite_ = std::max(nextRateLimitedWrite_, now - burstDuration);
+            nextRateLimitedIo_ = std::max(nextRateLimitedIo_, now - burstDuration);
         }
-        nextRateLimitedWrite_ += writeDuration;
-        if (nextRateLimitedWrite_ <= now) return;
+        nextRateLimitedIo_ += writeDuration;
+        if (nextRateLimitedIo_ <= now) return;
 
         const auto sleepStartedAt = Clock::now();
-        std::this_thread::sleep_until(nextRateLimitedWrite_);
+        std::this_thread::sleep_until(nextRateLimitedIo_);
         const auto sleptUs = std::max<int64_t>(
             0,
             std::chrono::duration_cast<std::chrono::microseconds>(
                 Clock::now() - sleepStartedAt).count());
         ++rateLimitSleeps_;
         rateLimitSleepUs_ += static_cast<std::size_t>(sleptUs);
+        if (ioRecorder_) {
+            ioRecorder_->recordPacingWait(
+                sleepStartedAt,
+                static_cast<uint64_t>(sleptUs),
+                "rate_limit_wait");
+        }
     }
 
     Win32FileWriter& out_;
@@ -1989,6 +2214,7 @@ private:
     AdaptiveWriteRateController rateController_;
     SustainedWritePressureGate pressureGate_;
     const std::size_t burstBytes_;
+    SaveIoRecorder* ioRecorder_ = nullptr;
     std::vector<std::byte> buffer_;
     std::size_t flushes_ = 0;
     std::size_t sleeps_ = 0;
@@ -2018,7 +2244,7 @@ private:
     bool adaptiveBackgroundStarted_ = false;
     bool adaptiveBackgroundAttempted_ = false;
     bool rateLimitStarted_ = false;
-    std::chrono::steady_clock::time_point nextRateLimitedWrite_ {};
+    std::chrono::steady_clock::time_point nextRateLimitedIo_ {};
     std::size_t elevatedBytesSinceYield_ = 0;
     static constexpr std::size_t elevatedYieldIntervalBytes_ = 16u * 1024u * 1024u;
 };
@@ -2084,6 +2310,71 @@ bool writeAvccSample(
 }
 
 }  // namespace
+
+std::string saveIoAnalysisToJson(const SaveIoAnalysis& analysis) {
+    if (!analysis.enabled) return "null";
+
+    std::ostringstream out;
+    auto key = [&](const char* name) {
+        out << '"' << name << '"' << ':';
+    };
+    out << '{';
+    key("bucketMs"); out << analysis.bucketMs << ',';
+    key("elapsedMs"); out << analysis.elapsedMs << ',';
+    key("timelineTruncated"); out << (analysis.timelineTruncated ? "true" : "false") << ',';
+    key("omittedSlowOperations"); out << analysis.omittedSlowOperations << ',';
+    key("storageSeekPenalty"); out << '"' << analysis.storageSeekPenalty << '"' << ',';
+    key("ioPriority"); out << '"' << analysis.ioPriority << '"' << ',';
+    key("lowIoPriorityApplied"); out << (analysis.lowIoPriorityApplied ? "true" : "false") << ',';
+    key("preallocated"); out << (analysis.preallocated ? "true" : "false") << ',';
+    key("finalFileBytes"); out << analysis.finalFileBytes << ',';
+    key("diskBackedSourceBytes"); out << analysis.diskBackedSourceBytes << ',';
+    key("processReadOperationsDelta"); out << analysis.processReadOperationsDelta << ',';
+    key("processWriteOperationsDelta"); out << analysis.processWriteOperationsDelta << ',';
+    key("processReadBytesDelta"); out << analysis.processReadBytesDelta << ',';
+    key("processWriteBytesDelta"); out << analysis.processWriteBytesDelta << ',';
+    key("processOtherBytesDelta"); out << analysis.processOtherBytesDelta << ',';
+    key("timeline"); out << '[';
+    for (std::size_t i = 0; i < analysis.timeline.size(); ++i) {
+        if (i > 0) out << ',';
+        const auto& bucket = analysis.timeline[i];
+        out << '{';
+        key("startMs"); out << bucket.startMs << ',';
+        key("replayReadBytes"); out << bucket.replayReadBytes << ',';
+        key("outputWriteBytes"); out << bucket.outputWriteBytes << ',';
+        key("replayReadBusyUs"); out << bucket.replayReadBusyUs << ',';
+        key("outputWriteBusyUs"); out << bucket.outputWriteBusyUs << ',';
+        key("pacingWaitUs"); out << bucket.pacingWaitUs << ',';
+        key("replayReadCalls"); out << bucket.replayReadCalls << ',';
+        key("outputWriteCalls"); out << bucket.outputWriteCalls << ',';
+        key("pacingWaitCalls"); out << bucket.pacingWaitCalls << ',';
+        key("maximumReplayReadUs"); out << bucket.maximumReplayReadUs << ',';
+        key("maximumOutputWriteUs"); out << bucket.maximumOutputWriteUs << ',';
+        key("maximumPacingWaitUs"); out << bucket.maximumPacingWaitUs << ',';
+        key("pressureLevel"); out << bucket.pressureLevel << ',';
+        key("frameQueueDepth"); out << bucket.frameQueueDepth << ',';
+        key("encoderQueueDepth"); out << bucket.encoderQueueDepth << ',';
+        key("nvencInFlight"); out << bucket.nvencInFlight << ',';
+        key("droppedFramesDelta"); out << bucket.droppedFramesDelta << ',';
+        key("captureGap100ns"); out << bucket.captureGap100ns << ',';
+        key("capturePublicationAge100ns"); out << bucket.capturePublicationAge100ns;
+        out << '}';
+    }
+    out << ']' << ',';
+    key("slowOperations"); out << '[';
+    for (std::size_t i = 0; i < analysis.slowOperations.size(); ++i) {
+        if (i > 0) out << ',';
+        const auto& operation = analysis.slowOperations[i];
+        out << '{';
+        key("operation"); out << '"' << operation.operation << '"' << ',';
+        key("startMs"); out << operation.startMs << ',';
+        key("durationUs"); out << operation.durationUs << ',';
+        key("bytes"); out << operation.bytes;
+        out << '}';
+    }
+    out << ']' << '}';
+    return out.str();
+}
 
 MuxResult muxH264ToMp4(
     const std::vector<EncodedPacket>& packets,
@@ -2451,20 +2742,47 @@ MuxResult muxH264ToMp4(
             " moovBytes=" + std::to_string(moov.size()) +
             " audioTracks=" + std::to_string(audioTracks.size()));
 
+    SaveIoAnalysis ioAnalysis;
+    SaveIoRecorder ioRecorder(pacing.analyzeIo, ioAnalysis, totalStartedAt);
     Win32FileWriter out(path);
     if (!out.valid()) {
+        ioRecorder.finish();
+        result.ioAnalysis = std::move(ioAnalysis);
         result.message = "MP4 muxing failed: could not create output file.";
         logMuxSaveTiming("total", totalStartedAt, "ok=false reason=create_output_failed");
         return result;
     }
     const uint64_t finalFileSize = ftyp.size() + mdatHeaderSize + mdatPayloadSize + moov.size();
+    const auto preallocateStartedAt = SaveTimingClock::now();
     const bool preallocated = out.preallocate(finalFileSize);
+    const auto preallocateDurationUs = static_cast<uint64_t>(std::max<int64_t>(
+        0,
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            SaveTimingClock::now() - preallocateStartedAt).count()));
+    ioRecorder.recordStructuralOperation(
+        "preallocate",
+        preallocateStartedAt,
+        preallocateDurationUs,
+        finalFileSize);
+    logMuxSaveTiming(
+        "preallocate",
+        preallocateStartedAt,
+        "ok=" + std::string(preallocated ? "true" : "false") +
+            " finalBytes=" + std::to_string(finalFileSize) +
+            " durationUs=" + std::to_string(preallocateDurationUs));
     const bool adaptiveWritePacing = shouldUseAdaptiveWritePacing(
         pacing.storageAwareRate,
         out.storageSeekPenalty());
     const auto adaptiveRateConfig = writePacerConfigForStorage(
         pacing.adaptiveRate,
         out.storageSeekPenalty());
+    ioRecorder.setFileContext(
+        storageSeekPenaltyName(out.storageSeekPenalty()),
+        ioPriorityName(out.ioPriorityHint()),
+        out.lowPriorityApplied(),
+        preallocated,
+        finalFileSize,
+        diskBackedEncodedSourceBytes);
 
     const auto headerStartedAt = SaveTimingClock::now();
     writeBytes(out, ftyp);
@@ -2476,6 +2794,14 @@ MuxResult muxH264ToMp4(
         writeU32(out, static_cast<uint32_t>(mdatPayloadSize + 8));
         writeType(out, "mdat");
     }
+    ioRecorder.recordOutputWrite(
+        headerStartedAt,
+        static_cast<uint64_t>(std::max<int64_t>(
+            0,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                SaveTimingClock::now() - headerStartedAt).count())),
+        out.good() ? ftyp.size() + mdatHeaderSize : 0,
+        "write_header");
     const std::size_t saveStagingBytes = muxStagingBytesForSource(
         diskBackedEncodedSourceBytes > 0,
         out.storageSeekPenalty());
@@ -2490,6 +2816,7 @@ MuxResult muxH264ToMp4(
             " storageSeekPenalty=" + storageSeekPenaltyName(out.storageSeekPenalty()) +
             " stagingBytes=" + std::to_string(saveStagingBytes) +
             " adaptiveWritePacing=" + std::string(adaptiveWritePacing ? "true" : "false") +
+            " aggregateIoPacing=" + std::string(adaptiveWritePacing ? "true" : "false") +
             " initialRateMiBps=" + std::to_string(
                 adaptiveWritePacing
                     ? adaptiveRateConfig.initialBytesPerSecond / (1024ULL * 1024ULL)
@@ -2501,7 +2828,8 @@ MuxResult muxH264ToMp4(
         std::move(pacing.samplePressure),
         adaptiveWritePacing,
         adaptiveRateConfig,
-        pacing.burstBytes);
+        pacing.burstBytes,
+        pacing.analyzeIo ? &ioRecorder : nullptr);
     const auto videoWriteStartedAt = SaveTimingClock::now();
     uint64_t videoWrittenBytes = 0;
     bool payloadReadSucceeded = true;
@@ -2552,6 +2880,7 @@ MuxResult muxH264ToMp4(
             " measuredWrites=" + std::to_string(bufferedOut.measuredWrites()) +
             " rateAdjustments=" + std::to_string(bufferedOut.rateAdjustments()) +
             " pressureBackoffs=" + std::to_string(bufferedOut.pressureBackoffs()) +
+            " latencyBackoffs=" + std::to_string(bufferedOut.latencyBackoffs()) +
             " rateLimitSleeps=" + std::to_string(bufferedOut.rateLimitSleepCount()) +
             " rateLimitSleepMs=" + std::to_string(bufferedOut.rateLimitSleepMs()) +
             " paceYields=" + std::to_string(bufferedOut.yieldCount()) +
@@ -2615,11 +2944,28 @@ MuxResult muxH264ToMp4(
 
     const auto moovWriteStartedAt = SaveTimingClock::now();
     writeBytes(out, moov);
+    ioRecorder.recordOutputWrite(
+        moovWriteStartedAt,
+        static_cast<uint64_t>(std::max<int64_t>(
+            0,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                SaveTimingClock::now() - moovWriteStartedAt).count())),
+        out.good() ? moov.size() : 0,
+        "write_moov");
     logMuxSaveTiming("write_moov", moovWriteStartedAt, "bytes=" + std::to_string(moov.size()));
 
     const auto closeStartedAt = SaveTimingClock::now();
     const bool writeSucceeded = payloadReadSucceeded && out.good();
     const bool closeSucceeded = out.close();
+    ioRecorder.recordStructuralOperation(
+        "file_close",
+        closeStartedAt,
+        static_cast<uint64_t>(std::max<int64_t>(
+            0,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                SaveTimingClock::now() - closeStartedAt).count())));
+    ioRecorder.finish();
+    result.ioAnalysis = std::move(ioAnalysis);
     logMuxSaveTiming("file_close", closeStartedAt);
 
     if (!writeSucceeded || !closeSucceeded) {
