@@ -382,55 +382,79 @@ void alignAudioPtsToWasapiClock(
         capturedPts100ns, packetDuration100ns, clockAnchored, nextPts100ns);
 }
 
-bool isFloatFormat(const WAVEFORMATEX* format) {
-    if (!format) return false;
-    if (format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) return true;
-    if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-        const auto extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
-        return extensible->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+enum class PcmSourceEncoding {
+    Integer,
+    FloatingPoint,
+    Unsupported
+};
+
+bool hasExtensibleFormatDetails(const WAVEFORMATEX* format) {
+    return format &&
+        format->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+        format->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+}
+
+PcmSourceEncoding sourcePcmEncoding(const WAVEFORMATEX* format) {
+    if (!format) return PcmSourceEncoding::Unsupported;
+    if (format->wFormatTag == WAVE_FORMAT_PCM) return PcmSourceEncoding::Integer;
+    if (format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) return PcmSourceEncoding::FloatingPoint;
+    if (!hasExtensibleFormatDetails(format)) return PcmSourceEncoding::Unsupported;
+
+    const auto extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
+    if (extensible->SubFormat == KSDATAFORMAT_SUBTYPE_PCM) return PcmSourceEncoding::Integer;
+    if (extensible->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) {
+        return PcmSourceEncoding::FloatingPoint;
     }
-    return false;
+    return PcmSourceEncoding::Unsupported;
 }
 
 int sourceValidBitsPerSample(const WAVEFORMATEX* format) {
     if (!format) return 16;
-    if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+    if (hasExtensibleFormatDetails(format)) {
         const auto extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
         if (extensible->Samples.wValidBitsPerSample > 0) return extensible->Samples.wValidBitsPerSample;
     }
     return format->wBitsPerSample;
 }
 
-void convertToS16(const BYTE* data, UINT32 frames, DWORD flags, const WAVEFORMATEX* format, int& outChannels, PacketPayload& output) {
-    const int inputChannels = std::max<int>(1, format ? format->nChannels : 2);
-    const int outputChannels = std::min<int>(2, inputChannels);
-    const int containerBits = format ? format->wBitsPerSample : 16;
-    const int validBits = sourceValidBitsPerSample(format);
+bool makePcmInputLayout(
+    const WAVEFORMATEX* format,
+    int& outputChannels,
+    PcmInputLayout& layout) {
+    const int inputChannels = format ? static_cast<int>(format->nChannels) : 0;
+    outputChannels = std::min(2, std::max(1, inputChannels));
+    const PcmSourceEncoding encoding = sourcePcmEncoding(format);
+    if (!format || inputChannels <= 0 || encoding == PcmSourceEncoding::Unsupported) return false;
+
+    const int containerBits = format->wBitsPerSample;
     const std::size_t fallbackBlockAlign = static_cast<std::size_t>(inputChannels) *
         static_cast<std::size_t>(std::max(1, containerBits / 8));
-    const std::size_t blockAlign = format && format->nBlockAlign > 0
-        ? format->nBlockAlign
-        : fallbackBlockAlign;
+    layout = PcmInputLayout {
+        inputChannels,
+        containerBits,
+        sourceValidBitsPerSample(format),
+        format->nBlockAlign > 0 ? format->nBlockAlign : fallbackBlockAlign,
+        encoding == PcmSourceEncoding::FloatingPoint
+    };
+    return true;
+}
+
+void convertToS16(const BYTE* data, UINT32 frames, DWORD flags, const WAVEFORMATEX* format, int& outChannels, PacketPayload& output) {
+    PcmInputLayout layout;
+    const bool supported = makePcmInputLayout(format, outChannels, layout);
+    const int outputChannels = outChannels;
     const std::size_t outputSamples = static_cast<std::size_t>(frames) * outputChannels;
     output.resize(outputSamples * sizeof(int16_t));
-    outChannels = outputChannels;
 
     auto* dest = reinterpret_cast<int16_t*>(output.data());
-    if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) || !data) {
+    if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) || !data || !supported) {
         std::fill(dest, dest + outputSamples, int16_t { 0 });
         return;
     }
 
-    const PcmInputLayout layout {
-        inputChannels,
-        containerBits,
-        validBits,
-        blockAlign,
-        isFloatFormat(format)
-    };
     const auto input = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(data),
-        static_cast<std::size_t>(frames) * blockAlign);
+        static_cast<std::size_t>(frames) * layout.blockAlign);
     if (!convertInterleavedPcmToS16(
             input,
             frames,
@@ -439,6 +463,38 @@ void convertToS16(const BYTE* data, UINT32 frames, DWORD flags, const WAVEFORMAT
             std::span<int16_t>(dest, outputSamples))) {
         std::fill(dest, dest + outputSamples, int16_t { 0 });
     }
+}
+
+void convertToProcessingFloat(
+    const BYTE* data,
+    UINT32 frames,
+    DWORD flags,
+    const WAVEFORMATEX* format,
+    int& outChannels,
+    std::vector<float>& output) {
+    PcmInputLayout layout;
+    const bool supported = makePcmInputLayout(format, outChannels, layout);
+    const std::size_t outputSamples = static_cast<std::size_t>(frames) * outChannels;
+    output.resize(outputSamples);
+    if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) || !data || !supported) {
+        std::fill(output.begin(), output.end(), 0.0f);
+        return;
+    }
+
+    const auto input = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(data),
+        static_cast<std::size_t>(frames) * layout.blockAlign);
+    if (!convertInterleavedPcmToF32(input, frames, layout, outChannels, output)) {
+        std::fill(output.begin(), output.end(), 0.0f);
+    }
+}
+
+int16_t processingSampleToS16(float value) {
+    if (!std::isfinite(value)) return 0;
+    return static_cast<int16_t>(std::clamp<long>(
+        std::lround(value),
+        -32768,
+        32767));
 }
 
 void fillSilentS16(UINT32 frames, int channels, PacketPayload& output) {
@@ -854,6 +910,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
         const int rnnoiseFrameSize = rnnoise_get_frame_size();
         const bool rnnoiseSampleRateSupported = mixFormat->nSamplesPerSec == 48000;
         RnnoiseFrameQueue rnnoiseQueue(rnnoiseFrameSize);
+        std::vector<float> micInputScratch;
         std::vector<float> rnnoiseFrameIn(static_cast<std::size_t>(rnnoiseFrameSize));
         std::vector<float> rnnoiseFrameOut(static_cast<std::size_t>(rnnoiseFrameSize));
         auto lastRnnoiseQueueLog = std::chrono::steady_clock::now() - std::chrono::seconds(10);
@@ -909,9 +966,13 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                     nextPts100ns);
 
                 int outputChannels = 0;
-                const int estimatedChannels = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
-                auto pcm = packets_.acquirePayload(static_cast<std::size_t>(frames) * estimatedChannels * sizeof(int16_t));
-                convertToS16(data, frames, flags, mixFormat, outputChannels, *pcm);
+                convertToProcessingFloat(
+                    data,
+                    frames,
+                    flags,
+                    mixFormat,
+                    outputChannels,
+                    micInputScratch);
 
                 const float vol = micVolume_.load();
                 const bool isolation = micIsolation_.load();
@@ -920,15 +981,13 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                 const bool autoGate = autoNoiseGate_.load();
                 const float gateThreshold = noiseGateThreshold_.load();
                 const int gateDebounceMs = noiseGateDebounceMs_.load();
-                auto* pcm16 = reinterpret_cast<int16_t*>(pcm->data());
-
                 for (UINT32 i = 0; i < frames; ++i) {
                     float mono = 0.0f;
                     for (int ch = 0; ch < outputChannels; ++ch) {
-                        mono += pcm16[i * outputChannels + ch];
+                        mono += micInputScratch[i * outputChannels + ch];
                     }
                     mono /= outputChannels;
-                    rnnoiseQueue.push(mono);
+                    rnnoiseQueue.push(std::clamp(mono * 32768.0f, -32768.0f, 32767.0f));
                 }
 
                 while (rnnoiseQueue.popFrame(rnnoiseFrameIn)) {
@@ -986,7 +1045,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
 
                         float blended = (original * (1.0f - w)) + (processed * w);
                         blended *= vol * currentGateGain;
-                        const int16_t outVal = static_cast<int16_t>(std::clamp(blended, -32768.0f, 32767.0f));
+                        const int16_t outVal = processingSampleToS16(blended);
                         for (int ch = 0; ch < outputChannels; ++ch) {
                             out16[j * outputChannels + ch] = outVal;
                         }
@@ -1123,6 +1182,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
     const int rnnoiseFrameSize = rnnoise_get_frame_size(); // 480
     const bool rnnoiseSampleRateSupported = mixFormat->nSamplesPerSec == 48000;
     RnnoiseFrameQueue rnnoiseQueue(rnnoiseFrameSize);
+    std::vector<float> micInputScratch;
     std::vector<float> rnnoiseFrameIn(static_cast<std::size_t>(rnnoiseFrameSize));
     std::vector<float> rnnoiseFrameOut(static_cast<std::size_t>(rnnoiseFrameSize));
     auto lastRnnoiseQueueLog = std::chrono::steady_clock::now() - std::chrono::seconds(10);
@@ -1160,11 +1220,16 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                 nextPts100ns);
 
             int outputChannels = 0;
-            const int estimatedChannels = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
-            auto pcm = packets_.acquirePayload(static_cast<std::size_t>(frames) * estimatedChannels * sizeof(int16_t));
-            convertToS16(data, frames, flags, mixFormat, outputChannels, *pcm);
+            PacketPayloadPtr pcm;
 
             if (sourceId == "microphone-pcm") {
+                convertToProcessingFloat(
+                    data,
+                    frames,
+                    flags,
+                    mixFormat,
+                    outputChannels,
+                    micInputScratch);
                 const float vol = micVolume_.load();
                 const bool isolation = micIsolation_.load();
                 const float weight = micIsolationWeight_.load();
@@ -1173,15 +1238,13 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                 const float gateThreshold = noiseGateThreshold_.load();
                 const int gateDebounceMs = noiseGateDebounceMs_.load();
                 
-                auto* pcm16 = reinterpret_cast<int16_t*>(pcm->data());
-                
                 for (UINT32 i = 0; i < frames; ++i) {
                     float mono = 0.0f;
                     for (int ch = 0; ch < outputChannels; ++ch) {
-                        mono += pcm16[i * outputChannels + ch];
+                        mono += micInputScratch[i * outputChannels + ch];
                     }
                     mono /= outputChannels;
-                    rnnoiseQueue.push(mono);
+                    rnnoiseQueue.push(std::clamp(mono * 32768.0f, -32768.0f, 32767.0f));
                 }
                 
                 while (rnnoiseQueue.popFrame(rnnoiseFrameIn)) {
@@ -1239,7 +1302,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                         
                         float blended = (original * (1.0f - w)) + (processed * w);
                         blended *= vol * currentGateGain;
-                        int16_t outVal = static_cast<int16_t>(std::clamp(blended, -32768.0f, 32767.0f));
+                        const int16_t outVal = processingSampleToS16(blended);
                         for (int ch = 0; ch < outputChannels; ++ch) {
                             out16[j * outputChannels + ch] = outVal;
                         }
@@ -1268,6 +1331,11 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                 if (FAILED(captureClient->GetNextPacketSize(&packetFrames))) packetFrames = 0;
                 continue;
             }
+
+            const int estimatedChannels = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
+            pcm = packets_.acquirePayload(
+                static_cast<std::size_t>(frames) * estimatedChannels * sizeof(int16_t));
+            convertToS16(data, frames, flags, mixFormat, outputChannels, *pcm);
 
             EncodedPacket packet;
             packet.kind = PacketKind::Audio;

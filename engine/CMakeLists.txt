@@ -23,6 +23,7 @@ add_executable(clipture_engine
   src/Mp4Muxer.cpp
   src/NativeRuntime.cpp
   src/ReplaySegmentStore.cpp
+  src/RawInputHotkey.cpp
   src/Tonemapper.cpp
   src/WgcCaptureBackend.cpp
   third_party/rnnoise/src/celt_lpc.c
@@ -45,7 +46,7 @@ if(MSVC)
   target_compile_options(clipture_engine PRIVATE /W4 /permissive-)
 endif()
 
-target_link_libraries(clipture_engine PRIVATE dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 avrt mfplat mfreadwrite mfuuid winmm)
+target_link_libraries(clipture_engine PRIVATE dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 avrt mfplat mfreadwrite mfuuid winmm user32)
 
 if(BUILD_TESTING)
   add_executable(clipture_packet_tests

@@ -722,6 +722,7 @@ function LibraryView({
   const [folderFilter, setFolderFilter] = useState("");
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
+  const [editorialPreviewId, setEditorialPreviewId] = useState("");
 
   const savedClips = useMemo(() => clips.filter((clip) => clip.librarySource !== "imported"), [clips]);
   const importedClips = useMemo(() => clips.filter((clip) => clip.librarySource === "imported"), [clips]);
@@ -768,6 +769,20 @@ function LibraryView({
       return matchesFolder && (!trimmedQuery || haystack.includes(trimmedQuery));
     });
   }, [folderFilter, query, settings, tabClips]);
+
+  const isEditorialLibrary = settings?.uiTheme === "glitten";
+  const editorialPreviewClip = filteredClips.find((clip) => clip.id === editorialPreviewId)
+    ?? filteredClips[0];
+
+  const playEditorialClip = (clip: ClipRecord) => {
+    setEditorialPreviewId(clip.id);
+    setSelectedClip(clip);
+  };
+
+  const previewEditorialClip = (clip: ClipRecord) => {
+    setEditorialPreviewId(clip.id);
+    setSelectedClip(undefined);
+  };
 
   const selectedCount = selectedClipIds.size;
   const allFilteredClipsSelected = filteredClips.length > 0
@@ -828,8 +843,11 @@ function LibraryView({
         <div className="library-top">
           <div className="library-hero">
             <div className="library-title">
-              <Clapperboard size={28} />
-              <h1>Clip Library</h1>
+              <Clapperboard className="library-title-icon" size={28} />
+              <h1>
+                <span className="library-heading-default">Clip Library</span>
+                <span className="library-heading-glitten">Clips</span>
+              </h1>
             </div>
             <button className="primary library-save-button" onClick={onSaveClip} disabled={isSavingClip}>
               <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${clipLengthSeconds}s`}
@@ -891,7 +909,14 @@ function LibraryView({
                 <button className="secondary-button import-videos-button" type="button" onClick={() => void handleImportVideos()}>
                   <Upload size={18} /> Import videos
                 </button>
-                <button className="secondary-button select-clips-button" type="button" onClick={() => setSelectionMode(true)}>
+                <button
+                  className="secondary-button select-clips-button"
+                  type="button"
+                  onClick={() => {
+                    setSelectedClip(undefined);
+                    setSelectionMode(true);
+                  }}
+                >
                   <span className="select-clips-empty-box" aria-hidden="true" />
                   Select clips
                 </button>
@@ -899,8 +924,6 @@ function LibraryView({
             )}
           </div>
         </div>
-
-        {selectedClip && <ClipPlayer clip={selectedClip} onClose={() => setSelectedClip(undefined)} settings={settings} />}
 
         {filteredClips.length === 0 ? (
           <LibraryEmptyState
@@ -910,15 +933,45 @@ function LibraryView({
             actionLabel={libraryTab === "clips" ? "Save your first clip" : "Import videos"}
             onAction={libraryTab === "clips" ? onSaveClip : handleImportVideos}
           />
+        ) : isEditorialLibrary && !selectionMode && editorialPreviewClip ? (
+          selectedClip ? (
+            <ClipPlayer
+              clip={selectedClip}
+              onClose={() => {
+                setEditorialPreviewId(selectedClip.id);
+                setSelectedClip(undefined);
+              }}
+              onSelectClip={playEditorialClip}
+              railClips={filteredClips}
+              settings={settings}
+            />
+          ) : (
+            <LibraryClipPreview
+              clip={editorialPreviewClip}
+              railClips={filteredClips}
+              settings={settings}
+              onPlay={() => playEditorialClip(editorialPreviewClip)}
+              onSelectClip={previewEditorialClip}
+            />
+          )
+        ) : selectedClip ? (
+          <ClipPlayer
+            clip={selectedClip}
+            onClose={() => setSelectedClip(undefined)}
+            settings={settings}
+          />
         ) : (
           <div className="clip-grid">
             {filteredClips.map((clip) => (
               <ClipCard
                 clip={clip}
-                isActive={selectedClip?.id === clip.id}
+                isActive={false}
                 isSelected={selectedClipIds.has(clip.id)}
                 key={clip.id}
-                onPlay={() => setSelectedClip(clip)}
+                onPlay={() => {
+                  setEditorialPreviewId(clip.id);
+                  setSelectedClip(clip);
+                }}
                 onToggleSelected={() => toggleClipSelection(clip.id)}
                 selectionMode={selectionMode}
                 settings={settings}
@@ -1190,6 +1243,169 @@ function ClipCard({
   );
 }
 
+function ClipRailItem({
+  clip,
+  active,
+  onSelect
+}: {
+  clip: ClipRecord;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const [thumbnailUrl, setThumbnailUrl] = useState("");
+  const [itemRef, loadMedia] = useNearViewport<HTMLButtonElement>(20);
+  const createdAt = parseClipDate(clip.createdAt);
+  const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
+
+  useEffect(() => {
+    let mounted = true;
+    if (!loadMedia) {
+      setThumbnailUrl("");
+      return () => {
+        mounted = false;
+      };
+    }
+    void window.clipture.clipThumbnailUrl(clip.filePath).then((url) => {
+      if (mounted) setThumbnailUrl(url || "");
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [clip.filePath, loadMedia]);
+
+  useEffect(() => {
+    if (active) itemRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [active]);
+
+  return (
+    <button
+      ref={itemRef}
+      className={active ? "clip-rail-item active" : "clip-rail-item"}
+      type="button"
+      aria-current={active ? "true" : undefined}
+      onClick={onSelect}
+    >
+      <span className="clip-rail-thumbnail">
+        {thumbnailUrl
+          ? <img src={thumbnailUrl} alt="" loading="lazy" decoding="async" />
+          : <span className="thumbnail-skeleton" aria-hidden="true" />}
+        {clip.durationSeconds > 0 && (
+          <span className="clip-rail-duration">{formatDuration(clip.durationSeconds)}</span>
+        )}
+      </span>
+      <span className="clip-rail-copy">
+        <strong>{displayTitle}</strong>
+        <span>{formatClipDate(createdAt)} | {formatClipTime(createdAt)}</span>
+      </span>
+    </button>
+  );
+}
+
+function LibraryPlayerSidebar({
+  clip,
+  railClips,
+  settings,
+  onSelectClip,
+  onClose
+}: {
+  clip: ClipRecord;
+  railClips: ClipRecord[];
+  settings?: ClipSettings;
+  onSelectClip: (clip: ClipRecord) => void;
+  onClose?: () => void;
+}) {
+  const createdAt = parseClipDate(clip.createdAt);
+  const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
+  const sourceLabels = useMemo(() => clipSourceLabels(clip, settings), [clip, settings]);
+  const sourceText = sourceLabels.length > 0 ? sourceLabels.join(", ") : clip.gameOrApp;
+  const iconUrl = useClipIconUrl(clip, sourceLabels);
+
+  return (
+    <aside className="library-player-sidebar">
+      <div className="library-player-side-header">
+        <div className="library-player-side-title-row">
+          <h2 className="library-player-side-title">
+            {iconUrl && <img className="clip-app-icon" src={iconUrl} alt="" />}
+            <span>{displayTitle}</span>
+          </h2>
+          {onClose && (
+            <button className="icon-button" title="Close player" onClick={onClose}>
+              <X size={17} />
+            </button>
+          )}
+        </div>
+        <p>{sourceText}</p>
+        <div className="library-player-side-meta">
+          <span>{formatClipDate(createdAt)} | {formatClipTime(createdAt)}</span>
+          <span>{formatDuration(clip.durationSeconds)} | {clip.resolution} | {clip.fps} FPS</span>
+          <span>{clip.audioTracks.length} audio</span>
+        </div>
+      </div>
+      <div className="clip-rail-heading">
+        <strong>More clips</strong>
+        <span>{railClips.length}</span>
+      </div>
+      <div className="clip-rail" aria-label="More clips">
+        {railClips.map((candidate) => (
+          <ClipRailItem
+            active={candidate.id === clip.id}
+            clip={candidate}
+            key={candidate.id}
+            onSelect={() => onSelectClip(candidate)}
+          />
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function LibraryClipPreview({
+  clip,
+  railClips,
+  settings,
+  onPlay,
+  onSelectClip
+}: {
+  clip: ClipRecord;
+  railClips: ClipRecord[];
+  settings?: ClipSettings;
+  onPlay: () => void;
+  onSelectClip: (clip: ClipRecord) => void;
+}) {
+  const [thumbnailUrl, setThumbnailUrl] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    setThumbnailUrl("");
+    void window.clipture.clipThumbnailUrl(clip.filePath).then((url) => {
+      if (mounted) setThumbnailUrl(url || "");
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [clip.filePath]);
+
+  return (
+    <section className="player panel library-player library-player-preview">
+      <button className="library-player-main library-preview-main" type="button" onClick={onPlay} aria-label={`Play ${clip.title}`}>
+        {thumbnailUrl
+          ? <img src={thumbnailUrl} alt="" decoding="async" />
+          : <span className="thumbnail-skeleton" aria-hidden="true" />}
+        <span className="play-badge library-preview-play"><Play size={20} /></span>
+        {clip.durationSeconds > 0 && (
+          <span className="duration-badge">{formatDuration(clip.durationSeconds)}</span>
+        )}
+      </button>
+      <LibraryPlayerSidebar
+        clip={clip}
+        railClips={railClips}
+        settings={settings}
+        onSelectClip={onSelectClip}
+      />
+    </section>
+  );
+}
+
 function displayAudioTrackName(track: string) {
   if (track === "microphone-pcm") return "Microphone";
   if (track === "system-loopback-pcm") return "System audio";
@@ -1280,7 +1496,19 @@ function acceleratorFromKeyboardEvent(event: KeyboardEvent) {
   return parts.join("+");
 }
 
-function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: () => void; settings?: ClipSettings }) {
+function ClipPlayer({
+  clip,
+  onClose,
+  settings,
+  railClips,
+  onSelectClip
+}: {
+  clip: ClipRecord;
+  onClose: () => void;
+  settings?: ClipSettings;
+  railClips?: ClipRecord[];
+  onSelectClip?: (clip: ClipRecord) => void;
+}) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fastHoldActivatedRef = useRef(false);
   const holdTimeoutRef = useRef<number | null>(null);
@@ -1293,6 +1521,8 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const seekFeedbackTotalRef = useRef(0);
   const seekFeedbackSequenceRef = useRef(0);
   const seekFeedbackTimeoutRef = useRef<number | null>(null);
+  const mixedPlayRequestRef = useRef(0);
+  const playbackRequestedRef = useRef(true);
   const [src, setSrc] = useState("");
   const [message, setMessage] = useState("Preparing playback");
   const [mixedPlayback, setMixedPlayback] = useState(false);
@@ -1309,6 +1539,8 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const sourceLabels = useMemo(() => clipSourceLabels(clip, settings), [clip, settings]);
   const sourceText = sourceLabels.length > 0 ? sourceLabels.join(", ") : clip.gameOrApp;
   const iconUrl = useClipIconUrl(clip, sourceLabels);
+  const embeddedInLibrary = Boolean(railClips && onSelectClip);
+  const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
 
   useEffect(() => {
     let active = true;
@@ -1322,6 +1554,8 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     setCurrentTime(0);
     setDuration(clip.durationSeconds);
     setSeekFeedback(null);
+    playbackRequestedRef.current = true;
+    mixedPlayRequestRef.current += 1;
     seekFeedbackTotalRef.current = 0;
     void window.clipture.clipPlaybackUrl(clip.filePath, clip.audioTracks).then((result) => {
       if (!active) return;
@@ -1346,7 +1580,6 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const mixedTimerRef = useRef<number | null>(null);
   const mixedGenerationRef = useRef(0);
   const mixedPrimingPlayRef = useRef(false);
-  const mixedPlayRequestRef = useRef(0);
 
   const ensureAudioContext = () => {
     if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
@@ -1568,7 +1801,7 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
 
   const playMixedWhenReady = async () => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !playbackRequestedRef.current) return;
     if (!mixedPlayback || !mixedAudioChunkUrl) {
       try {
         await video.play();
@@ -1592,6 +1825,10 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
         if (requestId === mixedPlayRequestRef.current) mixedPrimingPlayRef.current = false;
         return;
       }
+      if (!playbackRequestedRef.current) {
+        mixedPrimingPlayRef.current = false;
+        return;
+      }
     }
 
     const ctx = ensureAudioContext();
@@ -1600,7 +1837,9 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
     } catch (error) {
       console.warn("Mixed audio resume failed:", error);
     }
-    if (requestId !== mixedPlayRequestRef.current || generation !== mixedGenerationRef.current) {
+    if (requestId !== mixedPlayRequestRef.current
+      || generation !== mixedGenerationRef.current
+      || !playbackRequestedRef.current) {
       if (requestId === mixedPlayRequestRef.current) mixedPrimingPlayRef.current = false;
       return;
     }
@@ -1670,11 +1909,15 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const togglePlayback = () => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) {
-      void playMixedWhenReady();
-    } else {
+    if (!video.paused) {
+      playbackRequestedRef.current = false;
+      mixedPlayRequestRef.current += 1;
       video.pause();
+      if (mixedPlayback) stopMixedAudio();
+      return;
     }
+    playbackRequestedRef.current = true;
+    void playMixedWhenReady();
   };
 
   const toggleFullscreen = () => {
@@ -1824,14 +2067,22 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
       keyboardSeekDirectionRef.current = 0;
       keyboardSeekingRef.current = false;
       const video = videoRef.current;
-      if (!mixedPlayback || !video || video.seeking) return;
-      if (video.paused) ensureMixedBuffered();
-      else void playMixedWhenReady();
+      if (!video || video.seeking) return;
+      if (playbackRequestedRef.current) void playMixedWhenReady();
+      else if (mixedPlayback) ensureMixedBuffered();
     };
 
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       const target = event.target as HTMLElement | null;
+      const interactiveTarget = target?.closest("input, textarea, select, button, a, [contenteditable='true']");
+      if ((event.code === "Space" || event.key === " ") && !interactiveTarget) {
+        if (event.ctrlKey || event.altKey || event.metaKey) return;
+        event.preventDefault();
+        if (!event.repeat) togglePlayback();
+        return;
+      }
+
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       if (event.ctrlKey || event.altKey || event.metaKey) return;
       event.preventDefault();
@@ -1892,25 +2143,30 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
   const aspectHeight = parseInt((clip.resolution || "").split("x")[1]) || 9;
 
   return (
-    <section className="player panel">
-      <div className="player-header">
-        <div>
-          <strong className="player-title">
-            {iconUrl && <img className="clip-app-icon" src={iconUrl} alt="" />}
-            <span>{clip.title}</span>
-          </strong>
-          <span>
-            {sourceText}
-          </span>
-        </div>
-        <button className="icon-button" title="Close player" onClick={onClose}>
-          <X size={16} />
-        </button>
-      </div>
-      {src ? (
+    <section className={embeddedInLibrary ? "player panel library-player" : "player panel"}>
+      <div className={embeddedInLibrary ? "library-player-main" : "player-content"}>
+        {!embeddedInLibrary && (
+          <div className="player-header">
+            <div>
+              <strong className="player-title">
+                {iconUrl && <img className="clip-app-icon" src={iconUrl} alt="" />}
+                <span>{displayTitle}</span>
+              </strong>
+              <span>
+                {sourceText}
+              </span>
+            </div>
+            <button className="icon-button" title="Close player" onClick={onClose}>
+              <X size={16} />
+            </button>
+          </div>
+        )}
+        {src ? (
         <div
           className={`custom-video-shell ${controlsVisible ? "" : "controls-hidden"}`}
-          style={{ maxWidth: `calc(480px * (${aspectWidth} / ${aspectHeight}))` }}
+          style={embeddedInLibrary
+            ? { maxWidth: "none" }
+            : { maxWidth: `calc(480px * (${aspectWidth} / ${aspectHeight}))` }}
           onPointerMove={showControls}
           onPointerEnter={showControls}
           onPointerDown={(event) => {
@@ -1979,18 +2235,15 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
             }}
             onSeeked={(event) => {
               setCurrentTime(event.currentTarget.currentTime);
-              if (!mixedPlayback) return;
               if (keyboardSeekingRef.current) return;
-              if (event.currentTarget.paused) {
-                ensureMixedBuffered();
-              } else {
-                void playMixedWhenReady();
-              }
+              if (playbackRequestedRef.current) void playMixedWhenReady();
+              else if (mixedPlayback) ensureMixedBuffered();
             }}
             onRateChange={(event) => {
               if (mixedPlayback && !event.currentTarget.paused) void restartMixedAudio();
             }}
             onEnded={() => {
+              playbackRequestedRef.current = false;
               setPlaying(false);
               if (mixedPlayback) stopMixedAudio();
               endFastHold();
@@ -2048,14 +2301,26 @@ function ClipPlayer({ clip, onClose, settings }: { clip: ClipRecord; onClose: ()
             </div>
           </div>
         </div>
-      ) : <div className="empty">{message}</div>}
-      <div className="player-meta">
-        <span>{formatDuration(clip.durationSeconds)}</span>
-        <span>{clip.resolution}</span>
-        <span>{clip.fps} FPS</span>
-        <span>{displayAudioTracks(clip.audioTracks) || "No audio tracks"}</span>
-        <span>{message}</span>
+        ) : <div className="empty">{message}</div>}
+        {!embeddedInLibrary && (
+          <div className="player-meta">
+            <span>{formatDuration(clip.durationSeconds)}</span>
+            <span>{clip.resolution}</span>
+            <span>{clip.fps} FPS</span>
+            <span>{displayAudioTracks(clip.audioTracks) || "No audio tracks"}</span>
+            <span>{message}</span>
+          </div>
+        )}
       </div>
+      {embeddedInLibrary && railClips && onSelectClip && (
+        <LibraryPlayerSidebar
+          clip={clip}
+          railClips={railClips}
+          settings={settings}
+          onSelectClip={onSelectClip}
+          onClose={onClose}
+        />
+      )}
     </section>
   );
 }

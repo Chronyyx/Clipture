@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.3.1] - 2026-08-11
+
+### Hotkeys And Reliability
+
+- Replace Electron's OS-registered save shortcut with a native Windows Raw Input listener that remains available in background and fullscreen applications without claiming the key combination globally.
+- Keep the existing configurable keybind workflow, automatically re-arm it after native engine restarts, suppress repeat-triggered saves, and include listener status and trigger history in exported diagnostics.
+
+### Playback And Library
+
+- Add an editorial Glitten library view that plays clips in place and keeps a scrollable related-clips rail beside the video.
+- Add Spacebar play and pause controls and automatically resume playback after seeking into a range-buffered section that still needs to load.
+- Keep the embedded player at a stable 16:9 ratio while resizing, prevent native video dimensions from widening the layout, and make the related-clips rail scroll without stretching or letterboxing the video.
+
+### Audio Reliability
+
+- Convert microphone input from its declared PCM container, valid-bit depth, and floating-point format directly into processing samples before gating or RNNoise isolation.
+- Ignore unused low container bits so padded high-resolution microphone formats do not introduce hiss or static into saved clips.
+
 ## [1.3.0] - 2026-08-09
 
 ### New Features

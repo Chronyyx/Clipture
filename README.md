@@ -20,10 +20,11 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 - Resolution-change segmentation and stream-copy stitching when compatible.
 - HDR-to-SDR tonemapping on supported HDR capture paths.
 - Searchable clip library with folder filters, multi-select deletion, renaming, and non-copying imported video directories.
-- Range-buffered playback with rolling mixed-audio chunks, fullscreen controls, and accelerated keyboard seeking.
+- Range-buffered playback with rolling mixed-audio chunks, Spacebar controls, automatic resume after unloaded seeks, fullscreen controls, and accelerated keyboard seeking.
 - Viewport-aware 480x270 thumbnails with bounded extraction concurrency and compressed RAM caching.
 - Persistent separate-app audio capture that follows supported multi-process application trees and reconnects after restarts.
-- Global save hotkey, tray operation, startup-on-login, notifications, customizable UI themes (Graphite, Light, Glitten, Milate, Custom), and capture-aware background updates.
+- Format-aware microphone processing that respects PCM container width and valid-bit depth to avoid padding noise and static.
+- Native Windows Raw Input save hotkey for background and fullscreen games, plus tray operation, startup-on-login, notifications, customizable UI themes (Graphite, Light, Glitten, Milate, Custom), and capture-aware background updates.
 
 ## Architecture
 
@@ -57,6 +58,8 @@ The normal save path does not re-encode video, rescan the full H.264 stream, or 
 Startup follows a configure-before-arm sequence. Core capture starts first; optional app loopback workers and game detection begin after a short delay so opening Clipture does not launch every expensive subsystem at once.
 
 The library reads saved clips and imported directories in place. Imported files are not duplicated, and renaming or deleting an imported card changes the original file. Thumbnail previews are generated in RAM and never stored beside the source video.
+
+The Glitten library uses an editorial in-place 16:9 player with a scrollable related-clips rail. The rail stays within the video-defined height while resizing, so library content cannot stretch or letterbox the player.
 
 ## Storage and Memory Use
 
@@ -149,6 +152,7 @@ Installed startup with `--hidden` opens Clipture in the tray while the native ca
 
 - Click a thumbnail to open a clip.
 - Click the video to play or pause and double-click it to toggle fullscreen.
+- Press Space to play or pause. Playback resumes automatically after an unloaded seek range becomes available.
 - Press Left or Right to seek five seconds. Hold either key for more than 300 ms to accelerate seeking.
 - Imported Videos reads videos directly from selected folders. It does not copy them into Clipture storage.
 - Rename and delete actions affect the underlying file for both saved and imported clips.

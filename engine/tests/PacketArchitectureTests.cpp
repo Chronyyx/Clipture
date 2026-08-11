@@ -300,6 +300,44 @@ bool testPcmContainerConversion() {
         return false;
     }
 
+    std::array<float, 4> processingFloat {};
+    if (!require(
+            clipture::convertInterleavedPcmToF32(
+                std::as_bytes(std::span(extensible24In32)),
+                2,
+                extensibleLayout,
+                2,
+                processingFloat),
+            "high-resolution microphone PCM should convert directly to processing floats")) {
+        return false;
+    }
+    if (!require(
+            std::abs(processingFloat[0] - 0.5f) < 0.000001f &&
+                std::abs(processingFloat[1] + 0.5f) < 0.000001f &&
+                processingFloat[2] > 0.9999f && processingFloat[3] == -1.0f,
+            "processing-float conversion should preserve valid 24-bit amplitude")) {
+        return false;
+    }
+
+    const std::array<uint16_t, 2> padded12In16 { 0x400F, 0xC00F };
+    std::array<int16_t, 2> paddedConverted {};
+    const clipture::PcmInputLayout paddedLayout { 1, 16, 12, 2, false };
+    if (!require(
+            clipture::convertInterleavedPcmToS16(
+                std::as_bytes(std::span(padded12In16)),
+                2,
+                paddedLayout,
+                1,
+                paddedConverted),
+            "integer PCM with valid bits smaller than its container should convert")) {
+        return false;
+    }
+    if (!require(
+            paddedConverted == std::array<int16_t, 2> { 16384, -16384 },
+            "unused low container bits must not leak into captured audio as noise")) {
+        return false;
+    }
+
     const std::array<uint8_t, 6> packed24 { 0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x80 };
     std::array<int16_t, 2> packedConverted {};
     const clipture::PcmInputLayout packedLayout { 1, 24, 24, 3, false };

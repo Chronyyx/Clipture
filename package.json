@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "private": true,
   "description": "NVENC-first Windows clipping app with Electron UI and native C++ capture engine.",
-  "releaseTitle": "Clipture 1.3.0: Personal Themes and Live Font Activation",
+  "releaseTitle": "Clipture 1.3.1: Fullscreen Hotkeys and Playback Reliability",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

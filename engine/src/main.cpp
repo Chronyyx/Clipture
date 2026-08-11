@@ -3,14 +3,19 @@
 #include <Windows.h>
 #include <mmsystem.h>
 
+#include "clipture/RawInputHotkey.hpp"
+
 #include <algorithm>
 #include <exception>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
+
+std::mutex outputMutex;
 
 int extractId(const std::string& line) {
     const auto marker = line.find("\"id\"");
@@ -106,11 +111,34 @@ std::vector<std::string> splitList(const std::string& value) {
 }
 
 void respond(int id, const std::string& payload) {
+    std::lock_guard lock(outputMutex);
     std::cout << "{\"id\":" << id << ",\"payload\":" << payload << "}" << std::endl;
 }
 
 void respondError(int id, const std::string& error) {
+    std::lock_guard lock(outputMutex);
     std::cout << "{\"id\":" << id << ",\"error\":\"" << error << "\"}" << std::endl;
+}
+
+std::string jsonEscape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char ch : value) {
+        switch (ch) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default: escaped.push_back(ch); break;
+        }
+    }
+    return escaped;
+}
+
+void emitHotkeyEvent() {
+    std::lock_guard lock(outputMutex);
+    std::cout << "{\"event\":\"hotkey\",\"source\":\"raw-input\"}" << std::endl;
 }
 
 class SavePriorityGuard {
@@ -155,6 +183,7 @@ int main() {
         SetProcessDPIAware();
     }
 
+    clipture::RawInputHotkey hotkey(emitHotkeyEvent);
     clipture::Engine engine;
     std::string line;
 
@@ -163,6 +192,16 @@ int main() {
         try {
             if (line.find("\"getDiagnostics\"") != std::string::npos) {
                 respond(id, clipture::toJson(engine.diagnostics()));
+                continue;
+            }
+
+            if (line.find("\"configureHotkey\"") != std::string::npos) {
+                const bool armed = hotkey.configure(extractString(line, "hotkey"));
+                std::ostringstream payload;
+                payload << "{\"ready\":" << (hotkey.ready() ? "true" : "false")
+                        << ",\"armed\":" << (armed ? "true" : "false")
+                        << ",\"status\":\"" << jsonEscape(hotkey.status()) << "\"}";
+                respond(id, payload.str());
                 continue;
             }
 
@@ -228,16 +267,17 @@ int main() {
                         extractBool(line, "analyzeIo", false)
                     });
                 }
-                std::cout << "{\"id\":" << id << ",\"payload\":{"
-                          << "\"ok\":" << (result.ok ? "true" : "false") << ","
-                          << "\"message\":\"" << result.message << "\"";
+                std::ostringstream payload;
+                payload << "{\"ok\":" << (result.ok ? "true" : "false") << ","
+                        << "\"message\":\"" << jsonEscape(result.message) << "\"";
                 if (!result.ioAnalysisJson.empty()) {
-                    std::cout << ",\"saveIoAnalysis\":" << result.ioAnalysisJson;
+                    payload << ",\"saveIoAnalysis\":" << result.ioAnalysisJson;
                 }
                 if (result.ok) {
-                    std::cout << ",\"clip\":" << result.clipJson;
+                    payload << ",\"clip\":" << result.clipJson;
                 }
-                std::cout << "}}" << std::endl;
+                payload << "}";
+                respond(id, payload.str());
                 continue;
             }
 

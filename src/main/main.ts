@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, shell, Tray, Menu, nativeImage, dialog, screen } from "electron";
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, dialog, screen } from "electron";
 import type { OpenDialogOptions } from "electron";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
@@ -306,6 +306,13 @@ class EngineClient {
   private nextId = 1;
   private buffer = "";
   private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private hotkeyHandler: ((source: string) => void) | undefined;
+  private desiredHotkey = "";
+  private nativeHotkeyStatus = {
+    ready: false,
+    armed: false,
+    status: "Native hotkey listener has not started."
+  };
   private lastDiagnostics: EngineDiagnostics = {
     captureApi: "Windows.Graphics.Capture",
     requestedCaptureBackend: "auto",
@@ -431,7 +438,7 @@ class EngineClient {
     status: "Native engine process has not started."
   };
 
-  start(): void {
+  start(restoreHotkey = true): void {
     if (this.child) return;
     const enginePath = resolveEnginePath();
     if (!enginePath) {
@@ -440,11 +447,18 @@ class EngineClient {
     }
 
     engineStderrTimingRemainder = "";
-    this.child = spawn(enginePath, [], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
-    this.child.stdout.on("data", (chunk: Buffer) => this.readStdout(chunk));
-    this.child.stderr.on("data", (chunk: Buffer) => logEngineStderr(chunk));
-    this.child.on("exit", () => {
+    const child = spawn(enginePath, [], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    this.child = child;
+    child.stdout.on("data", (chunk: Buffer) => this.readStdout(chunk));
+    child.stderr.on("data", (chunk: Buffer) => logEngineStderr(chunk));
+    child.on("exit", () => {
+      if (this.child !== child) return;
       this.child = undefined;
+      this.nativeHotkeyStatus = {
+        ready: false,
+        armed: false,
+        status: "Native hotkey listener stopped with the engine."
+      };
       this.lastDiagnostics = { ...this.lastDiagnostics, activeEncoder: "Unavailable", encoderMode: "Unavailable", engineRunning: false, degraded: true, status: "Native engine exited." };
       for (const pending of this.pending.values()) {
         clearTimeout(pending.timer);
@@ -452,6 +466,9 @@ class EngineClient {
       }
       this.pending.clear();
     });
+    if (restoreHotkey) {
+      void this.sendHotkeyConfiguration(this.desiredHotkey);
+    }
   }
 
   stop(): void {
@@ -471,6 +488,39 @@ class EngineClient {
       // The engine might be blocked (e.g. saving a clip), so just return the last known state instead of throwing.
       return this.lastDiagnostics;
     }
+  }
+
+  setHotkeyHandler(handler: (source: string) => void): void {
+    this.hotkeyHandler = handler;
+  }
+
+  hotkeyStatus(): { ready: boolean; armed: boolean; status: string } {
+    return { ...this.nativeHotkeyStatus };
+  }
+
+  async configureHotkey(hotkey: string): Promise<{ ready: boolean; armed: boolean; status: string }> {
+    this.desiredHotkey = hotkey;
+    if (!this.child) this.start(false);
+    if (!this.child) return this.hotkeyStatus();
+    return this.sendHotkeyConfiguration(hotkey);
+  }
+
+  private async sendHotkeyConfiguration(hotkey: string): Promise<{ ready: boolean; armed: boolean; status: string }> {
+    if (!this.child) return this.hotkeyStatus();
+    try {
+      this.nativeHotkeyStatus = await this.request<{ ready: boolean; armed: boolean; status: string }>(
+        "configureHotkey",
+        { hotkey },
+        5000
+      );
+    } catch (error) {
+      this.nativeHotkeyStatus = {
+        ready: false,
+        armed: false,
+        status: error instanceof Error ? error.message : String(error)
+      };
+    }
+    return this.hotkeyStatus();
   }
 
   async listAudioInputDevices(): Promise<AudioInputDevice[]> {
@@ -616,7 +666,17 @@ class EngineClient {
 
   private handleLine(line: string): void {
     try {
-      const message = JSON.parse(line) as { id?: number; payload?: unknown; error?: string };
+      const message = JSON.parse(line) as {
+        id?: number;
+        payload?: unknown;
+        error?: string;
+        event?: string;
+        source?: string;
+      };
+      if (message.event === "hotkey") {
+        this.hotkeyHandler?.(message.source || "native");
+        return;
+      }
       if (typeof message.id !== "number") return;
       const pending = this.pending.get(message.id);
       if (!pending) return;
@@ -635,6 +695,7 @@ let notificationWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let isQuitting = false;
 const engine = new EngineClient();
+engine.setHotkeyHandler(() => triggerSaveClipFromBackground("raw-input"));
 const updateTransfer = new CaptureAwareUpdateTransfer(
   () => latestCapturePressure,
   async () => {
@@ -642,7 +703,10 @@ const updateTransfer = new CaptureAwareUpdateTransfer(
   }
 );
 const autoUpdater = new CaptureAwareNsisUpdater(updateTransfer);
-let currentHotkey = "";
+let currentHotkey: string | undefined;
+let hotkeyTriggerCount = 0;
+let lastHotkeyTriggerAt = 0;
+let lastHotkeyTriggerSource = "none";
 const startHidden = process.argv.includes("--hidden") || process.argv.includes("--background");
 const updateCheckIntervalMs = 30 * 60 * 1000;
 let updateState: UpdateState = { status: "idle" };
@@ -2610,14 +2674,14 @@ function saveSettings(settings: ClipSettings): ClipSettings {
       args: app.isPackaged ? ["--hidden"] : [app.getAppPath(), "--hidden"],
     });
   }
-  const recordingSettings = ({ uiTheme: _uiTheme, customMainColor: _customMainColor, customAccentColor: _customAccentColor, ...value }: ClipSettings) => value;
+  const recordingSettings = ({ uiTheme: _uiTheme, customMainColor: _customMainColor, customAccentColor: _customAccentColor, hotkey: _hotkey, ...value }: ClipSettings) => value;
   if (JSON.stringify(recordingSettings(previous)) !== JSON.stringify(recordingSettings(normalized))) {
     void engine.configure(normalized).catch((error) => {
       console.error("Failed to configure engine:", error);
     });
   }
   if (previous.hotkey !== normalized.hotkey) {
-    const hotkeyStatus = registerHotkey(normalized);
+    const hotkeyStatus = configureHotkey(normalized);
     if (hotkeyStatus) console.log(`[settings] ${hotkeyStatus}`);
   }
   return normalized;
@@ -2630,27 +2694,16 @@ function normalizeAccelerator(hotkey: string): string {
     .replace(/\s+/g, "");
 }
 
-function registerHotkey(settings: ClipSettings): string | null {
+function configureHotkey(settings: ClipSettings): string | null {
   const accelerator = normalizeAccelerator(settings.hotkey);
   if (currentHotkey === accelerator) return null;
-  if (currentHotkey) globalShortcut.unregister(currentHotkey);
-  currentHotkey = "";
-  if (!accelerator) return "Hotkey is unassigned.";
-
-  let registered = false;
-  try {
-    registered = globalShortcut.register(accelerator, () => {
-      triggerSaveClipFromBackground();
-    });
-  } catch {
-    registered = false;
-  }
-
-  if (registered) {
-    currentHotkey = accelerator;
-    return `Hotkey registered: ${settings.hotkey}`;
-  }
-  return `Hotkey failed to register: ${settings.hotkey}`;
+  currentHotkey = accelerator;
+  void engine.configureHotkey(settings.hotkey).then((status) => {
+    console.log(`[hotkey] ${status.status} configured=${JSON.stringify(settings.hotkey)} ready=${status.ready} armed=${status.armed}`);
+  }).catch((error) => {
+    console.error("Failed to configure native hotkey:", error);
+  });
+  return accelerator ? `Native hotkey configuring: ${settings.hotkey}` : "Hotkey is unassigned.";
 }
 
 const importedVideoExtensions = new Set([".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi"]);
@@ -2932,7 +2985,15 @@ async function importVideoFolders(): Promise<boolean> {
   return true;
 }
 
-function triggerSaveClipFromBackground(): void {
+function triggerSaveClipFromBackground(source: "raw-input" | "tray" = "raw-input"): void {
+  const now = Date.now();
+  if (source === "raw-input") {
+    if (now - lastHotkeyTriggerAt < 500) return;
+    lastHotkeyTriggerAt = now;
+    lastHotkeyTriggerSource = source;
+    hotkeyTriggerCount += 1;
+    console.log(`[hotkey] clip requested source=${source} count=${hotkeyTriggerCount}`);
+  }
   void saveClipAndRecord(readSettings().clipLengthSeconds).then((result) => {
     if (!result.ok) console.warn(`[clip] ${result.message}`);
   }).catch((error) => {
@@ -3327,7 +3388,7 @@ function createTray(): void {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Open Clipture", click: showMainWindow },
-      { label: "Save Clip", click: () => triggerSaveClipFromBackground() },
+      { label: "Save Clip", click: () => triggerSaveClipFromBackground("tray") },
       { label: "Open Clips Folder", click: () => shell.openPath(readSettings().saveFolder) },
       { type: "separator" },
       { label: "Exit", click: () => app.quit() }
@@ -3354,7 +3415,7 @@ app.whenReady().then(async () => {
   createTray();
   await createWindow();
   await createNotificationWindow();
-  registerHotkey(startupSettings);
+  configureHotkey(startupSettings);
   setTimeout(() => {
     void engine.configure(startupSettings).catch((error) => {
       console.error("Failed to configure engine at startup:", error);
@@ -3370,7 +3431,6 @@ app.on("before-quit", () => {
   if (updateCheckTimer) clearInterval(updateCheckTimer);
   updateTransfer.stop();
   updateLogStream?.end();
-  globalShortcut.unregisterAll();
   engine.stop();
 });
 
@@ -3413,6 +3473,14 @@ async function exportDiagnostics(): Promise<string | undefined> {
       chrome: process.versions.chrome,
       node: process.versions.node,
       v8: process.versions.v8
+    },
+    hotkey: {
+      configured: readSettings().hotkey,
+      normalized: currentHotkey ?? "",
+      ...engine.hotkeyStatus(),
+      triggerCount: hotkeyTriggerCount,
+      lastTriggerAt: lastHotkeyTriggerAt > 0 ? new Date(lastHotkeyTriggerAt).toISOString() : null,
+      lastTriggerSource: lastHotkeyTriggerSource
     },
     diagnostics,
     saveIoAnalysis: lastSaveIoAnalysis ?? null,
