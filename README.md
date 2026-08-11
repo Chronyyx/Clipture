@@ -23,7 +23,7 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 - Range-buffered playback with rolling mixed-audio chunks, Spacebar controls, automatic resume after unloaded seeks, fullscreen controls, and accelerated keyboard seeking.
 - Viewport-aware 480x270 thumbnails with bounded extraction concurrency and compressed RAM caching.
 - Persistent separate-app audio capture that follows supported multi-process application trees and reconnects after restarts.
-- Format-aware microphone processing that respects PCM container width and valid-bit depth to avoid padding noise and static.
+- Format-aware microphone processing that respects PCM container width and valid-bit depth while feeding RNNoise its expected S16-scaled samples.
 - Native Windows Raw Input save hotkey for background and fullscreen games, plus tray operation, startup-on-login, notifications, customizable UI themes (Graphite, Light, Glitten, Milate, Custom), and capture-aware background updates.
 
 ## Architecture
@@ -59,7 +59,7 @@ Startup follows a configure-before-arm sequence. Core capture starts first; opti
 
 The library reads saved clips and imported directories in place. Imported files are not duplicated, and renaming or deleting an imported card changes the original file. Thumbnail previews are generated in RAM and never stored beside the source video.
 
-The Glitten library uses an editorial in-place 16:9 player with a scrollable related-clips rail. The rail stays within the video-defined height while resizing, so library content cannot stretch or letterbox the player.
+The Glitten library uses an editorial in-place 16:9 player with a scrollable related-clips rail. Selection remains in that rail, and the rail stays within the video-defined height while resizing so library content cannot stretch or letterbox the player.
 
 ## Storage and Memory Use
 

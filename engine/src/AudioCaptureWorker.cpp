@@ -465,30 +465,6 @@ void convertToS16(const BYTE* data, UINT32 frames, DWORD flags, const WAVEFORMAT
     }
 }
 
-void convertToProcessingFloat(
-    const BYTE* data,
-    UINT32 frames,
-    DWORD flags,
-    const WAVEFORMATEX* format,
-    int& outChannels,
-    std::vector<float>& output) {
-    PcmInputLayout layout;
-    const bool supported = makePcmInputLayout(format, outChannels, layout);
-    const std::size_t outputSamples = static_cast<std::size_t>(frames) * outChannels;
-    output.resize(outputSamples);
-    if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) || !data || !supported) {
-        std::fill(output.begin(), output.end(), 0.0f);
-        return;
-    }
-
-    const auto input = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(data),
-        static_cast<std::size_t>(frames) * layout.blockAlign);
-    if (!convertInterleavedPcmToF32(input, frames, layout, outChannels, output)) {
-        std::fill(output.begin(), output.end(), 0.0f);
-    }
-}
-
 int16_t processingSampleToS16(float value) {
     if (!std::isfinite(value)) return 0;
     return static_cast<int16_t>(std::clamp<long>(
@@ -910,7 +886,7 @@ void AudioCaptureWorker::runMicrophoneCapture() {
         const int rnnoiseFrameSize = rnnoise_get_frame_size();
         const bool rnnoiseSampleRateSupported = mixFormat->nSamplesPerSec == 48000;
         RnnoiseFrameQueue rnnoiseQueue(rnnoiseFrameSize);
-        std::vector<float> micInputScratch;
+        PacketPayload micInputScratch;
         std::vector<float> rnnoiseFrameIn(static_cast<std::size_t>(rnnoiseFrameSize));
         std::vector<float> rnnoiseFrameOut(static_cast<std::size_t>(rnnoiseFrameSize));
         auto lastRnnoiseQueueLog = std::chrono::steady_clock::now() - std::chrono::seconds(10);
@@ -966,13 +942,17 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                     nextPts100ns);
 
                 int outputChannels = 0;
-                convertToProcessingFloat(
+                // RNNoise is trained around S16-scale input. Quantize through the
+                // replay format first so high-resolution endpoint noise is not
+                // amplified into denoiser artifacts when speech opens the gate.
+                convertToS16(
                     data,
                     frames,
                     flags,
                     mixFormat,
                     outputChannels,
                     micInputScratch);
+                const auto* micInputSamples = reinterpret_cast<const int16_t*>(micInputScratch.data());
 
                 const float vol = micVolume_.load();
                 const bool isolation = micIsolation_.load();
@@ -984,10 +964,10 @@ void AudioCaptureWorker::runMicrophoneCapture() {
                 for (UINT32 i = 0; i < frames; ++i) {
                     float mono = 0.0f;
                     for (int ch = 0; ch < outputChannels; ++ch) {
-                        mono += micInputScratch[i * outputChannels + ch];
+                        mono += micInputSamples[i * outputChannels + ch];
                     }
                     mono /= outputChannels;
-                    rnnoiseQueue.push(std::clamp(mono * 32768.0f, -32768.0f, 32767.0f));
+                    rnnoiseQueue.push(std::clamp(mono, -32768.0f, 32767.0f));
                 }
 
                 while (rnnoiseQueue.popFrame(rnnoiseFrameIn)) {
@@ -1182,7 +1162,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
     const int rnnoiseFrameSize = rnnoise_get_frame_size(); // 480
     const bool rnnoiseSampleRateSupported = mixFormat->nSamplesPerSec == 48000;
     RnnoiseFrameQueue rnnoiseQueue(rnnoiseFrameSize);
-    std::vector<float> micInputScratch;
+    PacketPayload micInputScratch;
     std::vector<float> rnnoiseFrameIn(static_cast<std::size_t>(rnnoiseFrameSize));
     std::vector<float> rnnoiseFrameOut(static_cast<std::size_t>(rnnoiseFrameSize));
     auto lastRnnoiseQueueLog = std::chrono::steady_clock::now() - std::chrono::seconds(10);
@@ -1223,13 +1203,14 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
             PacketPayloadPtr pcm;
 
             if (sourceId == "microphone-pcm") {
-                convertToProcessingFloat(
+                convertToS16(
                     data,
                     frames,
                     flags,
                     mixFormat,
                     outputChannels,
                     micInputScratch);
+                const auto* micInputSamples = reinterpret_cast<const int16_t*>(micInputScratch.data());
                 const float vol = micVolume_.load();
                 const bool isolation = micIsolation_.load();
                 const float weight = micIsolationWeight_.load();
@@ -1241,10 +1222,10 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                 for (UINT32 i = 0; i < frames; ++i) {
                     float mono = 0.0f;
                     for (int ch = 0; ch < outputChannels; ++ch) {
-                        mono += micInputScratch[i * outputChannels + ch];
+                        mono += micInputSamples[i * outputChannels + ch];
                     }
                     mono /= outputChannels;
-                    rnnoiseQueue.push(std::clamp(mono * 32768.0f, -32768.0f, 32767.0f));
+                    rnnoiseQueue.push(std::clamp(mono, -32768.0f, 32767.0f));
                 }
                 
                 while (rnnoiseQueue.popFrame(rnnoiseFrameIn)) {

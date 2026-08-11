@@ -913,7 +913,7 @@ function LibraryView({
                   className="secondary-button select-clips-button"
                   type="button"
                   onClick={() => {
-                    setSelectedClip(undefined);
+                    if (!isEditorialLibrary) setSelectedClip(undefined);
                     setSelectionMode(true);
                   }}
                 >
@@ -933,7 +933,7 @@ function LibraryView({
             actionLabel={libraryTab === "clips" ? "Save your first clip" : "Import videos"}
             onAction={libraryTab === "clips" ? onSaveClip : handleImportVideos}
           />
-        ) : isEditorialLibrary && !selectionMode && editorialPreviewClip ? (
+        ) : isEditorialLibrary && editorialPreviewClip ? (
           selectedClip ? (
             <ClipPlayer
               clip={selectedClip}
@@ -942,7 +942,10 @@ function LibraryView({
                 setSelectedClip(undefined);
               }}
               onSelectClip={playEditorialClip}
+              onToggleSelected={toggleClipSelection}
               railClips={filteredClips}
+              selectedClipIds={selectedClipIds}
+              selectionMode={selectionMode}
               settings={settings}
             />
           ) : (
@@ -952,6 +955,9 @@ function LibraryView({
               settings={settings}
               onPlay={() => playEditorialClip(editorialPreviewClip)}
               onSelectClip={previewEditorialClip}
+              onToggleSelected={toggleClipSelection}
+              selectedClipIds={selectedClipIds}
+              selectionMode={selectionMode}
             />
           )
         ) : selectedClip ? (
@@ -1246,11 +1252,17 @@ function ClipCard({
 function ClipRailItem({
   clip,
   active,
-  onSelect
+  onSelect,
+  onToggleSelected,
+  selected,
+  selectionMode
 }: {
   clip: ClipRecord;
   active: boolean;
   onSelect: () => void;
+  onToggleSelected?: () => void;
+  selected: boolean;
+  selectionMode: boolean;
 }) {
   const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [itemRef, loadMedia] = useNearViewport<HTMLButtonElement>(20);
@@ -1280,12 +1292,23 @@ function ClipRailItem({
   return (
     <button
       ref={itemRef}
-      className={active ? "clip-rail-item active" : "clip-rail-item"}
+      className={[
+        "clip-rail-item",
+        active ? "active" : "",
+        selected ? "selected" : "",
+        selectionMode ? "selectable" : ""
+      ].filter(Boolean).join(" ")}
       type="button"
       aria-current={active ? "true" : undefined}
-      onClick={onSelect}
+      aria-pressed={selectionMode ? selected : undefined}
+      onClick={selectionMode ? onToggleSelected : onSelect}
     >
       <span className="clip-rail-thumbnail">
+        {selectionMode && (
+          <span className={selected ? "clip-select-box checked" : "clip-select-box"} aria-hidden="true">
+            {selected && <Check size={18} />}
+          </span>
+        )}
         {thumbnailUrl
           ? <img src={thumbnailUrl} alt="" loading="lazy" decoding="async" />
           : <span className="thumbnail-skeleton" aria-hidden="true" />}
@@ -1306,13 +1329,19 @@ function LibraryPlayerSidebar({
   railClips,
   settings,
   onSelectClip,
-  onClose
+  onClose,
+  onToggleSelected,
+  selectedClipIds,
+  selectionMode = false
 }: {
   clip: ClipRecord;
   railClips: ClipRecord[];
   settings?: ClipSettings;
   onSelectClip: (clip: ClipRecord) => void;
   onClose?: () => void;
+  onToggleSelected?: (clipId: string) => void;
+  selectedClipIds?: ReadonlySet<string>;
+  selectionMode?: boolean;
 }) {
   const createdAt = parseClipDate(clip.createdAt);
   const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
@@ -1342,16 +1371,19 @@ function LibraryPlayerSidebar({
         </div>
       </div>
       <div className="clip-rail-heading">
-        <strong>More clips</strong>
-        <span>{railClips.length}</span>
+        <strong>{selectionMode ? "Select clips" : "More clips"}</strong>
+        <span>{selectionMode ? `${selectedClipIds?.size ?? 0} selected` : railClips.length}</span>
       </div>
-      <div className="clip-rail" aria-label="More clips">
+      <div className="clip-rail" aria-label={selectionMode ? "Select clips" : "More clips"}>
         {railClips.map((candidate) => (
           <ClipRailItem
             active={candidate.id === clip.id}
             clip={candidate}
             key={candidate.id}
             onSelect={() => onSelectClip(candidate)}
+            onToggleSelected={() => onToggleSelected?.(candidate.id)}
+            selected={selectedClipIds?.has(candidate.id) ?? false}
+            selectionMode={selectionMode}
           />
         ))}
       </div>
@@ -1364,13 +1396,19 @@ function LibraryClipPreview({
   railClips,
   settings,
   onPlay,
-  onSelectClip
+  onSelectClip,
+  onToggleSelected,
+  selectedClipIds,
+  selectionMode
 }: {
   clip: ClipRecord;
   railClips: ClipRecord[];
   settings?: ClipSettings;
   onPlay: () => void;
   onSelectClip: (clip: ClipRecord) => void;
+  onToggleSelected: (clipId: string) => void;
+  selectedClipIds: ReadonlySet<string>;
+  selectionMode: boolean;
 }) {
   const [thumbnailUrl, setThumbnailUrl] = useState("");
 
@@ -1401,6 +1439,9 @@ function LibraryClipPreview({
         railClips={railClips}
         settings={settings}
         onSelectClip={onSelectClip}
+        onToggleSelected={onToggleSelected}
+        selectedClipIds={selectedClipIds}
+        selectionMode={selectionMode}
       />
     </section>
   );
@@ -1501,13 +1542,19 @@ function ClipPlayer({
   onClose,
   settings,
   railClips,
-  onSelectClip
+  onSelectClip,
+  onToggleSelected,
+  selectedClipIds,
+  selectionMode = false
 }: {
   clip: ClipRecord;
   onClose: () => void;
   settings?: ClipSettings;
   railClips?: ClipRecord[];
   onSelectClip?: (clip: ClipRecord) => void;
+  onToggleSelected?: (clipId: string) => void;
+  selectedClipIds?: ReadonlySet<string>;
+  selectionMode?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fastHoldActivatedRef = useRef(false);
@@ -2319,6 +2366,9 @@ function ClipPlayer({
           settings={settings}
           onSelectClip={onSelectClip}
           onClose={onClose}
+          onToggleSelected={onToggleSelected}
+          selectedClipIds={selectedClipIds}
+          selectionMode={selectionMode}
         />
       )}
     </section>

@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.2] - 2026-08-11
+
+### Audio Reliability
+
+- Preserve format-aware microphone decoding while restoring the S16-scaled input expected by RNNoise, preventing speech-triggered hiss and isolation artifacts from high-resolution endpoint noise.
+- Apply the stabilized microphone path consistently in both dedicated and compatibility capture workers.
+
+### Library And Theme Fixes
+
+- Keep Glitten in its editorial player-and-rail layout while selecting clips instead of switching back to the standard grid.
+- Add selection controls directly to the Glitten clip rail, including Select all support, without treating the active video player as another selected item.
+- Keep update scanning and preparation indicators visible against light themes by using theme-aware accent colors.
+
 ## [1.3.1] - 2026-08-11
 
 ### Hotkeys And Reliability
