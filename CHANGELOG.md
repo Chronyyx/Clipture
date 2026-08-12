@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.3] - 2026-08-11
+
+### Library Bugfix
+
+- Restore the clip grid beneath the active video player in Graphite and other standard themes while keeping Glitten's editorial rail-only layout.
+- Highlight the currently playing clip in the restored grid.
+
 ## [1.3.2] - 2026-08-11
 
 ### Audio Reliability

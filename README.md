@@ -59,7 +59,7 @@ Startup follows a configure-before-arm sequence. Core capture starts first; opti
 
 The library reads saved clips and imported directories in place. Imported files are not duplicated, and renaming or deleting an imported card changes the original file. Thumbnail previews are generated in RAM and never stored beside the source video.
 
-The Glitten library uses an editorial in-place 16:9 player with a scrollable related-clips rail. Selection remains in that rail, and the rail stays within the video-defined height while resizing so library content cannot stretch or letterbox the player.
+The Glitten library uses an editorial in-place 16:9 player with a scrollable related-clips rail. Selection remains in that rail, and the rail stays within the video-defined height while resizing so library content cannot stretch or letterbox the player. Standard themes retain their clip grid beneath the active player.
 
 ## Storage and Memory Use
 

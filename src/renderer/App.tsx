@@ -960,30 +960,33 @@ function LibraryView({
               selectionMode={selectionMode}
             />
           )
-        ) : selectedClip ? (
-          <ClipPlayer
-            clip={selectedClip}
-            onClose={() => setSelectedClip(undefined)}
-            settings={settings}
-          />
         ) : (
-          <div className="clip-grid">
-            {filteredClips.map((clip) => (
-              <ClipCard
-                clip={clip}
-                isActive={false}
-                isSelected={selectedClipIds.has(clip.id)}
-                key={clip.id}
-                onPlay={() => {
-                  setEditorialPreviewId(clip.id);
-                  setSelectedClip(clip);
-                }}
-                onToggleSelected={() => toggleClipSelection(clip.id)}
-                selectionMode={selectionMode}
+          <>
+            {selectedClip && (
+              <ClipPlayer
+                clip={selectedClip}
+                onClose={() => setSelectedClip(undefined)}
                 settings={settings}
               />
-            ))}
-          </div>
+            )}
+            <div className="clip-grid">
+              {filteredClips.map((clip) => (
+                <ClipCard
+                  clip={clip}
+                  isActive={selectedClip?.id === clip.id}
+                  isSelected={selectedClipIds.has(clip.id)}
+                  key={clip.id}
+                  onPlay={() => {
+                    setEditorialPreviewId(clip.id);
+                    setSelectedClip(clip);
+                  }}
+                  onToggleSelected={() => toggleClipSelection(clip.id)}
+                  selectionMode={selectionMode}
+                  settings={settings}
+                />
+              ))}
+            </div>
+          </>
         )}
       </section>
     </div>
