@@ -259,17 +259,32 @@ HRESULT createD3dDeviceForOutput(
     Microsoft::WRL::ComPtr<ID3D11DeviceContext>& context) {
     D3D_FEATURE_LEVEL featureLevels[] { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
     D3D_FEATURE_LEVEL selectedLevel {};
-    const HRESULT hr = D3D11CreateDevice(
+    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+    HRESULT hr = D3D11CreateDevice(
         adapter,
         D3D_DRIVER_TYPE_UNKNOWN,
         nullptr,
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        flags,
         featureLevels,
         ARRAYSIZE(featureLevels),
         D3D11_SDK_VERSION,
         &device,
         &selectedLevel,
         &context);
+    if (FAILED(hr)) {
+        flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        hr = D3D11CreateDevice(
+            adapter,
+            D3D_DRIVER_TYPE_UNKNOWN,
+            nullptr,
+            flags,
+            featureLevels,
+            ARRAYSIZE(featureLevels),
+            D3D11_SDK_VERSION,
+            &device,
+            &selectedLevel,
+            &context);
+    }
     if (FAILED(hr)) return hr;
 
     Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
@@ -277,7 +292,7 @@ HRESULT createD3dDeviceForOutput(
 
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
     if (SUCCEEDED(device.As(&dxgiDevice)) && dxgiDevice) {
-        constexpr INT requestedGpuPriority = 1;
+        constexpr INT requestedGpuPriority = 7;
         INT previousGpuPriority = 0;
         const HRESULT getBeforeHr = dxgiDevice->GetGPUThreadPriority(&previousGpuPriority);
         const HRESULT setHr = dxgiDevice->SetGPUThreadPriority(requestedGpuPriority);
@@ -295,17 +310,24 @@ HRESULT createD3dDeviceForOutput(
 
 void CaptureSharedState::resetForStart(
     FrameQueue* queue,
+    CaptureTickGate* tickGate,
     const SelectedOutput& output,
     CaptureBackendPreference preference) {
     frameQueue.store(queue, std::memory_order_release);
+    captureTickGate.store(tickGate, std::memory_order_release);
+    if (tickGate) tickGate->reset();
     if (queue) queue->clear();
     lastFramePts100ns.store(0);
     lastFrameInterval100ns.store(0);
     maximumFrameInterval100ns.store(0);
+    lastPublishedPts100ns.store(0);
     lastPublishedSteady100ns.store(0);
     hdrTonemappingActive.store(false);
     running.store(false);
     acquireWaitLatency.clear();
+    sourceUpdateInterval.clear();
+    publishedPtsInterval.clear();
+    publishedWallInterval.clear();
     framePreparationLatency.clear();
     cursorCompositeLatency.clear();
     frameProcessingLatency.clear();
@@ -332,8 +354,12 @@ void CaptureSharedState::beginEpoch(bool clearQueue) {
     }
     lastFramePts100ns.store(0, std::memory_order_relaxed);
     lastFrameInterval100ns.store(0, std::memory_order_relaxed);
+    lastPublishedPts100ns.store(0, std::memory_order_relaxed);
     lastPublishedSteady100ns.store(0, std::memory_order_relaxed);
     acquireWaitLatency.clear();
+    sourceUpdateInterval.clear();
+    publishedPtsInterval.clear();
+    publishedWallInterval.clear();
     framePreparationLatency.clear();
     cursorCompositeLatency.clear();
     frameProcessingLatency.clear();
@@ -367,6 +393,12 @@ void CaptureSharedState::setSelectedOutput(const SelectedOutput& output) {
     activeMonitor.store(output.desc.Monitor, std::memory_order_release);
 }
 
+void CaptureSharedState::setCaptureTarget(std::string kind, std::string name) {
+    std::lock_guard lock(stateMutex);
+    targetKind = std::move(kind);
+    targetName = std::move(name);
+}
+
 void CaptureSharedState::setActiveBackend(CaptureBackendKind kind) {
     std::lock_guard lock(stateMutex);
     activeBackend = std::string(captureBackendKindName(kind));
@@ -377,20 +409,31 @@ void CaptureSharedState::setActiveBackend(CaptureBackendKind kind) {
 
 bool CaptureSharedState::selectFrameTimestamp(
     int64_t sourceTimestamp100ns,
-    int64_t& outputTimestamp100ns) {
+    int64_t& outputTimestamp100ns,
+    bool applyFixedRateSampler) {
     const int64_t previousTimestamp100ns = lastFramePts100ns.load(std::memory_order_relaxed);
     if (!captureTimestampIsStrictlyNew(previousTimestamp100ns, sourceTimestamp100ns)) {
-        ++nonMonotonicTimestamps;
-        return false;
+        if (!applyFixedRateSampler) {
+            sourceTimestamp100ns = std::max(previousTimestamp100ns + 1, monotonicNow100ns());
+        } else {
+            ++nonMonotonicTimestamps;
+            return false;
+        }
     }
     lastFramePts100ns.store(sourceTimestamp100ns, std::memory_order_relaxed);
     if (previousTimestamp100ns > 0) {
         const int64_t interval100ns = sourceTimestamp100ns - previousTimestamp100ns;
         lastFrameInterval100ns.store(interval100ns, std::memory_order_relaxed);
+        sourceUpdateInterval.record(monotonicNow100ns(), interval100ns);
         int64_t previousMaximum = maximumFrameInterval100ns.load(std::memory_order_relaxed);
         while (interval100ns > previousMaximum &&
                !maximumFrameInterval100ns.compare_exchange_weak(previousMaximum, interval100ns)) {
         }
+    }
+
+    if (!applyFixedRateSampler) {
+        outputTimestamp100ns = sourceTimestamp100ns;
+        return true;
     }
 
     std::lock_guard samplerLock(samplerMutex);
@@ -408,13 +451,30 @@ void CaptureSharedState::publish(
     std::shared_ptr<void> textureLease,
     int64_t timestamp100ns,
     int width,
-    int height) {
+    int height,
+    bool sourceHadDesktopPresent,
+    bool sourceHadPointerUpdate) {
     auto* queue = frameQueue.load(std::memory_order_acquire);
     if (!queue || !texture || !textureLease) return;
     const int64_t publishedAtSteady100ns = monotonicNow100ns();
+    const int64_t previousPublishedPts100ns = lastPublishedPts100ns.exchange(
+        timestamp100ns,
+        std::memory_order_relaxed);
+    if (previousPublishedPts100ns > 0 && timestamp100ns > previousPublishedPts100ns) {
+        publishedPtsInterval.record(
+            publishedAtSteady100ns,
+            timestamp100ns - previousPublishedPts100ns);
+    }
+    const int64_t previousPublishedSteady100ns = lastPublishedSteady100ns.exchange(
+        publishedAtSteady100ns,
+        std::memory_order_acq_rel);
+    if (previousPublishedSteady100ns > 0) {
+        publishedWallInterval.record(
+            publishedAtSteady100ns,
+            publishedAtSteady100ns - previousPublishedSteady100ns);
+    }
     ++capturedFrames;
     ++publishedFrames;
-    lastPublishedSteady100ns.store(publishedAtSteady100ns, std::memory_order_release);
     queue->push(CapturedFrame {
         std::move(texture),
         std::move(textureLease),
@@ -424,6 +484,8 @@ void CaptureSharedState::publish(
         publishedAtSteady100ns,
         captureEpoch.load(std::memory_order_relaxed),
         ++frameSequence,
+        sourceHadDesktopPresent,
+        sourceHadPointerUpdate,
     });
 }
 
@@ -438,10 +500,25 @@ CaptureRuntimeStats CaptureSharedState::snapshot() const {
     result.samplerRejections = samplerRejections.load(std::memory_order_relaxed);
     result.nonMonotonicTimestamps = nonMonotonicTimestamps.load(std::memory_order_relaxed);
     result.acquireTimeouts = acquireTimeouts.load(std::memory_order_relaxed);
+    result.acquireImmediateMisses = acquireImmediateMisses.load(std::memory_order_relaxed);
+    result.acquireGraceHits = acquireGraceHits.load(std::memory_order_relaxed);
+    result.acquireGraceTimeouts = acquireGraceTimeouts.load(std::memory_order_relaxed);
     result.accessLosses = accessLosses.load(std::memory_order_relaxed);
     result.recreationAttempts = recreationAttempts.load(std::memory_order_relaxed);
     result.recreationSuccesses = recreationSuccesses.load(std::memory_order_relaxed);
     result.fallbackCount = fallbackCount.load(std::memory_order_relaxed);
+    if (auto* tickGate = captureTickGate.load(std::memory_order_acquire)) {
+        const auto tickStats = tickGate->stats();
+        result.clockMode = tickStats.active
+            ? (kEnableEncoderDrivenDxgiPrearm ? "encoder-prearmed-dxgi" : "encoder-driven-dxgi")
+            : "capture-sampled";
+        result.clockTickRequests = tickStats.requests;
+        result.clockTickWakeups = tickStats.wakeups;
+        result.clockTickCoalesced = tickStats.coalescedRequests;
+        result.clockTickCompletions = tickStats.completions;
+        result.clockTickCompletionWaits = tickStats.completionWaits;
+        result.clockTickCompletionTimeouts = tickStats.completionWaitTimeouts;
+    }
 
     int64_t startedAt100ns = 0;
     uint64_t presentBaseline = 0;
@@ -451,6 +528,8 @@ CaptureRuntimeStats CaptureSharedState::snapshot() const {
         result.requestedBackend = requestedBackend;
         result.activeBackend = activeBackend;
         result.fallbackReason = fallbackReason;
+        result.targetKind = targetKind;
+        result.targetName = targetName;
         result.refreshNumerator = refreshNumerator;
         result.refreshDenominator = refreshDenominator;
         result.refreshHz = refreshDenominator > 0
@@ -469,6 +548,9 @@ CaptureRuntimeStats CaptureSharedState::snapshot() const {
             static_cast<double>(elapsed100ns);
     }
     result.acquireWaitLatency = acquireWaitLatency.snapshot(now100ns);
+    result.sourceUpdateInterval = sourceUpdateInterval.snapshot(now100ns);
+    result.publishedPtsInterval = publishedPtsInterval.snapshot(now100ns);
+    result.publishedWallInterval = publishedWallInterval.snapshot(now100ns);
     result.framePreparationLatency = framePreparationLatency.snapshot(now100ns);
     result.cursorCompositeLatency = cursorCompositeLatency.snapshot(now100ns);
     result.frameProcessingLatency = frameProcessingLatency.snapshot(now100ns);
@@ -517,7 +599,7 @@ CaptureTexture CaptureTexturePool::acquire(
         desc_.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
         if (needsUnorderedAccess) desc_.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 
-        constexpr std::size_t slotCount = 12;
+        constexpr std::size_t slotCount = 16;
         slots_.reserve(slotCount);
         for (std::size_t index = 0; index < slotCount; ++index) {
             auto slot = std::make_shared<Slot>();

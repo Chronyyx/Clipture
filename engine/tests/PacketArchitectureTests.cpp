@@ -4,9 +4,11 @@
 #include "clipture/AudioProcessSpec.hpp"
 #include "clipture/AudioReplayCoordinator.hpp"
 #include "clipture/CaptureBackendPolicy.hpp"
+#include "clipture/CaptureTickGate.hpp"
 #include "clipture/DesktopDuplicationHelpers.hpp"
 #include "clipture/DesktopPointerShape.hpp"
 #include "clipture/CfrFrameScheduler.hpp"
+#include "clipture/EncoderPipelinePolicy.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
 #include "clipture/LatencyWindow.hpp"
 #include "clipture/FixedRateFrameSampler.hpp"
@@ -14,9 +16,11 @@
 #include "clipture/MediaClock.hpp"
 #include "clipture/Mp4Muxer.hpp"
 #include "clipture/PcmSampleConverter.hpp"
+#include "clipture/PrecisionTimer.hpp"
 #include "clipture/ProcessSnapshot.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/VideoTimeline.hpp"
+#include "clipture/VideoCadenceAnalysis.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -49,6 +53,142 @@ bool require(bool condition, const char* message) {
     if (condition) return true;
     std::cerr << "FAILED: " << message << '\n';
     return false;
+}
+
+bool testVideoCadenceAnalysis() {
+    constexpr int64_t frame100ns = 10'000'000LL / 60;
+    std::vector<clipture::EncodedPacket> steady;
+    steady.reserve(120);
+    for (uint64_t index = 0; index < 120; ++index) {
+        clipture::EncodedPacket packet;
+        packet.kind = clipture::PacketKind::Video;
+        packet.pts100ns = static_cast<int64_t>(index * 10'000'000ULL / 60ULL);
+        packet.duration100ns = static_cast<int64_t>((index + 1) * 10'000'000ULL / 60ULL) -
+            packet.pts100ns;
+        packet.sourceFrameSequence = index + 1;
+        packet.sourceHadDesktopPresent = true;
+        steady.push_back(std::move(packet));
+    }
+    const auto steadyAnalysis = clipture::analyzeVideoCadence(steady, 60);
+    if (!require(
+            steadyAnalysis.available && steadyAnalysis.sampleCount == 120 &&
+                steadyAnalysis.distinctSourceFrames == 120 &&
+                steadyAnalysis.repeatedSourceFrames == 0 &&
+                steadyAnalysis.buckets.size() == 2,
+            "steady 60 FPS cadence should retain 120 distinct source frames")) {
+        return false;
+    }
+    if (!require(
+            steadyAnalysis.worstSecondDistinctSourceFps > 59.9 &&
+                steadyAnalysis.underTargetSeconds == 0,
+            "steady cadence should report every second at target freshness")) {
+        return false;
+    }
+
+    auto padded = steady;
+    for (std::size_t index = 0; index < padded.size(); ++index) {
+        padded[index].sourceFrameSequence = static_cast<uint64_t>(index / 2 + 1);
+    }
+    const auto paddedAnalysis = clipture::analyzeVideoCadence(padded, 60);
+    if (!require(
+            paddedAnalysis.sampleCount == 120 &&
+                paddedAnalysis.distinctSourceFrames == 60 &&
+                paddedAnalysis.repeatedSourceFrames == 60 &&
+                paddedAnalysis.desktopPresentSourceFrames == 60 &&
+                paddedAnalysis.pointerOnlySourceFrames == 0 &&
+                paddedAnalysis.longestHeldRunSamples == 2 &&
+                paddedAnalysis.distinctSourceFps > 29.9 &&
+                paddedAnalysis.distinctSourceFps < 30.1,
+            "CFR padding must not masquerade as 60 distinct source FPS")) {
+        return false;
+    }
+
+    auto mixedProvenance = steady;
+    for (std::size_t index = 0; index < mixedProvenance.size(); ++index) {
+        const bool pointerOnly = index % 3 == 0;
+        mixedProvenance[index].sourceHadDesktopPresent = !pointerOnly;
+        mixedProvenance[index].sourceHadPointerUpdate = pointerOnly;
+    }
+    const auto provenanceAnalysis = clipture::analyzeVideoCadence(mixedProvenance, 60);
+    if (!require(
+            provenanceAnalysis.desktopPresentSourceFrames == 80 &&
+                provenanceAnalysis.pointerOnlySourceFrames == 40 &&
+                provenanceAnalysis.unknownUpdateKindSourceFrames == 0 &&
+                provenanceAnalysis.desktopPresentSourceFps > 39.9 &&
+                provenanceAnalysis.desktopPresentSourceFps < 40.1,
+            "desktop presents and pointer-only updates must remain distinguishable after encoding")) {
+        return false;
+    }
+
+    std::vector<clipture::EncodedPacket> damaged;
+    for (const auto [pts100ns, sourceSequence] : std::array<std::pair<int64_t, uint64_t>, 4> {{
+             { 0, 1 },
+             { frame100ns, 0 },
+             { frame100ns * 4, 2 },
+             { frame100ns * 5, 2 },
+         }}) {
+        clipture::EncodedPacket packet;
+        packet.kind = clipture::PacketKind::Video;
+        packet.pts100ns = pts100ns;
+        packet.duration100ns = frame100ns;
+        packet.sourceFrameSequence = sourceSequence;
+        damaged.push_back(std::move(packet));
+    }
+    const auto damagedAnalysis = clipture::analyzeVideoCadence(damaged, 60);
+    if (!require(
+            damagedAnalysis.unknownSourceFrames == 1 &&
+                damagedAnalysis.repeatedSourceFrames == 1 &&
+                damagedAnalysis.gapEvents == 1 &&
+                damagedAnalysis.missingFrameSlots == 2 &&
+                damagedAnalysis.maximumSampleGap100ns == frame100ns * 3,
+            "cadence analysis should isolate unknown provenance and missing timeline slots")) {
+        return false;
+    }
+
+    clipture::EncodedPacket staticPacket;
+    staticPacket.kind = clipture::PacketKind::Video;
+    staticPacket.pts100ns = 0;
+    staticPacket.duration100ns = 20'000'000;
+    staticPacket.sourceFrameSequence = 1;
+    staticPacket.sourceHadDesktopPresent = true;
+    const std::array staticPackets { staticPacket };
+    const auto staticAnalysis = clipture::analyzeVideoCadence(staticPackets, 60);
+    if (!require(
+            staticAnalysis.expectedOutputTicks == 120 &&
+                staticAnalysis.sampleCount == 1 &&
+                staticAnalysis.distinctSourceFrames == 1 &&
+                staticAnalysis.underTargetSeconds == 2,
+            "a static source should remain a sparse diagnostic clip when duplication is disabled")) {
+        return false;
+    }
+
+    std::vector<clipture::EncodedPacket> slowOpening;
+    slowOpening.reserve(7'200);
+    uint64_t sourceSequence = 1;
+    for (uint64_t tick = 0; tick < 7'200; ++tick) {
+        if (tick < 600 && tick % 6 == 5) continue;
+        clipture::EncodedPacket packet;
+        packet.kind = clipture::PacketKind::Video;
+        packet.pts100ns = static_cast<int64_t>(tick * 10'000'000ULL / 60ULL);
+        packet.duration100ns = static_cast<int64_t>((tick + 1) * 10'000'000ULL / 60ULL) -
+            packet.pts100ns;
+        packet.sourceFrameSequence = sourceSequence++;
+        packet.sourceHadDesktopPresent = true;
+        slowOpening.push_back(std::move(packet));
+    }
+    const auto slowOpeningAnalysis = clipture::analyzeVideoCadence(slowOpening, 60);
+    if (!require(
+            slowOpeningAnalysis.sampleCount == 7'100 &&
+                slowOpeningAnalysis.missingFrameSlots == 100 &&
+                slowOpeningAnalysis.underTargetSeconds == 10 &&
+                slowOpeningAnalysis.worstSecondDistinctSourceFps > 49.9 &&
+                slowOpeningAnalysis.worstSecondDistinctSourceFps < 50.1,
+            "a ten-second 50 FPS opening must remain visible inside an otherwise healthy two-minute clip")) {
+        return false;
+    }
+
+    const auto empty = clipture::analyzeVideoCadence({}, 60);
+    return require(!empty.available && empty.buckets.empty(), "empty cadence input should be unavailable");
 }
 
 bool testStartCodesAndFlags() {
@@ -524,6 +664,10 @@ bool testCaptureBackendPolicyAndDxgiHelpers() {
     if (!require(forcedHdr.supported && forcedHdr.kind == clipture::CaptureBackendKind::Dxgi,
                  "forced DXGI should support the validated FP16 HDR path")) return false;
     if (!require(
+            clipture::captureBackendKindName(clipture::CaptureBackendKind::WgcWindow) ==
+                "Windows.Graphics.Capture (game window)",
+            "game-window capture should remain distinguishable from monitor WGC in diagnostics")) return false;
+    if (!require(
             clipture::dxgiCaptureFormatSupported(DXGI_FORMAT_R16G16B16A16_FLOAT, true) &&
             !clipture::dxgiCaptureFormatSupported(DXGI_FORMAT_R10G10B10A2_UNORM, true) &&
             clipture::dxgiCaptureFormatSupported(DXGI_FORMAT_B8G8R8A8_UNORM, false),
@@ -554,6 +698,79 @@ bool testCaptureBackendPolicyAndDxgiHelpers() {
                    "DXGI recovery must remain bounded before automatic WGC fallback");
 }
 
+bool testEncoderDrivenCaptureTickGate() {
+    if (!require(
+            clipture::kEncoderDrivenDxgiPollTimeoutMs == 0 &&
+                !clipture::kEnableEncoderDrivenDxgiGrace &&
+                clipture::kEncoderDrivenDxgiGraceTimeoutMs == 0 &&
+                !clipture::kEnableEncoderDrivenDxgiPrearm &&
+                clipture::kEncoderDrivenCapturePrearmLead == std::chrono::milliseconds(0) &&
+                clipture::kEncoderDrivenCaptureCompletionWait == std::chrono::milliseconds(10),
+            "encoder-driven DXGI should finish its bounded OBS-style poll before the output deadline")) {
+        return false;
+    }
+
+    clipture::CaptureTickGate gate;
+    if (!require(!gate.request() && !gate.active() && gate.stats().requests == 0,
+                 "inactive capture clocks should ignore encoder requests")) return false;
+
+    gate.activate();
+    const auto first = gate.request();
+    const auto second = gate.request();
+    const auto third = gate.request();
+    if (!require(first && second && third && *first < *second && *second < *third,
+                 "capture requests should receive monotonic generations")) return false;
+
+    std::stop_source stopSource;
+    const auto coalescedRequest = gate.wait(stopSource.get_token());
+    if (!require(coalescedRequest && *coalescedRequest == *third,
+                 "the backend should consume the newest pending generation")) return false;
+    const auto coalesced = gate.stats();
+    if (!require(
+            coalesced.requests == 3 && coalesced.wakeups == 1 &&
+                coalesced.coalescedRequests == 2,
+            "capture clock should collapse stale requests into one latest-surface poll")) {
+        return false;
+    }
+
+    gate.complete(*coalescedRequest);
+    if (!require(gate.waitForCompletion(*third, std::chrono::milliseconds(1)),
+                 "the scheduler should observe a published same-tick capture")) return false;
+
+    const auto lateRequest = gate.request();
+    if (!require(lateRequest &&
+                     !gate.waitForCompletion(*lateRequest, std::chrono::milliseconds(1)),
+                 "the scheduler handoff must remain bounded when capture is late")) return false;
+    const auto consumedLateRequest = gate.wait(stopSource.get_token());
+    if (!require(consumedLateRequest && *consumedLateRequest == *lateRequest,
+                 "a timed-out scheduler wait must not discard backend work")) return false;
+    gate.complete(*consumedLateRequest);
+
+    bool waitResult = true;
+    std::jthread waiter([&](std::stop_token stopToken) {
+        waitResult = gate.wait(stopToken).has_value();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    gate.deactivate();
+    waiter.join();
+    if (!require(!waitResult, "capture clock deactivation should release a blocked backend")) return false;
+
+    const auto completed = gate.stats();
+    if (!require(
+            completed.completions == 2 && completed.completionWaits == 2 &&
+                completed.completionWaitTimeouts == 1,
+            "capture clock should distinguish completed and late same-tick handoffs")) {
+        return false;
+    }
+
+    gate.reset();
+    const auto reset = gate.stats();
+    return require(
+        !reset.active && reset.requests == 0 && reset.wakeups == 0 &&
+            reset.coalescedRequests == 0 && reset.completions == 0 &&
+            reset.completionWaits == 0 && reset.completionWaitTimeouts == 0,
+        "capture clock reset should not leak requests across backend restarts");
+}
 bool testDesktopPointerDecodingAndClipping() {
     clipture::DecodedDesktopPointerShape decoded;
     std::string error;
@@ -681,6 +898,182 @@ bool testCfrFrameRunsCompactRepeatedTicks() {
         "a continuation run should remain outside fresh-frame pressure accounting");
 }
 
+struct BufferedNvencCountModel {
+    std::size_t outputSlots = 0;
+    std::size_t preparationDepth = 0;
+    std::size_t outputDelay = 0;
+    std::size_t accepted = 0;
+    std::size_t prepared = 0;
+    std::size_t submitted = 0;
+    std::size_t inFlight = 0;
+    std::size_t drained = 0;
+    std::size_t maximumReserved = 0;
+
+    bool acceptFrame() {
+        ++accepted;
+        ++prepared;
+        recordReservation();
+        if (prepared < preparationDepth) return withinCapacity();
+
+        submitPreparedFrame();
+        return withinCapacity();
+    }
+
+    void flush() {
+        while (prepared > 0) submitPreparedFrame();
+        drained += inFlight;
+        inFlight = 0;
+    }
+
+private:
+    void submitPreparedFrame() {
+        --prepared;
+        ++submitted;
+        ++inFlight;
+        recordReservation();
+        if (clipture::shouldDrainNvencSyncOutput(inFlight, outputDelay)) {
+            --inFlight;
+            ++drained;
+        }
+    }
+
+    void recordReservation() {
+        maximumReserved = std::max(maximumReserved, prepared + inFlight);
+    }
+
+    bool withinCapacity() const {
+        return prepared + inFlight <= outputSlots;
+    }
+};
+
+struct TimedSyncDrainModel {
+    explicit TimedSyncDrainModel(std::size_t delay) : outputDelay(delay) {}
+
+    void submit(std::size_t outputLatencyTicks) {
+        currentTick = std::max(currentTick, scheduledTick);
+        readyTicks.push_back(currentTick + outputLatencyTicks);
+        if (clipture::shouldDrainNvencSyncOutput(readyTicks.size(), outputDelay)) {
+            const std::size_t readyTick = readyTicks.front();
+            readyTicks.erase(readyTicks.begin());
+            if (readyTick > currentTick) {
+                liveWaitTicks += readyTick - currentTick;
+                currentTick = readyTick;
+            }
+        }
+        ++scheduledTick;
+    }
+
+    std::size_t outputDelay = 0;
+    std::size_t scheduledTick = 0;
+    std::size_t currentTick = 0;
+    std::size_t liveWaitTicks = 0;
+    std::vector<std::size_t> readyTicks;
+};
+
+bool testNvencBufferedPipelineKeepsReservationHeadroom() {
+    if (!require(
+            clipture::boundedNvencSyncOutputDelay(16, 4, 8) == 8,
+            "P3 should keep eight buffered outputs with sixteen slots")) return false;
+    if (!require(
+            clipture::boundedNvencSyncOutputDelay(16, 6, 8) == 8,
+            "higher preparation depth should retain two free output slots")) return false;
+    if (!require(
+            clipture::boundedNvencSyncOutputDelay(12, 6, 8) == 4,
+            "output delay should contract before consuming reserved slots")) return false;
+    if (!require(
+            clipture::boundedNvencSyncOutputDelay(0, 0, 8) == 0,
+            "an unavailable output pool should have no output delay")) return false;
+    return require(
+        !clipture::shouldDrainNvencSyncOutput(0, 0) &&
+            clipture::shouldDrainNvencSyncOutput(1, 0) &&
+            !clipture::shouldDrainNvencSyncOutput(7, 8) &&
+            clipture::shouldDrainNvencSyncOutput(8, 8),
+        "buffered sync output should drain only at the configured depth");
+}
+
+bool testNvencBufferedPipelineMaintainsSteadyStateAndFlushesTail() {
+    for (const std::size_t preparationDepth : std::array<std::size_t, 3> { 2, 3, 4 }) {
+        BufferedNvencCountModel model {
+            16,
+            preparationDepth,
+            clipture::boundedNvencSyncOutputDelay(16, preparationDepth, 8),
+        };
+        for (std::size_t frame = 0; frame < 600; ++frame) {
+            if (!require(model.acceptFrame(), "buffered NVENC reservations must stay within the slot pool")) {
+                return false;
+            }
+        }
+        if (!require(
+                model.prepared == preparationDepth - 1 && model.inFlight == 7,
+                "P1/P2/P3 should retain their configured preparation and output pipeline depth")) {
+            return false;
+        }
+        if (!require(
+                model.maximumReserved <= model.outputSlots - 2,
+                "steady encoding should preserve at least two emergency output slots")) {
+            return false;
+        }
+        model.flush();
+        if (!require(
+                model.prepared == 0 && model.inFlight == 0 &&
+                    model.accepted == model.submitted && model.submitted == model.drained,
+                "shutdown flush should emit every prepared and in-flight frame exactly once")) {
+            return false;
+        }
+    }
+
+    BufferedNvencCountModel shortSession { 16, 4, 8 };
+    if (!require(shortSession.acceptFrame(), "a session shorter than the preparation depth should queue")) {
+        return false;
+    }
+    shortSession.flush();
+    return require(
+        shortSession.accepted == 1 && shortSession.submitted == 1 && shortSession.drained == 1,
+        "flush should preserve a one-frame session that never reached the live drain threshold");
+}
+
+bool testNvencBufferedPipelineAbsorbsBoundedOutputStalls() {
+    TimedSyncDrainModel serialized(1);
+    TimedSyncDrainModel buffered(8);
+    for (std::size_t frame = 0; frame < 120; ++frame) {
+        const std::size_t latencyTicks = frame >= 40 && frame < 52 ? 6 : 1;
+        serialized.submit(latencyTicks);
+        buffered.submit(latencyTicks);
+    }
+    return require(
+        serialized.liveWaitTicks > 0 && buffered.liveWaitTicks == 0,
+        "eight buffered outputs should absorb a bounded six-frame GPU stall without blocking submissions");
+}
+
+bool testEncoderQueueEvictionPreservesFreshFrames() {
+    const std::array<clipture::CfrFrameRun, 4> mixedRuns {
+        clipture::CfrFrameRun { 1, 1, 0, 166'667, 3, true },
+        clipture::CfrFrameRun { 1, 1, 500'001, 166'667, 9, false },
+        clipture::CfrFrameRun { 2, 1, 2'000'000, 166'667, 1, true },
+        clipture::CfrFrameRun { 3, 1, 3'000'000, 166'667, 1, true },
+    };
+    if (!require(
+            clipture::preferredEncoderQueueEvictionIndex(mixedRuns) == 1,
+            "queue saturation should evict a repeat-only run before any fresh frame")) {
+        return false;
+    }
+
+    const std::array<clipture::CfrFrameRun, 3> freshRuns {
+        clipture::CfrFrameRun { 1, 1, 0, 166'667, 1, true },
+        clipture::CfrFrameRun { 2, 1, 166'667, 166'667, 1, true },
+        clipture::CfrFrameRun { 3, 1, 333'334, 166'667, 1, true },
+    };
+    if (!require(
+            clipture::preferredEncoderQueueEvictionIndex(freshRuns) == 0,
+            "an all-fresh saturated queue should fall back to its oldest run")) {
+        return false;
+    }
+
+    return require(
+        clipture::preferredEncoderQueueEvictionIndex({}) ==
+            clipture::noEncoderQueueEviction,
+        "an empty encoder queue should not produce an eviction candidate");
+}
 bool testAudioTimelineNeverRewinds() {
     bool anchored = false;
     int64_t nextPts100ns = 10'000'000;
@@ -724,8 +1117,20 @@ bool testFrameQueueDropAccounting() {
         jitterQueue.push(std::move(frame));
     }
     const auto selected = jitterQueue.consumeLatestAtOrBefore(250);
-    return require(selected && selected->sequence == 2 && jitterQueue.size() == 1,
-                   "jitter selection should leave future frames queued");
+    if (!require(selected && selected->sequence == 2 && jitterQueue.size() == 1,
+                 "jitter selection should leave future frames queued")) return false;
+
+    clipture::FrameQueue staticQueue(1);
+    if (!require(!staticQueue.waitPopFor(std::chrono::milliseconds(2)),
+                 "timed frame waits should return while a request-driven static source is idle")) {
+        return false;
+    }
+    clipture::CapturedFrame frame;
+    frame.sequence = 7;
+    staticQueue.push(std::move(frame));
+    const auto timedFrame = staticQueue.waitPopFor(std::chrono::milliseconds(2));
+    return require(timedFrame && timedFrame->sequence == 7,
+                   "timed frame waits should still deliver newly published capture work");
 }
 
 bool testImmutableAudioRouting() {
@@ -1002,6 +1407,9 @@ bool testReplaySegmentStorePersistsAndRetainsSnapshots() {
         packet.pts100ns = pts100ns;
         packet.duration100ns = 100;
         packet.keyframe = true;
+        packet.sourceFrameSequence = seed;
+        packet.sourceHadDesktopPresent = seed % 2 == 0;
+        packet.sourceHadPointerUpdate = seed % 2 != 0;
         packet.payload = pool.acquirePayload(37);
         for (std::size_t index = 0; index < packet.payload->size(); ++index) {
             (*packet.payload)[index] = static_cast<std::byte>(seed + static_cast<uint8_t>(index));
@@ -1025,8 +1433,14 @@ bool testReplaySegmentStorePersistsAndRetainsSnapshots() {
         return false;
     }
     if (!require(
-            !snapshot.front().payload && snapshot.front().payloadReader && stats.ramFallbackBytes == 0,
-            "persisted archive entries should release their private RAM payload reference")) {
+            !snapshot.front().payload && snapshot.front().payloadReader && stats.ramFallbackBytes == 0 &&
+                snapshot.front().sourceFrameSequence == 2 &&
+                snapshot.front().sourceHadDesktopPresent &&
+                !snapshot.front().sourceHadPointerUpdate &&
+                snapshot.back().sourceFrameSequence == 3 &&
+                !snapshot.back().sourceHadDesktopPresent &&
+                snapshot.back().sourceHadPointerUpdate,
+            "persisted archive entries should retain packet provenance while releasing RAM payloads")) {
         store.stop();
         return false;
     }
@@ -1382,9 +1796,28 @@ bool testMp4MuxerStreamsDiskBackedVideo() {
     return valid;
 }
 
+bool testPrecisionTimerMaintainsSubMillisecondCadence() {
+    clipture::PrecisionTimer timer;
+    const int64_t start100ns = clipture::monotonicNow100ns();
+    constexpr int64_t targetDuration100ns = 166'667LL; // 16.6667ms (60 FPS tick)
+    const int64_t target100ns = start100ns + targetDuration100ns;
+
+    if (!timer.sleepTo100ns(target100ns)) {
+        return require(false, "PrecisionTimer sleepTo100ns returned false unexpectedly");
+    }
+    const int64_t elapsed100ns = clipture::monotonicNow100ns() - start100ns;
+    // Must arrive at or after target, and within 1.0ms (10,000 in 100ns units)
+    return require(
+        elapsed100ns >= targetDuration100ns &&
+            elapsed100ns <= targetDuration100ns + 10'000LL,
+        "PrecisionTimer should hit 60 FPS tick with sub-millisecond precision");
+}
+
 }  // namespace
 
 int main() {
+    if (!testPrecisionTimerMaintainsSubMillisecondCadence()) return 1;
+    if (!testVideoCadenceAnalysis()) return 1;
     if (!testStartCodesAndFlags()) return 1;
     if (!testMalformedPackets()) return 1;
     if (!testBoundedWrites()) return 1;
@@ -1394,9 +1827,14 @@ int main() {
     if (!testRefreshRateSamplerMaintainsTargetCadence()) return 1;
     if (!testJitteredRefreshSamplerMaintainsCadence()) return 1;
     if (!testCaptureBackendPolicyAndDxgiHelpers()) return 1;
+    if (!testEncoderDrivenCaptureTickGate()) return 1;
     if (!testDesktopPointerDecodingAndClipping()) return 1;
     if (!testVideoTimelineCatchesUpWithoutUnboundedBursts()) return 1;
     if (!testCfrFrameRunsCompactRepeatedTicks()) return 1;
+    if (!testNvencBufferedPipelineKeepsReservationHeadroom()) return 1;
+    if (!testNvencBufferedPipelineMaintainsSteadyStateAndFlushesTail()) return 1;
+    if (!testNvencBufferedPipelineAbsorbsBoundedOutputStalls()) return 1;
+    if (!testEncoderQueueEvictionPreservesFreshFrames()) return 1;
     if (!testAudioTimelineNeverRewinds()) return 1;
     if (!testFrameQueueDropAccounting()) return 1;
     if (!testImmutableAudioRouting()) return 1;

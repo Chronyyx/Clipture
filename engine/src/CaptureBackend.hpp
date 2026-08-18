@@ -2,6 +2,7 @@
 
 #include "clipture/CaptureBackendPolicy.hpp"
 #include "clipture/CaptureSession.hpp"
+#include "clipture/CaptureTickGate.hpp"
 #include "clipture/FixedRateFrameSampler.hpp"
 #include "clipture/FrameQueue.hpp"
 
@@ -46,6 +47,7 @@ struct CaptureSharedState {
     std::atomic<int64_t> lastFramePts100ns = 0;
     std::atomic<int64_t> lastFrameInterval100ns = 0;
     std::atomic<int64_t> maximumFrameInterval100ns = 0;
+    std::atomic<int64_t> lastPublishedPts100ns = 0;
     std::atomic<int64_t> lastPublishedSteady100ns = 0;
     std::atomic<int> targetFps = 60;
     std::atomic<uint64_t> captureEpoch = 0;
@@ -62,6 +64,9 @@ struct CaptureSharedState {
     std::atomic<uint64_t> samplerRejections = 0;
     std::atomic<uint64_t> nonMonotonicTimestamps = 0;
     std::atomic<uint64_t> acquireTimeouts = 0;
+    std::atomic<uint64_t> acquireImmediateMisses = 0;
+    std::atomic<uint64_t> acquireGraceHits = 0;
+    std::atomic<uint64_t> acquireGraceTimeouts = 0;
     std::atomic<uint64_t> accessLosses = 0;
     std::atomic<uint64_t> recreationAttempts = 0;
     std::atomic<uint64_t> recreationSuccesses = 0;
@@ -70,7 +75,11 @@ struct CaptureSharedState {
     std::atomic<bool> hdrTonemappingActive = false;
     std::atomic<void*> activeMonitor = nullptr;
     std::atomic<FrameQueue*> frameQueue = nullptr;
+    std::atomic<CaptureTickGate*> captureTickGate = nullptr;
     LatencyWindow<> acquireWaitLatency;
+    LatencyWindow<> sourceUpdateInterval;
+    LatencyWindow<> publishedPtsInterval;
+    LatencyWindow<> publishedWallInterval;
     LatencyWindow<> framePreparationLatency;
     LatencyWindow<> cursorCompositeLatency;
     LatencyWindow<> frameProcessingLatency;
@@ -82,6 +91,8 @@ struct CaptureSharedState {
     std::string requestedBackend = "auto";
     std::string activeBackend = "none";
     std::string fallbackReason;
+    std::string targetKind = "monitor";
+    std::string targetName = "Primary display";
     uint32_t refreshNumerator = 0;
     uint32_t refreshDenominator = 1;
     int64_t activeBackendStarted100ns = 0;
@@ -91,19 +102,29 @@ struct CaptureSharedState {
     mutable std::mutex samplerMutex;
     FixedRateFrameSampler sampler;
 
-    void resetForStart(FrameQueue* queue, const SelectedOutput& output, CaptureBackendPreference preference);
+    void resetForStart(
+        FrameQueue* queue,
+        CaptureTickGate* tickGate,
+        const SelectedOutput& output,
+        CaptureBackendPreference preference);
     void beginEpoch(bool clearQueue = true);
     void setStatus(std::string nextStatus);
     void setFallbackReason(std::string reason);
     void setSelectedOutput(const SelectedOutput& output);
+    void setCaptureTarget(std::string kind, std::string name);
     void setActiveBackend(CaptureBackendKind kind);
-    bool selectFrameTimestamp(int64_t sourceTimestamp100ns, int64_t& outputTimestamp100ns);
+    bool selectFrameTimestamp(
+        int64_t sourceTimestamp100ns,
+        int64_t& outputTimestamp100ns,
+        bool applyFixedRateSampler = true);
     void publish(
         Microsoft::WRL::ComPtr<ID3D11Texture2D> texture,
         std::shared_ptr<void> textureLease,
         int64_t timestamp100ns,
         int width,
-        int height);
+        int height,
+        bool sourceHadDesktopPresent,
+        bool sourceHadPointerUpdate);
     CaptureRuntimeStats snapshot() const;
 };
 

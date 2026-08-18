@@ -8,12 +8,15 @@
 
 namespace clipture {
 
+class CaptureTickGate;
 class FrameQueue;
 
 struct CaptureRuntimeStats {
     std::string requestedBackend = "auto";
     std::string activeBackend = "none";
     std::string fallbackReason;
+    std::string targetKind = "monitor";
+    std::string targetName = "Primary display";
     uint32_t refreshNumerator = 0;
     uint32_t refreshDenominator = 1;
     double refreshHz = 0.0;
@@ -26,13 +29,26 @@ struct CaptureRuntimeStats {
     uint64_t samplerRejections = 0;
     uint64_t nonMonotonicTimestamps = 0;
     uint64_t acquireTimeouts = 0;
+    uint64_t acquireImmediateMisses = 0;
+    uint64_t acquireGraceHits = 0;
+    uint64_t acquireGraceTimeouts = 0;
     uint64_t accessLosses = 0;
     uint64_t recreationAttempts = 0;
     uint64_t recreationSuccesses = 0;
     uint64_t fallbackCount = 0;
+    std::string clockMode = "capture-sampled";
+    uint64_t clockTickRequests = 0;
+    uint64_t clockTickWakeups = 0;
+    uint64_t clockTickCoalesced = 0;
+    uint64_t clockTickCompletions = 0;
+    uint64_t clockTickCompletionWaits = 0;
+    uint64_t clockTickCompletionTimeouts = 0;
     double desktopPresentFps = 0.0;
     double publishedFreshFps = 0.0;
     double recentPublishedFreshFps = 0.0;
+    LatencyWindowSnapshot sourceUpdateInterval;
+    LatencyWindowSnapshot publishedPtsInterval;
+    LatencyWindowSnapshot publishedWallInterval;
     LatencyWindowSnapshot acquireWaitLatency;
     LatencyWindowSnapshot framePreparationLatency;
     LatencyWindowSnapshot cursorCompositeLatency;
@@ -47,7 +63,12 @@ public:
     CaptureSession(const CaptureSession&) = delete;
     CaptureSession& operator=(const CaptureSession&) = delete;
 
-    bool startMonitor(FrameQueue* frameQueue, const std::string& monitorId);
+    bool startMonitor(
+        FrameQueue* frameQueue,
+        CaptureTickGate* captureTickGate,
+        const std::string& monitorId);
+    bool preferGameWindow(void* window, const std::string& targetName);
+    bool preferMonitor();
     void setTargetFps(int fps);
     void stop();
 

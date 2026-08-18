@@ -3,6 +3,7 @@
 #include "clipture/AudioCaptureWorker.hpp"
 #include "clipture/AudioReplayCoordinator.hpp"
 #include "clipture/CaptureSession.hpp"
+#include "clipture/CaptureTickGate.hpp"
 #include "clipture/Diagnostics.hpp"
 #include "clipture/EncoderWorker.hpp"
 #include "clipture/FrameQueue.hpp"
@@ -82,6 +83,7 @@ private:
 
     EngineSettings settings_;
     Diagnostics diagnostics_;
+    CaptureTickGate captureTickGate_;
     FrameQueue frameQueue_;
     PacketRingBuffer videoPackets_;
     PacketRingBuffer audioPackets_;
@@ -113,6 +115,7 @@ private:
     };
     std::mutex historyMutex_;
     std::deque<ForegroundHistoryEntry> foregroundHistory_;
+    void* activeGameCaptureWindow_ = nullptr;
 };
 
 }  // namespace clipture

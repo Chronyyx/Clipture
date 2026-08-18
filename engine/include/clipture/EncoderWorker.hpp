@@ -1,6 +1,7 @@
 #pragma once
 
 #include "clipture/CfrFrameScheduler.hpp"
+#include "clipture/CaptureTickGate.hpp"
 #include "clipture/FrameQueue.hpp"
 #include "clipture/LatencyWindow.hpp"
 #include "clipture/PacketRingBuffer.hpp"
@@ -20,6 +21,13 @@ class ReplaySegmentStore;
 struct EncoderRecentPerformance {
     double inputFps = 0.0;
     double outputFps = 0.0;
+    double distinctSourceOutputFps = 0.0;
+    uint64_t repeatedSourceOutputFrames = 0;
+    uint64_t unknownSourceOutputFrames = 0;
+    LatencyWindowSnapshot schedulerWakeLateness;
+    LatencyWindowSnapshot queueResidence;
+    LatencyWindowSnapshot inputPtsInterval;
+    LatencyWindowSnapshot outputPtsInterval;
     LatencyWindowSnapshot inputPreparation;
     LatencyWindowSnapshot inputMap;
     LatencyWindowSnapshot encodeCall;
@@ -32,6 +40,7 @@ struct EncoderRecentPerformance {
 class EncoderWorker {
 public:
     EncoderWorker(
+        CaptureTickGate& captureTickGate,
         FrameQueue& frames,
         PacketRingBuffer& packets,
         ReplaySegmentStore* replayStore = nullptr);
@@ -63,12 +72,16 @@ public:
     int queuedRepeatEncodeFrames() const;
     int schedulerDroppedFrames() const;
     int schedulerRepeatedFrames() const;
+    bool stillFrameDuplicationEnabled() const;
     int encoderQueueDrops() const;
     int encoderRepeatCoalesced() const;
     int nvencSurfaceDrops() const;
     int nvencInputDrops() const;
     int encoderBackpressureDrops() const;
     int nvencInFlightFrames() const;
+    uint64_t distinctSourceOutputFrames() const;
+    uint64_t repeatedSourceOutputFrames() const;
+    uint64_t unknownSourceOutputFrames() const;
     uint64_t nvencZeroCopyFrames() const;
     uint64_t nvencCopyFallbackFrames() const;
     uint64_t nvencConvertedFrames() const;
@@ -110,6 +123,7 @@ private:
     bool queueTick(EncodeJob job);
     void setStatus(std::string status);
 
+    CaptureTickGate& captureTickGate_;
     FrameQueue& frames_;
     PacketRingBuffer& packets_;
     ReplaySegmentStore* replayStore_ = nullptr;
@@ -135,6 +149,9 @@ private:
     std::atomic<int> encoderBackpressureDrops_ = 0;
     std::atomic<int> nvencInFlightFrames_ = 0;
     std::atomic<int> nvencPreparedFrames_ = 0;
+    std::atomic<uint64_t> distinctSourceOutputFrames_ = 0;
+    std::atomic<uint64_t> repeatedSourceOutputFrames_ = 0;
+    std::atomic<uint64_t> unknownSourceOutputFrames_ = 0;
     std::atomic<uint64_t> nvencZeroCopyFrames_ = 0;
     std::atomic<uint64_t> nvencCopyFallbackFrames_ = 0;
     std::atomic<uint64_t> nvencConvertedFrames_ = 0;
@@ -149,7 +166,14 @@ private:
     std::atomic<int64_t> totalOutputDrainLatency100ns_ = 0;
     std::atomic<int64_t> maximumOutputDrainLatency100ns_ = 0;
     std::atomic<int64_t> performanceStarted100ns_ = 0;
+    LatencyWindow<> recentSchedulerWakeLateness_;
     LatencyWindow<> recentInputPreparationLatency_;
+    LatencyWindow<> recentQueueResidenceLatency_;
+    LatencyWindow<> recentInputPtsInterval_;
+    LatencyWindow<> recentOutputPtsInterval_;
+    LatencyWindow<> recentDistinctSourceOutputEvents_;
+    LatencyWindow<> recentRepeatedSourceOutputEvents_;
+    LatencyWindow<> recentUnknownSourceOutputEvents_;
     LatencyWindow<> recentInputMapLatency_;
     LatencyWindow<> recentNvencCallLatency_;
     LatencyWindow<> recentOutputEventWaitLatency_;

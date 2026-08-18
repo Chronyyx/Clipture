@@ -18,8 +18,9 @@ import { basename, dirname, extname, join, parse, normalize } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { constants as osConstants, cpus, release as osRelease, setPriority, totalmem, version as osVersion } from "node:os";
-import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, SaveClipResult, ClipSoundOption, SaveIoAnalysis, SaveIoAnalyzerState, ThemeFontId, UpdateState } from "../shared/types";
+import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, FrameDropAnalysis, SaveClipResult, ClipSoundOption, SaveIoAnalysis, SaveIoAnalyzerState, ThemeFontId, UpdateState } from "../shared/types";
 import { CaptureAwareNsisUpdater, CaptureAwareUpdateTransfer } from "./CaptureAwareUpdater";
+import { FrameDropDiagnosticsRecorder } from "./FrameDropDiagnostics";
 
 let consoleStdoutAvailable = true;
 let consoleStderrAvailable = true;
@@ -303,6 +304,7 @@ async function bitrateResolution(settings: ClipSettings, targetResolution: { wid
 
 class EngineClient {
   private child: ChildProcessWithoutNullStreams | undefined;
+  private diagnosticsRequest: Promise<EngineDiagnostics> | undefined;
   private nextId = 1;
   private buffer = "";
   private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -313,11 +315,14 @@ class EngineClient {
     armed: false,
     status: "Native hotkey listener has not started."
   };
+  private frameDropRecorder = new FrameDropDiagnosticsRecorder();
   private lastDiagnostics: EngineDiagnostics = {
     captureApi: "Windows.Graphics.Capture",
     requestedCaptureBackend: "auto",
     activeCaptureBackend: "none",
     captureFallbackReason: "",
+    captureTargetKind: "monitor",
+    captureTargetName: "Primary display",
     displayRefreshNumerator: 0,
     displayRefreshDenominator: 1,
     displayRefreshHz: 0,
@@ -330,16 +335,33 @@ class EngineClient {
     captureSamplerRejections: 0,
     captureNonMonotonicTimestamps: 0,
     captureAcquireTimeouts: 0,
+    captureAcquireImmediateMisses: 0,
+    captureAcquireGraceHits: 0,
+    captureAcquireGraceTimeouts: 0,
     captureAccessLosses: 0,
     captureRecreationAttempts: 0,
     captureRecreationSuccesses: 0,
     captureFallbacks: 0,
+    captureClockMode: "capture-sampled",
+    captureClockTickRequests: 0,
+    captureClockTickWakeups: 0,
+    captureClockTickCoalesced: 0,
+    captureClockTickCompletions: 0,
+    captureClockTickCompletionWaits: 0,
+    captureClockTickCompletionTimeouts: 0,
     desktopPresentFps: 0,
     publishedFreshFps: 0,
     recentPublishedFreshFps: 0,
     recentEncoderInputFps: 0,
     recentEncoderOutputFps: 0,
+    recentEncoderDistinctSourceFps: 0,
     encodedRepeatRatio: 0,
+    stillFrameDuplicationEnabled: false,
+    encoderDistinctSourceFrames: 0,
+    encoderRepeatedSourceFrames: 0,
+    encoderUnknownSourceFrames: 0,
+    recentEncoderRepeatedSourceFrames: 0,
+    recentEncoderUnknownSourceFrames: 0,
     activeEncoder: "Unavailable",
     encoderMode: "Unavailable",
     gpu: "Engine not running",
@@ -371,6 +393,28 @@ class EngineClient {
     nvencInputDrops: 0,
     encoderBackpressureDrops: 0,
     nvencInFlightFrames: 0,
+    recentDropWindowMs: 0,
+    recentDroppedFrames: 0,
+    recentCaptureOverflowDrops: 0,
+    recentCaptureSlotDrops: 0,
+    recentSchedulerDroppedFrames: 0,
+    recentEncoderBackpressureDrops: 0,
+    recentEncoderBackpressureOtherDrops: 0,
+    recentCaptureCallbackErrors: 0,
+    recentCaptureCoalescedDrops: 0,
+    recentSourceFramesSuperseded: 0,
+    recentCaptureSamplerRejections: 0,
+    recentCaptureNonMonotonicTimestamps: 0,
+    recentCaptureAcquireTimeouts: 0,
+    recentCaptureAccessLosses: 0,
+    recentCaptureFallbacks: 0,
+    recentSchedulerRepeatedFrames: 0,
+    recentEncoderQueueDrops: 0,
+    recentEncoderRepeatCoalesced: 0,
+    recentNvencSurfaceDrops: 0,
+    recentNvencInputDrops: 0,
+    recentDropDominantReason: "none",
+    recentVisualFreshnessBottleneck: "collecting",
     maximumCaptureGap100ns: 0,
     maximumSubmitLatency100ns: 0,
     averageScaleLatency100ns: 0,
@@ -382,11 +426,23 @@ class EngineClient {
     averageOutputDrainLatency100ns: 0,
     maximumOutputDrainLatency100ns: 0,
     recentCaptureAcquireP95_100ns: 0,
+    recentCaptureSourceIntervalP50_100ns: 0,
+    recentCaptureSourceIntervalP95_100ns: 0,
+    recentCaptureSourceIntervalMaximum100ns: 0,
+    recentPublishedPtsIntervalP50_100ns: 0,
+    recentPublishedPtsIntervalP95_100ns: 0,
+    recentPublishedPtsIntervalMaximum100ns: 0,
+    recentPublishedWallIntervalP50_100ns: 0,
+    recentPublishedWallIntervalP95_100ns: 0,
+    recentPublishedWallIntervalMaximum100ns: 0,
     recentCapturePreparationP50_100ns: 0,
     recentCapturePreparationP95_100ns: 0,
     recentCaptureCursorP95_100ns: 0,
     recentCaptureProcessingP50_100ns: 0,
     recentCaptureProcessingP95_100ns: 0,
+    recentSchedulerWakeLatenessP50_100ns: 0,
+    recentSchedulerWakeLatenessP95_100ns: 0,
+    recentSchedulerWakeLatenessMaximum100ns: 0,
     recentInputPreparationP50_100ns: 0,
     recentInputPreparationP95_100ns: 0,
     recentInputMapP50_100ns: 0,
@@ -398,6 +454,15 @@ class EngineClient {
     recentOutputLockP95_100ns: 0,
     recentOutputCopyP95_100ns: 0,
     recentOutputUnmapP95_100ns: 0,
+    recentEncoderQueueResidenceP50_100ns: 0,
+    recentEncoderQueueResidenceP95_100ns: 0,
+    recentEncoderQueueResidenceMaximum100ns: 0,
+    recentEncoderInputIntervalP50_100ns: 0,
+    recentEncoderInputIntervalP95_100ns: 0,
+    recentEncoderInputIntervalMaximum100ns: 0,
+    recentEncoderOutputIntervalP50_100ns: 0,
+    recentEncoderOutputIntervalP95_100ns: 0,
+    recentEncoderOutputIntervalMaximum100ns: 0,
     nvencZeroCopyFrames: 0,
     nvencCopyFallbackFrames: 0,
     nvencConvertedFrames: 0,
@@ -434,6 +499,32 @@ class EngineClient {
     encoderOutputPackets: 0,
     audioCapturedPackets: 0,
     bufferDurationSeconds: 0,
+    lastClipCadence: {
+      available: false,
+      targetFps: 0,
+      span100ns: 0,
+      targetFrameDuration100ns: 0,
+      maximumSampleGap100ns: 0,
+      expectedOutputTicks: 0,
+      sampleCount: 0,
+      distinctSourceFrames: 0,
+      repeatedSourceFrames: 0,
+      unknownSourceFrames: 0,
+      desktopPresentSourceFrames: 0,
+      pointerOnlySourceFrames: 0,
+      unknownUpdateKindSourceFrames: 0,
+      longestHeldRunSamples: 0,
+      gapEvents: 0,
+      missingFrameSlots: 0,
+      underTargetSeconds: 0,
+      underTargetDesktopPresentSeconds: 0,
+      distinctSourceFps: 0,
+      desktopPresentSourceFps: 0,
+      repeatRatio: 0,
+      worstSecondDistinctSourceFps: 0,
+      worstSecondDesktopPresentSourceFps: 0,
+      buckets: []
+    },
     degraded: true,
     status: "Native engine process has not started."
   };
@@ -477,10 +568,21 @@ class EngineClient {
   }
 
   async diagnostics(): Promise<EngineDiagnostics> {
+    if (this.diagnosticsRequest) return this.diagnosticsRequest;
+    const request = this.readDiagnostics();
+    this.diagnosticsRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (this.diagnosticsRequest === request) this.diagnosticsRequest = undefined;
+    }
+  }
+
+  private async readDiagnostics(): Promise<EngineDiagnostics> {
     if (!this.child) this.start();
     if (!this.child) return this.lastDiagnostics;
     try {
-      const diagnostics = await this.request<EngineDiagnostics>("getDiagnostics", {});
+      const diagnostics = this.frameDropRecorder.observe(await this.request<EngineDiagnostics>("getDiagnostics", {}));
       this.lastDiagnostics = diagnostics;
       updateCapturePressure(diagnostics.capturePressure);
       return diagnostics;
@@ -496,6 +598,10 @@ class EngineClient {
 
   hotkeyStatus(): { ready: boolean; armed: boolean; status: string } {
     return { ...this.nativeHotkeyStatus };
+  }
+
+  frameDropAnalysis(): FrameDropAnalysis {
+    return this.frameDropRecorder.report();
   }
 
   async configureHotkey(hotkey: string): Promise<{ ready: boolean; armed: boolean; status: string }> {
@@ -567,7 +673,7 @@ class EngineClient {
     const effectiveBitrateMbps = settings.autoBitrate
       ? autoBitrateForResolution(await bitrateResolution(settings, targetResolution), settings.fps, settings.maxAutoBitrateMbps)
       : settings.bitrateMbps;
-    const diagnostics = await this.request<EngineDiagnostics>("configure", {
+    const diagnostics = this.frameDropRecorder.observe(await this.request<EngineDiagnostics>("configure", {
       fps: settings.fps,
       bitrateMbps: effectiveBitrateMbps,
       nvencPreset: settings.nvencPreset,
@@ -598,7 +704,7 @@ class EngineClient {
       micDeviceId: settings.audioSources.find((source) => source.kind === "microphone")?.micDeviceId ?? "",
       micDeviceMatchKey: settings.audioSources.find((source) => source.kind === "microphone")?.micDeviceMatchKey ?? "",
       micDeviceName: settings.audioSources.find((source) => source.kind === "microphone")?.micDeviceName ?? ""
-    }, 15_000);
+    }, 15_000));
     this.lastDiagnostics = diagnostics;
     updateCapturePressure(diagnostics.capturePressure);
     return diagnostics;
@@ -711,6 +817,7 @@ const startHidden = process.argv.includes("--hidden") || process.argv.includes("
 const updateCheckIntervalMs = 30 * 60 * 1000;
 let updateState: UpdateState = { status: "idle" };
 let updateCheckTimer: ReturnType<typeof setInterval> | undefined;
+let diagnosticsSamplingTimer: ReturnType<typeof setInterval> | undefined;
 let updateCheckInFlight = false;
 let updateReady = false;
 let updateListenersRegistered = false;
@@ -3421,6 +3528,10 @@ app.whenReady().then(async () => {
       console.error("Failed to configure engine at startup:", error);
     });
   }, 250);
+  diagnosticsSamplingTimer = setInterval(() => {
+    void engine.diagnostics();
+  }, 2000);
+  diagnosticsSamplingTimer.unref();
   setTimeout(() => checkForAppUpdates(), 4000);
 });
 
@@ -3429,6 +3540,7 @@ app.on("window-all-closed", () => {});
 app.on("before-quit", () => {
   isQuitting = true;
   if (updateCheckTimer) clearInterval(updateCheckTimer);
+  if (diagnosticsSamplingTimer) clearInterval(diagnosticsSamplingTimer);
   updateTransfer.stop();
   updateLogStream?.end();
   engine.stop();
@@ -3452,7 +3564,7 @@ async function exportDiagnostics(): Promise<string | undefined> {
   const diagnostics = await engine.diagnostics();
   const saveTimingLogPath = appDataPath("save-timing.log");
   const report = {
-    reportVersion: 3,
+    reportVersion: 5,
     exportedAt: exportedAt.toISOString(),
     application: {
       name: app.getName(),
@@ -3483,6 +3595,7 @@ async function exportDiagnostics(): Promise<string | undefined> {
       lastTriggerSource: lastHotkeyTriggerSource
     },
     diagnostics,
+    frameDropAnalysis: engine.frameDropAnalysis(),
     saveIoAnalysis: lastSaveIoAnalysis ?? null,
     saveTiming: {
       logPath: saveTimingLogPath,

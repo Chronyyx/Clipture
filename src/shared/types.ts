@@ -1,11 +1,183 @@
 export type EncoderName = "NVENC" | "Media Foundation Hardware" | "Software" | "Unavailable";
 export type ThemeFontId = "glitten" | "milate";
 
+export interface FrameDropReasonDeltas {
+  reportedDroppedFrames: number;
+  captureQueueOverflow: number;
+  captureSlotExhaustion: number;
+  schedulerDeadlineMisses: number;
+  encoderBackpressure: number;
+  encoderBackpressureOther: number;
+  captureCallbackErrors: number;
+  captureQueueCoalesced: number;
+  sourceFramesSuperseded: number;
+  captureSamplerRejections: number;
+  captureNonMonotonicTimestamps: number;
+  captureAcquireTimeouts: number;
+  captureAccessLosses: number;
+  captureFallbacks: number;
+  schedulerRepeats: number;
+  encoderQueueDrops: number;
+  encoderRepeatsCoalesced: number;
+  nvencSurfaceDrops: number;
+  nvencInputDrops: number;
+}
+
+export interface FrameDropActivityDeltas {
+  captureUpdatesAcquired: number;
+  desktopPresents: number;
+  pointerUpdates: number;
+  freshFramesPublished: number;
+  accumulatedSourceFrames: number;
+  accumulationEvents: number;
+  captureAcquireImmediateMisses: number;
+  captureAcquireGraceHits: number;
+  captureAcquireGraceTimeouts: number;
+  captureClockTickRequests: number;
+  captureClockTickWakeups: number;
+  captureClockTickCoalesced: number;
+  captureClockTickCompletions: number;
+  captureClockTickCompletionWaits: number;
+  captureClockTickCompletionTimeouts: number;
+  encoderFramesAccepted: number;
+  encoderPacketsProduced: number;
+  encoderDistinctSourceFrames: number;
+  encoderRepeatedSourceFrames: number;
+  encoderUnknownSourceFrames: number;
+  replayPacketsPersisted: number;
+}
+
+export interface FrameDropTimelineSample {
+  sampledAt: string;
+  windowMs: number;
+  reset: boolean;
+  captureEpochChanged: boolean;
+  dominantCountedReason: string;
+  visualFreshnessBottleneck: string;
+  countedReasonTotal: number;
+  accountingDifference: number;
+  reportedDropsPerSecond: number;
+  freshnessRates: {
+    targetFps: number;
+    captureClockRequests: number;
+    captureClockWakeups: number;
+    captureClockCompletionTimeouts: number;
+    captureAcquireImmediateMisses: number;
+    captureAcquireGraceHits: number;
+    captureAcquireGraceTimeouts: number;
+    desktopPresents: number;
+    desktopUpdateSupply: number;
+    captureUpdates: number;
+    freshFramesPublished: number;
+    encoderFramesAccepted: number;
+    encoderPacketsProduced: number;
+    distinctSourceFramesEncoded: number;
+  };
+  reasons: FrameDropReasonDeltas;
+  activity: FrameDropActivityDeltas;
+  context: {
+    captureEpoch: number;
+    capturePressure: EngineDiagnostics["capturePressure"];
+    activeCaptureBackend: string;
+    captureClockMode: string;
+    desktopPresentFps: number;
+    publishedFreshFps: number;
+    recentCaptureFps: number;
+    recentEncoderInputFps: number;
+    recentEncoderOutputFps: number;
+    recentEncoderDistinctSourceFps: number;
+    stillFrameDuplicationEnabled: boolean;
+    captureSourceIntervalP95_100ns: number;
+    publishedWallIntervalP95_100ns: number;
+    schedulerWakeLatenessP95_100ns: number;
+    encoderQueueResidenceP95_100ns: number;
+    encoderInputIntervalP95_100ns: number;
+    encoderOutputIntervalP95_100ns: number;
+    queuedFrames: number;
+    encoderQueuedFreshFrames: number;
+    encoderQueuedRepeatFrames: number;
+    nvencInFlightFrames: number;
+    captureAcquireP95_100ns: number;
+    capturePreparationP95_100ns: number;
+    captureProcessingP95_100ns: number;
+    inputPreparationP95_100ns: number;
+    inputMapP95_100ns: number;
+    nvencCallP95_100ns: number;
+    outputEventWaitP95_100ns: number;
+    outputLockP95_100ns: number;
+    outputCopyP95_100ns: number;
+    outputUnmapP95_100ns: number;
+    maximumCaptureGap100ns: number;
+    maximumSubmitLatency100ns: number;
+    replayArchiveQueuedBytes: number;
+    replayArchiveQueuedPackets: number;
+    replayArchiveWriteFailures: number;
+  };
+}
+
+export interface FrameDropAnalysis {
+  sampleIntervalMinimumMs: number;
+  maximumRetainedSamples: number;
+  retainedWindowMs: number;
+  definitions: {
+    reportedDroppedFrames: string;
+    countedReasons: string[];
+    supportingIndicators: string[];
+  };
+  totals: FrameDropReasonDeltas;
+  latest: FrameDropTimelineSample | null;
+  timeline: FrameDropTimelineSample[];
+}
+
+export interface VideoCadenceBucket {
+  secondIndex: number;
+  duration100ns: number;
+  sampleCount: number;
+  distinctSourceFrames: number;
+  repeatedSourceFrames: number;
+  unknownSourceFrames: number;
+  desktopPresentSourceFrames: number;
+  pointerOnlySourceFrames: number;
+  unknownUpdateKindSourceFrames: number;
+  maximumSampleGap100ns: number;
+  distinctSourceFps: number;
+  desktopPresentSourceFps: number;
+}
+
+export interface VideoCadenceAnalysis {
+  available: boolean;
+  targetFps: number;
+  span100ns: number;
+  targetFrameDuration100ns: number;
+  maximumSampleGap100ns: number;
+  expectedOutputTicks: number;
+  sampleCount: number;
+  distinctSourceFrames: number;
+  repeatedSourceFrames: number;
+  unknownSourceFrames: number;
+  desktopPresentSourceFrames: number;
+  pointerOnlySourceFrames: number;
+  unknownUpdateKindSourceFrames: number;
+  longestHeldRunSamples: number;
+  gapEvents: number;
+  missingFrameSlots: number;
+  underTargetSeconds: number;
+  underTargetDesktopPresentSeconds: number;
+  distinctSourceFps: number;
+  desktopPresentSourceFps: number;
+  repeatRatio: number;
+  worstSecondDistinctSourceFps: number;
+  worstSecondDesktopPresentSourceFps: number;
+  buckets: VideoCadenceBucket[];
+}
+
 export interface EngineDiagnostics {
   captureApi: string;
   requestedCaptureBackend: string;
   activeCaptureBackend: string;
   captureFallbackReason: string;
+  captureTargetKind: string;
+  captureTargetName: string;
   displayRefreshNumerator: number;
   displayRefreshDenominator: number;
   displayRefreshHz: number;
@@ -18,16 +190,33 @@ export interface EngineDiagnostics {
   captureSamplerRejections: number;
   captureNonMonotonicTimestamps: number;
   captureAcquireTimeouts: number;
+  captureAcquireImmediateMisses: number;
+  captureAcquireGraceHits: number;
+  captureAcquireGraceTimeouts: number;
   captureAccessLosses: number;
   captureRecreationAttempts: number;
   captureRecreationSuccesses: number;
   captureFallbacks: number;
+  captureClockMode: string;
+  captureClockTickRequests: number;
+  captureClockTickWakeups: number;
+  captureClockTickCoalesced: number;
+  captureClockTickCompletions: number;
+  captureClockTickCompletionWaits: number;
+  captureClockTickCompletionTimeouts: number;
   desktopPresentFps: number;
   publishedFreshFps: number;
   recentPublishedFreshFps: number;
   recentEncoderInputFps: number;
   recentEncoderOutputFps: number;
+  recentEncoderDistinctSourceFps: number;
   encodedRepeatRatio: number;
+  stillFrameDuplicationEnabled: boolean;
+  encoderDistinctSourceFrames: number;
+  encoderRepeatedSourceFrames: number;
+  encoderUnknownSourceFrames: number;
+  recentEncoderRepeatedSourceFrames: number;
+  recentEncoderUnknownSourceFrames: number;
   activeEncoder: EncoderName;
   encoderMode: string;
   gpu: string;
@@ -59,6 +248,28 @@ export interface EngineDiagnostics {
   nvencInputDrops: number;
   encoderBackpressureDrops: number;
   nvencInFlightFrames: number;
+  recentDropWindowMs: number;
+  recentDroppedFrames: number;
+  recentCaptureOverflowDrops: number;
+  recentCaptureSlotDrops: number;
+  recentSchedulerDroppedFrames: number;
+  recentEncoderBackpressureDrops: number;
+  recentEncoderBackpressureOtherDrops: number;
+  recentCaptureCallbackErrors: number;
+  recentCaptureCoalescedDrops: number;
+  recentSourceFramesSuperseded: number;
+  recentCaptureSamplerRejections: number;
+  recentCaptureNonMonotonicTimestamps: number;
+  recentCaptureAcquireTimeouts: number;
+  recentCaptureAccessLosses: number;
+  recentCaptureFallbacks: number;
+  recentSchedulerRepeatedFrames: number;
+  recentEncoderQueueDrops: number;
+  recentEncoderRepeatCoalesced: number;
+  recentNvencSurfaceDrops: number;
+  recentNvencInputDrops: number;
+  recentDropDominantReason: string;
+  recentVisualFreshnessBottleneck: string;
   maximumCaptureGap100ns: number;
   maximumSubmitLatency100ns: number;
   averageScaleLatency100ns: number;
@@ -70,11 +281,32 @@ export interface EngineDiagnostics {
   averageOutputDrainLatency100ns: number;
   maximumOutputDrainLatency100ns: number;
   recentCaptureAcquireP95_100ns: number;
+  recentCaptureSourceIntervalP50_100ns: number;
+  recentCaptureSourceIntervalP95_100ns: number;
+  recentCaptureSourceIntervalMaximum100ns: number;
+  recentPublishedPtsIntervalP50_100ns: number;
+  recentPublishedPtsIntervalP95_100ns: number;
+  recentPublishedPtsIntervalMaximum100ns: number;
+  recentPublishedWallIntervalP50_100ns: number;
+  recentPublishedWallIntervalP95_100ns: number;
+  recentPublishedWallIntervalMaximum100ns: number;
   recentCapturePreparationP50_100ns: number;
   recentCapturePreparationP95_100ns: number;
   recentCaptureCursorP95_100ns: number;
   recentCaptureProcessingP50_100ns: number;
   recentCaptureProcessingP95_100ns: number;
+  recentSchedulerWakeLatenessP50_100ns: number;
+  recentSchedulerWakeLatenessP95_100ns: number;
+  recentSchedulerWakeLatenessMaximum100ns: number;
+  recentEncoderQueueResidenceP50_100ns: number;
+  recentEncoderQueueResidenceP95_100ns: number;
+  recentEncoderQueueResidenceMaximum100ns: number;
+  recentEncoderInputIntervalP50_100ns: number;
+  recentEncoderInputIntervalP95_100ns: number;
+  recentEncoderInputIntervalMaximum100ns: number;
+  recentEncoderOutputIntervalP50_100ns: number;
+  recentEncoderOutputIntervalP95_100ns: number;
+  recentEncoderOutputIntervalMaximum100ns: number;
   recentInputPreparationP50_100ns: number;
   recentInputPreparationP95_100ns: number;
   recentInputMapP50_100ns: number;
@@ -122,6 +354,7 @@ export interface EngineDiagnostics {
   encoderOutputPackets: number;
   audioCapturedPackets: number;
   bufferDurationSeconds: number;
+  lastClipCadence: VideoCadenceAnalysis;
   degraded: boolean;
   status: string;
 }

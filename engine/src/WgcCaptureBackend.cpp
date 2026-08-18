@@ -33,6 +33,8 @@ using winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 struct WgcCaptureBackend::Impl {
     std::shared_ptr<CaptureSharedState> shared;
     SelectedOutput output;
+    HWND window = nullptr;
+    std::string targetName;
     CaptureTexturePool texturePool;
     Microsoft::WRL::ComPtr<ID3D11Device> d3dDevice;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3dContext;
@@ -53,8 +55,16 @@ struct WgcCaptureBackend::Impl {
     bool apartmentInitialized = false;
     DWORD apartmentThreadId = 0;
 
-    Impl(std::shared_ptr<CaptureSharedState> nextShared, SelectedOutput nextOutput)
-        : shared(std::move(nextShared)), output(std::move(nextOutput)), texturePool(shared) {}
+    Impl(
+        std::shared_ptr<CaptureSharedState> nextShared,
+        SelectedOutput nextOutput,
+        HWND nextWindow,
+        std::string nextTargetName)
+        : shared(std::move(nextShared)),
+          output(std::move(nextOutput)),
+          window(nextWindow),
+          targetName(std::move(nextTargetName)),
+          texturePool(shared) {}
 
     void fail(std::string reason) {
         {
@@ -70,8 +80,16 @@ struct WgcCaptureBackend::Impl {
     }
 };
 
-WgcCaptureBackend::WgcCaptureBackend(std::shared_ptr<CaptureSharedState> shared, SelectedOutput output)
-    : impl_(std::make_unique<Impl>(std::move(shared), std::move(output))) {}
+WgcCaptureBackend::WgcCaptureBackend(
+    std::shared_ptr<CaptureSharedState> shared,
+    SelectedOutput output,
+    void* window,
+    std::string targetName)
+    : impl_(std::make_unique<Impl>(
+          std::move(shared),
+          std::move(output),
+          static_cast<HWND>(window),
+          std::move(targetName))) {}
 
 WgcCaptureBackend::~WgcCaptureBackend() {
     stop();
@@ -79,6 +97,9 @@ WgcCaptureBackend::~WgcCaptureBackend() {
 
 BackendStartResult WgcCaptureBackend::start() {
     auto& state = *impl_;
+    if (auto* tickGate = state.shared->captureTickGate.load(std::memory_order_acquire)) {
+        tickGate->deactivate();
+    }
     try {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
         state.apartmentInitialized = true;
@@ -107,11 +128,22 @@ BackendStartResult WgcCaptureBackend::start() {
             };
         }
         winrt::com_ptr<ABI::Windows::Graphics::Capture::IGraphicsCaptureItem> abiItem;
-        hr = interop->CreateForMonitor(
-            state.output.desc.Monitor,
-            __uuidof(ABI::Windows::Graphics::Capture::IGraphicsCaptureItem),
-            abiItem.put_void());
-        if (FAILED(hr)) return { false, "CreateForMonitor failed: " + hresultHex(hr) };
+        if (state.window) {
+            if (!IsWindow(state.window)) {
+                return { false, "The selected game window is no longer available." };
+            }
+            hr = interop->CreateForWindow(
+                state.window,
+                __uuidof(ABI::Windows::Graphics::Capture::IGraphicsCaptureItem),
+                abiItem.put_void());
+            if (FAILED(hr)) return { false, "CreateForWindow failed: " + hresultHex(hr) };
+        } else {
+            hr = interop->CreateForMonitor(
+                state.output.desc.Monitor,
+                __uuidof(ABI::Windows::Graphics::Capture::IGraphicsCaptureItem),
+                abiItem.put_void());
+            if (FAILED(hr)) return { false, "CreateForMonitor failed: " + hresultHex(hr) };
+        }
         state.item = abiItem.as<GraphicsCaptureItem>();
 
         state.itemClosedToken = state.item.Closed([this](auto const&, auto const&) {
@@ -244,7 +276,9 @@ BackendStartResult WgcCaptureBackend::start() {
                     std::move(owned.lease),
                     outputTimestamp100ns,
                     size.Width,
-                    size.Height);
+                    size.Height,
+                    true,
+                    false);
                 const int64_t frameProcessed100ns = monotonicNow100ns();
                 callbackState.shared->frameProcessingLatency.record(
                     frameProcessed100ns,
@@ -269,11 +303,21 @@ BackendStartResult WgcCaptureBackend::start() {
         }
         state.started.store(true, std::memory_order_release);
         state.session.StartCapture();
-        state.shared->setActiveBackend(CaptureBackendKind::Wgc);
+        const bool capturesWindow = state.window != nullptr;
+        const auto backendKind = capturesWindow
+            ? CaptureBackendKind::WgcWindow
+            : CaptureBackendKind::Wgc;
+        const std::string captureName = capturesWindow && !state.targetName.empty()
+            ? state.targetName
+            : state.output.displayName;
+        state.shared->setActiveBackend(backendKind);
         state.shared->running.store(true, std::memory_order_release);
-        state.shared->setStatus("Windows.Graphics.Capture is running on " + state.output.displayName + ".");
+        state.shared->setStatus(
+            std::string("Windows.Graphics.Capture is running on ") + captureName + ".");
         std::cerr << "[capture] Windows.Graphics.Capture started on "
-                  << state.output.displayName << ".\n";
+                  << captureName
+                  << " target=" << (capturesWindow ? "game-window" : "monitor")
+                  << ".\n";
         return { true, {} };
     } catch (const winrt::hresult_error& error) {
         return { false, "WGC start failed: " + narrow(error.message().c_str()) };

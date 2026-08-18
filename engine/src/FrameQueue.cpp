@@ -33,6 +33,14 @@ std::optional<CapturedFrame> FrameQueue::waitPop() {
     frames_.pop_front();
     return frame;
 }
+std::optional<CapturedFrame> FrameQueue::waitPopFor(std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    cv_.wait_for(lock, timeout, [this] { return stopped_ || !frames_.empty(); });
+    if (frames_.empty()) return std::nullopt;
+    auto frame = std::move(frames_.front());
+    frames_.pop_front();
+    return frame;
+}
 
 std::optional<CapturedFrame> FrameQueue::consumeAllAndGetLatest() {
     std::lock_guard lock(mutex_);

@@ -3,6 +3,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -21,6 +22,8 @@ struct CapturedFrame {
     int64_t queuedAtSteady100ns = 0;
     uint64_t captureEpoch = 0;
     uint64_t sequence = 0;
+    bool sourceHadDesktopPresent = false;
+    bool sourceHadPointerUpdate = false;
 };
 
 struct FrameQueueStats {
@@ -37,6 +40,7 @@ public:
 
     void push(CapturedFrame frame);
     std::optional<CapturedFrame> waitPop();
+    std::optional<CapturedFrame> waitPopFor(std::chrono::milliseconds timeout);
     std::optional<CapturedFrame> consumeAllAndGetLatest();
     std::optional<CapturedFrame> consumeLatestAtOrBefore(int64_t pts100ns);
     void stop();

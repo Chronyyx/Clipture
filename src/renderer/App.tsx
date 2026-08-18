@@ -1,4 +1,4 @@
-import { Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Clock, Download, Edit3, ExternalLink, Feather, FolderOpen, Gamepad2, Leaf, Library, Maximize2, Mic, Minus, Moon, Paintbrush, Palette, Pause, Play, Plus, RefreshCw, Save, Search, SlidersHorizontal, Sun, Trash2, Upload, Volume2, X } from "lucide-react";
+import { Activity, Check, CheckSquare2, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Clock, Download, Edit3, ExternalLink, Feather, FolderOpen, Gamepad2, Leaf, Library, Maximize2, Mic, Minus, Moon, Paintbrush, Palette, Pause, Play, Plus, RefreshCw, Save, Search, SlidersHorizontal, Square, Sun, Trash2, Upload, Volume2, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 // @ts-ignore
 import logoUrl from "../../assets/svgviewer-output.svg";
@@ -19,6 +19,8 @@ const defaultDiagnostics: EngineDiagnostics = {
   requestedCaptureBackend: "auto",
   activeCaptureBackend: "none",
   captureFallbackReason: "",
+  captureTargetKind: "monitor",
+  captureTargetName: "Primary display",
   displayRefreshNumerator: 0,
   displayRefreshDenominator: 1,
   displayRefreshHz: 0,
@@ -31,16 +33,33 @@ const defaultDiagnostics: EngineDiagnostics = {
   captureSamplerRejections: 0,
   captureNonMonotonicTimestamps: 0,
   captureAcquireTimeouts: 0,
+  captureAcquireImmediateMisses: 0,
+  captureAcquireGraceHits: 0,
+  captureAcquireGraceTimeouts: 0,
   captureAccessLosses: 0,
   captureRecreationAttempts: 0,
   captureRecreationSuccesses: 0,
   captureFallbacks: 0,
+  captureClockMode: "capture-sampled",
+  captureClockTickRequests: 0,
+  captureClockTickWakeups: 0,
+  captureClockTickCoalesced: 0,
+  captureClockTickCompletions: 0,
+  captureClockTickCompletionWaits: 0,
+  captureClockTickCompletionTimeouts: 0,
   desktopPresentFps: 0,
   publishedFreshFps: 0,
   recentPublishedFreshFps: 0,
   recentEncoderInputFps: 0,
   recentEncoderOutputFps: 0,
+  recentEncoderDistinctSourceFps: 0,
   encodedRepeatRatio: 0,
+  stillFrameDuplicationEnabled: false,
+  encoderDistinctSourceFrames: 0,
+  encoderRepeatedSourceFrames: 0,
+  encoderUnknownSourceFrames: 0,
+  recentEncoderRepeatedSourceFrames: 0,
+  recentEncoderUnknownSourceFrames: 0,
   activeEncoder: "Unavailable",
   encoderMode: "Unavailable",
   gpu: "Loading",
@@ -72,6 +91,28 @@ const defaultDiagnostics: EngineDiagnostics = {
     nvencInputDrops: 0,
     encoderBackpressureDrops: 0,
     nvencInFlightFrames: 0,
+    recentDropWindowMs: 0,
+    recentDroppedFrames: 0,
+    recentCaptureOverflowDrops: 0,
+    recentCaptureSlotDrops: 0,
+    recentSchedulerDroppedFrames: 0,
+    recentEncoderBackpressureDrops: 0,
+    recentEncoderBackpressureOtherDrops: 0,
+    recentCaptureCallbackErrors: 0,
+    recentCaptureCoalescedDrops: 0,
+    recentSourceFramesSuperseded: 0,
+    recentCaptureSamplerRejections: 0,
+    recentCaptureNonMonotonicTimestamps: 0,
+    recentCaptureAcquireTimeouts: 0,
+    recentCaptureAccessLosses: 0,
+    recentCaptureFallbacks: 0,
+    recentSchedulerRepeatedFrames: 0,
+    recentEncoderQueueDrops: 0,
+    recentEncoderRepeatCoalesced: 0,
+    recentNvencSurfaceDrops: 0,
+    recentNvencInputDrops: 0,
+    recentDropDominantReason: "none",
+  recentVisualFreshnessBottleneck: "collecting",
   maximumCaptureGap100ns: 0,
   maximumSubmitLatency100ns: 0,
   averageScaleLatency100ns: 0,
@@ -83,11 +124,23 @@ const defaultDiagnostics: EngineDiagnostics = {
   averageOutputDrainLatency100ns: 0,
   maximumOutputDrainLatency100ns: 0,
   recentCaptureAcquireP95_100ns: 0,
+  recentCaptureSourceIntervalP50_100ns: 0,
+  recentCaptureSourceIntervalP95_100ns: 0,
+  recentCaptureSourceIntervalMaximum100ns: 0,
+  recentPublishedPtsIntervalP50_100ns: 0,
+  recentPublishedPtsIntervalP95_100ns: 0,
+  recentPublishedPtsIntervalMaximum100ns: 0,
+  recentPublishedWallIntervalP50_100ns: 0,
+  recentPublishedWallIntervalP95_100ns: 0,
+  recentPublishedWallIntervalMaximum100ns: 0,
   recentCapturePreparationP50_100ns: 0,
   recentCapturePreparationP95_100ns: 0,
   recentCaptureCursorP95_100ns: 0,
   recentCaptureProcessingP50_100ns: 0,
   recentCaptureProcessingP95_100ns: 0,
+  recentSchedulerWakeLatenessP50_100ns: 0,
+  recentSchedulerWakeLatenessP95_100ns: 0,
+  recentSchedulerWakeLatenessMaximum100ns: 0,
   recentInputPreparationP50_100ns: 0,
   recentInputPreparationP95_100ns: 0,
   recentInputMapP50_100ns: 0,
@@ -99,6 +152,15 @@ const defaultDiagnostics: EngineDiagnostics = {
   recentOutputLockP95_100ns: 0,
   recentOutputCopyP95_100ns: 0,
   recentOutputUnmapP95_100ns: 0,
+  recentEncoderQueueResidenceP50_100ns: 0,
+  recentEncoderQueueResidenceP95_100ns: 0,
+  recentEncoderQueueResidenceMaximum100ns: 0,
+  recentEncoderInputIntervalP50_100ns: 0,
+  recentEncoderInputIntervalP95_100ns: 0,
+  recentEncoderInputIntervalMaximum100ns: 0,
+  recentEncoderOutputIntervalP50_100ns: 0,
+  recentEncoderOutputIntervalP95_100ns: 0,
+  recentEncoderOutputIntervalMaximum100ns: 0,
   nvencZeroCopyFrames: 0,
   nvencCopyFallbackFrames: 0,
   nvencConvertedFrames: 0,
@@ -135,7 +197,33 @@ const defaultDiagnostics: EngineDiagnostics = {
     encoderOutputPackets: 0,
     audioCapturedPackets: 0,
     bufferDurationSeconds: 0,
-    degraded: true,
+    lastClipCadence: {
+      available: false,
+      targetFps: 0,
+      span100ns: 0,
+      targetFrameDuration100ns: 0,
+      maximumSampleGap100ns: 0,
+      expectedOutputTicks: 0,
+      sampleCount: 0,
+      distinctSourceFrames: 0,
+      repeatedSourceFrames: 0,
+      unknownSourceFrames: 0,
+      desktopPresentSourceFrames: 0,
+      pointerOnlySourceFrames: 0,
+      unknownUpdateKindSourceFrames: 0,
+      longestHeldRunSamples: 0,
+      gapEvents: 0,
+      missingFrameSlots: 0,
+      underTargetSeconds: 0,
+      underTargetDesktopPresentSeconds: 0,
+      distinctSourceFps: 0,
+      desktopPresentSourceFps: 0,
+      repeatRatio: 0,
+      worstSecondDistinctSourceFps: 0,
+      worstSecondDesktopPresentSourceFps: 0,
+      buckets: []
+    },    degraded: true,
+
     status: "Connecting to native engine"
 };
 
@@ -770,7 +858,6 @@ function LibraryView({
     });
   }, [folderFilter, query, settings, tabClips]);
 
-  const isEditorialLibrary = settings?.uiTheme === "glitten";
   const editorialPreviewClip = filteredClips.find((clip) => clip.id === editorialPreviewId)
     ?? filteredClips[0];
 
@@ -913,7 +1000,6 @@ function LibraryView({
                   className="secondary-button select-clips-button"
                   type="button"
                   onClick={() => {
-                    if (!isEditorialLibrary) setSelectedClip(undefined);
                     setSelectionMode(true);
                   }}
                 >
@@ -933,7 +1019,7 @@ function LibraryView({
             actionLabel={libraryTab === "clips" ? "Save your first clip" : "Import videos"}
             onAction={libraryTab === "clips" ? onSaveClip : handleImportVideos}
           />
-        ) : isEditorialLibrary && editorialPreviewClip ? (
+        ) : editorialPreviewClip ? (
           selectedClip ? (
             <ClipPlayer
               clip={selectedClip}
@@ -960,34 +1046,7 @@ function LibraryView({
               selectionMode={selectionMode}
             />
           )
-        ) : (
-          <>
-            {selectedClip && (
-              <ClipPlayer
-                clip={selectedClip}
-                onClose={() => setSelectedClip(undefined)}
-                settings={settings}
-              />
-            )}
-            <div className="clip-grid">
-              {filteredClips.map((clip) => (
-                <ClipCard
-                  clip={clip}
-                  isActive={selectedClip?.id === clip.id}
-                  isSelected={selectedClipIds.has(clip.id)}
-                  key={clip.id}
-                  onPlay={() => {
-                    setEditorialPreviewId(clip.id);
-                    setSelectedClip(clip);
-                  }}
-                  onToggleSelected={() => toggleClipSelection(clip.id)}
-                  selectionMode={selectionMode}
-                  settings={settings}
-                />
-              ))}
-            </div>
-          </>
-        )}
+        ) : null}
       </section>
     </div>
   );
@@ -1268,7 +1327,7 @@ function ClipRailItem({
   selectionMode: boolean;
 }) {
   const [thumbnailUrl, setThumbnailUrl] = useState("");
-  const [itemRef, loadMedia] = useNearViewport<HTMLButtonElement>(20);
+  const [itemRef, loadMedia] = useNearViewport<HTMLDivElement>(20);
   const createdAt = parseClipDate(clip.createdAt);
   const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
 
@@ -1293,7 +1352,7 @@ function ClipRailItem({
   }, [active]);
 
   return (
-    <button
+    <div
       ref={itemRef}
       className={[
         "clip-rail-item",
@@ -1301,29 +1360,42 @@ function ClipRailItem({
         selected ? "selected" : "",
         selectionMode ? "selectable" : ""
       ].filter(Boolean).join(" ")}
-      type="button"
       aria-current={active ? "true" : undefined}
-      aria-pressed={selectionMode ? selected : undefined}
-      onClick={selectionMode ? onToggleSelected : onSelect}
     >
-      <span className="clip-rail-thumbnail">
-        {selectionMode && (
-          <span className={selected ? "clip-select-box checked" : "clip-select-box"} aria-hidden="true">
-            {selected && <Check size={18} />}
-          </span>
-        )}
-        {thumbnailUrl
-          ? <img src={thumbnailUrl} alt="" loading="lazy" decoding="async" />
-          : <span className="thumbnail-skeleton" aria-hidden="true" />}
-        {clip.durationSeconds > 0 && (
-          <span className="clip-rail-duration">{formatDuration(clip.durationSeconds)}</span>
-        )}
-      </span>
-      <span className="clip-rail-copy">
-        <strong>{displayTitle}</strong>
-        <span>{formatClipDate(createdAt)} | {formatClipTime(createdAt)}</span>
-      </span>
-    </button>
+      <button
+        className="clip-rail-open-button"
+        type="button"
+        aria-pressed={selectionMode ? selected : undefined}
+        onClick={selectionMode ? onToggleSelected : onSelect}
+      >
+        <span className="clip-rail-thumbnail">
+          {selectionMode && (
+            <span className={selected ? "clip-select-box checked" : "clip-select-box"} aria-hidden="true">
+              {selected && <Check size={18} />}
+            </span>
+          )}
+          {thumbnailUrl
+            ? <img src={thumbnailUrl} alt="" loading="lazy" decoding="async" />
+            : <span className="thumbnail-skeleton" aria-hidden="true" />}
+          {clip.durationSeconds > 0 && (
+            <span className="clip-rail-duration">{formatDuration(clip.durationSeconds)}</span>
+          )}
+        </span>
+        <span className="clip-rail-copy">
+          <strong>{displayTitle}</strong>
+          <span>{formatClipDate(createdAt)} | {formatClipTime(createdAt)}</span>
+        </span>
+      </button>
+      <button
+        className="icon-button clip-rail-folder-button"
+        type="button"
+        title="Reveal clip in folder"
+        aria-label={`Reveal ${displayTitle} in folder`}
+        onClick={() => window.clipture.revealClip(clip.filePath)}
+      >
+        <FolderOpen size={17} />
+      </button>
+    </div>
   );
 }
 
@@ -1332,7 +1404,6 @@ function LibraryPlayerSidebar({
   railClips,
   settings,
   onSelectClip,
-  onClose,
   onToggleSelected,
   selectedClipIds,
   selectionMode = false
@@ -1341,16 +1412,33 @@ function LibraryPlayerSidebar({
   railClips: ClipRecord[];
   settings?: ClipSettings;
   onSelectClip: (clip: ClipRecord) => void;
-  onClose?: () => void;
   onToggleSelected?: (clipId: string) => void;
   selectedClipIds?: ReadonlySet<string>;
   selectionMode?: boolean;
 }) {
   const createdAt = parseClipDate(clip.createdAt);
   const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editTitle, setEditTitle] = useState(displayTitle);
   const sourceLabels = useMemo(() => clipSourceLabels(clip, settings), [clip, settings]);
   const sourceText = sourceLabels.length > 0 ? sourceLabels.join(", ") : clip.gameOrApp;
   const iconUrl = useClipIconUrl(clip, sourceLabels);
+
+  useEffect(() => {
+    if (!isEditingTitle) setEditTitle(displayTitle);
+  }, [clip.id, displayTitle, isEditingTitle]);
+
+  const handleRename = async () => {
+    const newTitle = editTitle.trim() || "Clipture";
+    if (newTitle !== displayTitle) {
+      const success = await window.clipture.renameClip(clip.id, newTitle);
+      if (success) clip.title = newTitle;
+      else setEditTitle(displayTitle);
+    } else {
+      setEditTitle(displayTitle);
+    }
+    setIsEditingTitle(false);
+  };
 
   return (
     <aside className="library-player-sidebar">
@@ -1358,13 +1446,43 @@ function LibraryPlayerSidebar({
         <div className="library-player-side-title-row">
           <h2 className="library-player-side-title">
             {iconUrl && <img className="clip-app-icon" src={iconUrl} alt="" />}
-            <span>{displayTitle}</span>
+            {isEditingTitle ? (
+              <input
+                className="library-player-title-input"
+                type="text"
+                value={editTitle}
+                autoFocus
+                aria-label="Clip title"
+                onChange={(event) => setEditTitle(event.target.value)}
+                onFocus={(event) => event.currentTarget.select()}
+                onBlur={() => void handleRename()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    event.currentTarget.blur();
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setEditTitle(displayTitle);
+                    setIsEditingTitle(false);
+                  }
+                }}
+              />
+            ) : (
+              <span className="library-player-title-copy">
+                <span>{displayTitle}</span>
+                <button
+                  className="icon-button library-player-title-edit-button"
+                  type="button"
+                  title="Rename clip"
+                  aria-label={`Rename ${displayTitle}`}
+                  onClick={() => setIsEditingTitle(true)}
+                >
+                  <Edit3 size={15} />
+                </button>
+              </span>
+            )}
           </h2>
-          {onClose && (
-            <button className="icon-button" title="Close player" onClick={onClose}>
-              <X size={17} />
-            </button>
-          )}
         </div>
         <p>{sourceText}</p>
         <div className="library-player-side-meta">
@@ -2368,7 +2486,6 @@ function ClipPlayer({
           railClips={railClips}
           settings={settings}
           onSelectClip={onSelectClip}
-          onClose={onClose}
           onToggleSelected={onToggleSelected}
           selectedClipIds={selectedClipIds}
           selectionMode={selectionMode}
@@ -3645,17 +3762,54 @@ function SettingsView({
   );
 }
 
+const diagnosticsPreferencesStorageKey = "clipture:diagnostics-preferences:v1";
+
+type DiagnosticsPreferences = {
+  selectedLabels: string[];
+  selectedOnly: boolean;
+};
+
+function readDiagnosticsPreferences(): DiagnosticsPreferences {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(diagnosticsPreferencesStorageKey) ?? "null") as Partial<DiagnosticsPreferences> | null;
+    return {
+      selectedLabels: Array.isArray(parsed?.selectedLabels)
+        ? parsed.selectedLabels.filter((label): label is string => typeof label === "string")
+        : [],
+      selectedOnly: parsed?.selectedOnly === true
+    };
+  } catch {
+    return { selectedLabels: [], selectedOnly: false };
+  }
+}
+
 function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
+  const [metricQuery, setMetricQuery] = useState("");
+  const [preferences, setPreferences] = useState<DiagnosticsPreferences>(readDiagnosticsPreferences);
   const replayMiB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-  const entries = [
+  const recentDropSeconds = diagnostics.recentDropWindowMs > 0
+    ? (diagnostics.recentDropWindowMs / 1000).toFixed(1)
+    : "0.0";
+  const lastClipCadence = diagnostics.lastClipCadence ?? defaultDiagnostics.lastClipCadence;
+  const intervalMs = (value100ns: number) => `${((value100ns ?? 0) / 10_000).toFixed(2)} ms`;
+  const entries: Array<[string, string]> = [
     ["Capture API", diagnostics.captureApi],
     ["Requested capture backend", diagnostics.requestedCaptureBackend],
     ["Active capture backend", diagnostics.activeCaptureBackend],
     ["Capture fallback", diagnostics.captureFallbackReason || "None"],
+    ["Capture target", diagnostics.captureTargetKind + ": " + diagnostics.captureTargetName],
+    ["Capture clock", diagnostics.captureClockMode],
+    ["Capture clock requests / wakes / coalesced", String(diagnostics.captureClockTickRequests) + " / " + String(diagnostics.captureClockTickWakeups) + " / " + String(diagnostics.captureClockTickCoalesced)],
+    ["Same-tick capture completions / waits / timeouts", String(diagnostics.captureClockTickCompletions) + " / " + String(diagnostics.captureClockTickCompletionWaits) + " / " + String(diagnostics.captureClockTickCompletionTimeouts)],
     ["Display refresh", `${diagnostics.displayRefreshHz.toFixed(3)} Hz (${diagnostics.displayRefreshNumerator}/${diagnostics.displayRefreshDenominator})`],
     ["Desktop present rate", `${diagnostics.desktopPresentFps.toFixed(2)} FPS`],
     ["Published fresh rate", `${diagnostics.publishedFreshFps.toFixed(2)} FPS`],
     ["Recent capture / encoder in / encoder out", `${diagnostics.recentPublishedFreshFps.toFixed(2)} / ${diagnostics.recentEncoderInputFps.toFixed(2)} / ${diagnostics.recentEncoderOutputFps.toFixed(2)} FPS`],
+    ["Visual freshness bottleneck", diagnostics.recentVisualFreshnessBottleneck ?? "collecting"],
+    ["Still-frame duplication", diagnostics.stillFrameDuplicationEnabled ? "Enabled" : "Disabled (diagnostic build)"],
+    ["Recent distinct source output", `${(diagnostics.recentEncoderDistinctSourceFps ?? 0).toFixed(2)} FPS`],
+    ["Recent encoded source repeats / unknown", `${diagnostics.recentEncoderRepeatedSourceFrames ?? 0} / ${diagnostics.recentEncoderUnknownSourceFrames ?? 0}`],
+    ["Encoded source totals distinct / repeat / unknown", `${diagnostics.encoderDistinctSourceFrames ?? 0} / ${diagnostics.encoderRepeatedSourceFrames ?? 0} / ${diagnostics.encoderUnknownSourceFrames ?? 0}`],
     ["Encoded repeat ratio", `${(diagnostics.encodedRepeatRatio * 100).toFixed(2)}%`],
     ["Capture updates acquired", String(diagnostics.captureAcquiredUpdates)],
     ["Desktop presents", String(diagnostics.captureDesktopPresents)],
@@ -3666,6 +3820,7 @@ function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
     ["Sampler rejections", String(diagnostics.captureSamplerRejections)],
     ["Non-monotonic timestamps", String(diagnostics.captureNonMonotonicTimestamps)],
     ["Acquire timeouts", String(diagnostics.captureAcquireTimeouts)],
+    ["DXGI immediate misses / grace hits / grace timeouts", `${diagnostics.captureAcquireImmediateMisses} / ${diagnostics.captureAcquireGraceHits} / ${diagnostics.captureAcquireGraceTimeouts}`],
     ["DXGI access losses", String(diagnostics.captureAccessLosses)],
     ["DXGI recreation attempts", String(diagnostics.captureRecreationAttempts)],
     ["DXGI recreation successes", String(diagnostics.captureRecreationSuccesses)],
@@ -3711,20 +3866,27 @@ function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
     ["PCM recovery", diagnostics.pcmRecoveryActive ? "Active" : "Standby"],
     ["Replay archive write failures", String(diagnostics.replayArchiveWriteFailures)],
     ["Replay archive max write", replayMiB(diagnostics.replayArchiveMaximumWriteBytes)],
-    ["Dropped frames", String(diagnostics.droppedFrames)],
-    ["Capture overflow", String(diagnostics.captureOverflowDrops)],
+    ["Recent reported drops", `${diagnostics.recentDroppedFrames} (${recentDropSeconds}s window)`],
+    ["Recent dominant drop reason", diagnostics.recentDropDominantReason],
+    ["Recent counted reasons", `capture queue ${diagnostics.recentCaptureOverflowDrops} / slots ${diagnostics.recentCaptureSlotDrops} / scheduler ${diagnostics.recentSchedulerDroppedFrames} / encoder ${diagnostics.recentEncoderBackpressureDrops}`],
+    ["Recent capture indicators", `callbacks ${diagnostics.recentCaptureCallbackErrors} / sampler rejects ${diagnostics.recentCaptureSamplerRejections} / timeouts ${diagnostics.recentCaptureAcquireTimeouts} / non-monotonic ${diagnostics.recentCaptureNonMonotonicTimestamps}`],
+    ["Recent source churn", `coalesced ${diagnostics.recentCaptureCoalescedDrops} / superseded ${diagnostics.recentSourceFramesSuperseded} / CFR repeats ${diagnostics.recentSchedulerRepeatedFrames}`],
+    ["Recent encoder backpressure detail", `queue ${diagnostics.recentEncoderQueueDrops} / surfaces ${diagnostics.recentNvencSurfaceDrops} / input ${diagnostics.recentNvencInputDrops} / other ${diagnostics.recentEncoderBackpressureOtherDrops}`],
+    ["Recent capture recovery", `access losses ${diagnostics.recentCaptureAccessLosses} / fallbacks ${diagnostics.recentCaptureFallbacks}`],
+    ["Reported dropped frames (total)", String(diagnostics.droppedFrames)],
+    ["Capture queue overflow (counted)", String(diagnostics.captureOverflowDrops)],
     ["Source frames superseded", String(diagnostics.sourceFramesSuperseded)],
     ["Capture queue coalesced", String(diagnostics.captureCoalescedDrops)],
-    ["Owned-slot drops", String(diagnostics.captureSlotDrops)],
+    ["Capture slot exhaustion (counted)", String(diagnostics.captureSlotDrops)],
     ["Capture callback errors", String(diagnostics.captureCallbackErrors)],
-    ["Scheduler skips", String(diagnostics.schedulerDroppedFrames)],
+    ["Scheduler deadline misses (counted)", String(diagnostics.schedulerDroppedFrames)],
     ["Scheduler repeats", String(diagnostics.schedulerRepeatedFrames)],
     ["Encoder queue drops", String(diagnostics.encoderQueueDrops)],
     ["Encoder repeats coalesced", String(diagnostics.encoderRepeatCoalesced)],
     ["Encoder queued fresh / repeats", `${diagnostics.encoderQueuedFreshFrames} / ${diagnostics.encoderQueuedRepeatFrames}`],
     ["NVENC surface drops", String(diagnostics.nvencSurfaceDrops)],
     ["NVENC input drops", String(diagnostics.nvencInputDrops)],
-    ["Encoder backpressure", String(diagnostics.encoderBackpressureDrops)],
+    ["Encoder backpressure (counted)", String(diagnostics.encoderBackpressureDrops)],
     ["NVENC in flight", String(diagnostics.nvencInFlightFrames)],
     ["Maximum capture gap", `${(diagnostics.maximumCaptureGap100ns / 10_000).toFixed(1)} ms`],
     ["Maximum submit latency", `${(diagnostics.maximumSubmitLatency100ns / 10_000).toFixed(1)} ms`],
@@ -3733,6 +3895,13 @@ function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
     ["NVENC call latency avg / max", `${(diagnostics.averageNvencCallLatency100ns / 10_000).toFixed(2)} / ${(diagnostics.maximumNvencCallLatency100ns / 10_000).toFixed(2)} ms`],
     ["Output drain latency avg / max", `${(diagnostics.averageOutputDrainLatency100ns / 10_000).toFixed(2)} / ${(diagnostics.maximumOutputDrainLatency100ns / 10_000).toFixed(2)} ms`],
     ["Capture acquire recent p95", `${(diagnostics.recentCaptureAcquireP95_100ns / 10_000).toFixed(2)} ms`],
+    ["Source update interval recent p50 / p95 / max", `${intervalMs(diagnostics.recentCaptureSourceIntervalP50_100ns)} / ${intervalMs(diagnostics.recentCaptureSourceIntervalP95_100ns)} / ${intervalMs(diagnostics.recentCaptureSourceIntervalMaximum100ns)}`],
+    ["Published PTS interval recent p50 / p95 / max", `${intervalMs(diagnostics.recentPublishedPtsIntervalP50_100ns)} / ${intervalMs(diagnostics.recentPublishedPtsIntervalP95_100ns)} / ${intervalMs(diagnostics.recentPublishedPtsIntervalMaximum100ns)}`],
+    ["Published wall interval recent p50 / p95 / max", `${intervalMs(diagnostics.recentPublishedWallIntervalP50_100ns)} / ${intervalMs(diagnostics.recentPublishedWallIntervalP95_100ns)} / ${intervalMs(diagnostics.recentPublishedWallIntervalMaximum100ns)}`],
+    ["Scheduler wake lateness recent p50 / p95 / max", `${intervalMs(diagnostics.recentSchedulerWakeLatenessP50_100ns)} / ${intervalMs(diagnostics.recentSchedulerWakeLatenessP95_100ns)} / ${intervalMs(diagnostics.recentSchedulerWakeLatenessMaximum100ns)}`],
+    ["Encoder queue residence recent p50 / p95 / max", `${intervalMs(diagnostics.recentEncoderQueueResidenceP50_100ns)} / ${intervalMs(diagnostics.recentEncoderQueueResidenceP95_100ns)} / ${intervalMs(diagnostics.recentEncoderQueueResidenceMaximum100ns)}`],
+    ["Encoder input interval recent p50 / p95 / max", `${intervalMs(diagnostics.recentEncoderInputIntervalP50_100ns)} / ${intervalMs(diagnostics.recentEncoderInputIntervalP95_100ns)} / ${intervalMs(diagnostics.recentEncoderInputIntervalMaximum100ns)}`],
+    ["Encoder output interval recent p50 / p95 / max", `${intervalMs(diagnostics.recentEncoderOutputIntervalP50_100ns)} / ${intervalMs(diagnostics.recentEncoderOutputIntervalP95_100ns)} / ${intervalMs(diagnostics.recentEncoderOutputIntervalMaximum100ns)}`],
     ["Capture preparation recent p50 / p95", `${(diagnostics.recentCapturePreparationP50_100ns / 10_000).toFixed(2)} / ${(diagnostics.recentCapturePreparationP95_100ns / 10_000).toFixed(2)} ms`],
     ["Cursor composite recent p95", `${(diagnostics.recentCaptureCursorP95_100ns / 10_000).toFixed(2)} ms`],
     ["Capture processing recent p50 / p95", `${(diagnostics.recentCaptureProcessingP50_100ns / 10_000).toFixed(2)} / ${(diagnostics.recentCaptureProcessingP95_100ns / 10_000).toFixed(2)} ms`],
@@ -3742,18 +3911,110 @@ function DiagnosticsView({ diagnostics }: { diagnostics: EngineDiagnostics }) {
     ["Output event wait recent p50 / p95", `${(diagnostics.recentOutputEventWaitP50_100ns / 10_000).toFixed(2)} / ${(diagnostics.recentOutputEventWaitP95_100ns / 10_000).toFixed(2)} ms`],
     ["Output lock / copy / unmap recent p95", `${(diagnostics.recentOutputLockP95_100ns / 10_000).toFixed(2)} / ${(diagnostics.recentOutputCopyP95_100ns / 10_000).toFixed(2)} / ${(diagnostics.recentOutputUnmapP95_100ns / 10_000).toFixed(2)} ms`],
     ["NVENC input paths zero-copy / copied / converted", `${diagnostics.nvencZeroCopyFrames} / ${diagnostics.nvencCopyFallbackFrames} / ${diagnostics.nvencConvertedFrames}`],
+    ["Last clip distinct source rate", lastClipCadence.available ? `${lastClipCadence.distinctSourceFps.toFixed(2)} / ${lastClipCadence.targetFps} FPS` : "Save a clip to analyze"],
+    ["Last clip desktop-present source rate", lastClipCadence.available ? `${lastClipCadence.desktopPresentSourceFps.toFixed(2)} / ${lastClipCadence.targetFps} FPS` : "Not available"],
+    ["Last clip worst distinct / desktop-present second", lastClipCadence.available ? `${lastClipCadence.worstSecondDistinctSourceFps.toFixed(2)} / ${lastClipCadence.worstSecondDesktopPresentSourceFps.toFixed(2)} FPS` : "Not available"],
+    ["Last clip low distinct / desktop-present seconds", lastClipCadence.available ? `${lastClipCadence.underTargetSeconds} / ${lastClipCadence.underTargetDesktopPresentSeconds}` : "Not available"],
+    ["Last clip samples distinct / repeat / unknown", lastClipCadence.available ? `${lastClipCadence.distinctSourceFrames} / ${lastClipCadence.repeatedSourceFrames} / ${lastClipCadence.unknownSourceFrames}` : "Not available"],
+    ["Last clip source updates desktop / pointer-only / unknown", lastClipCadence.available ? `${lastClipCadence.desktopPresentSourceFrames} / ${lastClipCadence.pointerOnlySourceFrames} / ${lastClipCadence.unknownUpdateKindSourceFrames}` : "Not available"],
+    ["Last clip held run / missing slots", lastClipCadence.available ? `${lastClipCadence.longestHeldRunSamples} samples / ${lastClipCadence.missingFrameSlots}` : "Not available"],
+    ["Last clip maximum sample gap", lastClipCadence.available ? intervalMs(lastClipCadence.maximumSampleGap100ns) : "Not available"],
     ["Capture epoch", String(diagnostics.captureEpoch)],
     ["Capture pressure", diagnostics.capturePressure]
   ];
 
+  const selectedLabels = new Set(preferences.selectedLabels);
+  const normalizedQuery = metricQuery.trim().toLocaleLowerCase();
+  const visibleEntries = entries.filter(([label, value]) => {
+    if (preferences.selectedOnly && !selectedLabels.has(label)) return false;
+    return !normalizedQuery || `${label} ${value}`.toLocaleLowerCase().includes(normalizedQuery);
+  });
+  const selectedCount = entries.reduce(
+    (count, [label]) => count + (selectedLabels.has(label) ? 1 : 0),
+    0
+  );
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(diagnosticsPreferencesStorageKey, JSON.stringify(preferences));
+    } catch {
+      // Preference persistence is optional when renderer storage is unavailable.
+    }
+  }, [preferences]);
+
+  const toggleMetric = (label: string) => {
+    setPreferences((current) => {
+      const nextLabels = new Set(current.selectedLabels);
+      if (nextLabels.has(label)) nextLabels.delete(label);
+      else nextLabels.add(label);
+      return { ...current, selectedLabels: [...nextLabels] };
+    });
+  };
+
   return (
-    <section className="diagnostics panel">
-      {entries.map(([label, value]) => (
-        <div className="metric" key={label}>
-          <span>{label}</span>
-          <strong>{value}</strong>
+    <section className="diagnostics-view">
+      <div className="diagnostics-toolbar">
+        <label className="diagnostics-search">
+          <Search size={18} aria-hidden="true" />
+          <input
+            aria-label="Search diagnostics"
+            placeholder="Search diagnostics or values"
+            type="search"
+            value={metricQuery}
+            onChange={(event) => setMetricQuery(event.target.value)}
+          />
+        </label>
+        <div className="diagnostics-toolbar-actions">
+          <span className="diagnostics-count">{visibleEntries.length} of {entries.length} shown | {selectedCount} selected</span>
+          {selectedCount > 0 && (
+            <button
+              className="diagnostics-clear"
+              type="button"
+              onClick={() => setPreferences((current) => ({ ...current, selectedLabels: [] }))}
+            >
+              Clear
+            </button>
+          )}
+          <label className="diagnostics-selected-only">
+            <span>Selected only</span>
+            <input
+              aria-label="Show selected diagnostics only"
+              className="toggle-switch"
+              type="checkbox"
+              checked={preferences.selectedOnly}
+              onChange={(event) => setPreferences((current) => ({ ...current, selectedOnly: event.target.checked }))}
+            />
+          </label>
         </div>
-      ))}
+      </div>
+
+      <div className="diagnostics panel">
+        {visibleEntries.map(([label, value]) => {
+          const selected = selectedLabels.has(label);
+          return (
+            <div className={selected ? "metric selected" : "metric"} key={label}>
+              <button
+                aria-label={selected ? `Remove ${label} from selected diagnostics` : `Select ${label}`}
+                aria-pressed={selected}
+                className="metric-selection"
+                title={selected ? "Remove from selected diagnostics" : "Keep in selected diagnostics"}
+                type="button"
+                onClick={() => toggleMetric(label)}
+              >
+                {selected ? <CheckSquare2 size={18} /> : <Square size={18} />}
+              </button>
+              <span>{label}</span>
+              <strong>{value}</strong>
+            </div>
+          );
+        })}
+        {visibleEntries.length === 0 && (
+          <div className="diagnostics-empty">
+            <strong>No diagnostics match this view</strong>
+            <span>{preferences.selectedOnly && selectedCount === 0 ? "Select metrics from the All view first." : "Try a different search."}</span>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

@@ -300,7 +300,7 @@ Diagnostics collectDiagnostics() {
     diagnostics.microphoneDevice = defaultEndpointName(eCapture);
     diagnostics.nvencAvailable = nvenc;
     diagnostics.activeEncoder = nvenc ? EncoderName::Nvenc : EncoderName::Unavailable;
-    diagnostics.encoderMode = nvenc ? "NVENC P3 (async with sync compatibility fallback)" : "Unavailable";
+    diagnostics.encoderMode = nvenc ? "NVENC P3 (buffered sync preferred; async compatibility fallback)" : "Unavailable";
     diagnostics.hardwareAcceleration = nvenc;
     diagnostics.degraded = !nvenc;
     diagnostics.status = nvenc
@@ -473,6 +473,53 @@ std::pair<int, int> maxDisplayDimensions() {
 }
 
 
+void writeVideoCadenceJson(std::ostringstream& out, const VideoCadenceAnalysis& cadence) {
+    out << "{"
+        << "\"available\":" << (cadence.available ? "true" : "false") << ","
+        << "\"targetFps\":" << cadence.targetFps << ","
+        << "\"span100ns\":" << cadence.span100ns << ","
+        << "\"targetFrameDuration100ns\":" << cadence.targetFrameDuration100ns << ","
+        << "\"maximumSampleGap100ns\":" << cadence.maximumSampleGap100ns << ","
+        << "\"expectedOutputTicks\":" << cadence.expectedOutputTicks << ","
+        << "\"sampleCount\":" << cadence.sampleCount << ","
+        << "\"distinctSourceFrames\":" << cadence.distinctSourceFrames << ","
+        << "\"repeatedSourceFrames\":" << cadence.repeatedSourceFrames << ","
+        << "\"unknownSourceFrames\":" << cadence.unknownSourceFrames << ","
+        << "\"desktopPresentSourceFrames\":" << cadence.desktopPresentSourceFrames << ","
+        << "\"pointerOnlySourceFrames\":" << cadence.pointerOnlySourceFrames << ","
+        << "\"unknownUpdateKindSourceFrames\":" << cadence.unknownUpdateKindSourceFrames << ","
+        << "\"longestHeldRunSamples\":" << cadence.longestHeldRunSamples << ","
+        << "\"gapEvents\":" << cadence.gapEvents << ","
+        << "\"missingFrameSlots\":" << cadence.missingFrameSlots << ","
+        << "\"underTargetSeconds\":" << cadence.underTargetSeconds << ","
+        << "\"underTargetDesktopPresentSeconds\":" << cadence.underTargetDesktopPresentSeconds << ","
+        << "\"distinctSourceFps\":" << cadence.distinctSourceFps << ","
+        << "\"desktopPresentSourceFps\":" << cadence.desktopPresentSourceFps << ","
+        << "\"repeatRatio\":" << cadence.repeatRatio << ","
+        << "\"worstSecondDistinctSourceFps\":" << cadence.worstSecondDistinctSourceFps << ","
+        << "\"worstSecondDesktopPresentSourceFps\":" << cadence.worstSecondDesktopPresentSourceFps << ","
+        << "\"buckets\":[";
+    for (std::size_t index = 0; index < cadence.buckets.size(); ++index) {
+        if (index > 0) out << ",";
+        const auto& bucket = cadence.buckets[index];
+        out << "{"
+            << "\"secondIndex\":" << bucket.secondIndex << ","
+            << "\"duration100ns\":" << bucket.duration100ns << ","
+            << "\"sampleCount\":" << bucket.sampleCount << ","
+            << "\"distinctSourceFrames\":" << bucket.distinctSourceFrames << ","
+            << "\"repeatedSourceFrames\":" << bucket.repeatedSourceFrames << ","
+            << "\"unknownSourceFrames\":" << bucket.unknownSourceFrames << ","
+            << "\"desktopPresentSourceFrames\":" << bucket.desktopPresentSourceFrames << ","
+            << "\"pointerOnlySourceFrames\":" << bucket.pointerOnlySourceFrames << ","
+            << "\"unknownUpdateKindSourceFrames\":" << bucket.unknownUpdateKindSourceFrames << ","
+            << "\"maximumSampleGap100ns\":" << bucket.maximumSampleGap100ns << ","
+            << "\"distinctSourceFps\":" << bucket.distinctSourceFps() << ","
+            << "\"desktopPresentSourceFps\":" << bucket.desktopPresentSourceFps()
+            << "}";
+    }
+    out << "]}";
+}
+
 std::string toJson(const Diagnostics& diagnostics) {
     std::ostringstream out;
     out << "{"
@@ -480,6 +527,8 @@ std::string toJson(const Diagnostics& diagnostics) {
         << "\"requestedCaptureBackend\":\"" << jsonEscape(diagnostics.requestedCaptureBackend) << "\","
         << "\"activeCaptureBackend\":\"" << jsonEscape(diagnostics.activeCaptureBackend) << "\","
         << "\"captureFallbackReason\":\"" << jsonEscape(diagnostics.captureFallbackReason) << "\","
+        << "\"captureTargetKind\":\"" << jsonEscape(diagnostics.captureTargetKind) << "\","
+        << "\"captureTargetName\":\"" << jsonEscape(diagnostics.captureTargetName) << "\","
         << "\"displayRefreshNumerator\":" << diagnostics.displayRefreshNumerator << ","
         << "\"displayRefreshDenominator\":" << diagnostics.displayRefreshDenominator << ","
         << "\"displayRefreshHz\":" << diagnostics.displayRefreshHz << ","
@@ -492,16 +541,33 @@ std::string toJson(const Diagnostics& diagnostics) {
         << "\"captureSamplerRejections\":" << diagnostics.captureSamplerRejections << ","
         << "\"captureNonMonotonicTimestamps\":" << diagnostics.captureNonMonotonicTimestamps << ","
         << "\"captureAcquireTimeouts\":" << diagnostics.captureAcquireTimeouts << ","
+        << "\"captureAcquireImmediateMisses\":" << diagnostics.captureAcquireImmediateMisses << ","
+        << "\"captureAcquireGraceHits\":" << diagnostics.captureAcquireGraceHits << ","
+        << "\"captureAcquireGraceTimeouts\":" << diagnostics.captureAcquireGraceTimeouts << ","
         << "\"captureAccessLosses\":" << diagnostics.captureAccessLosses << ","
         << "\"captureRecreationAttempts\":" << diagnostics.captureRecreationAttempts << ","
         << "\"captureRecreationSuccesses\":" << diagnostics.captureRecreationSuccesses << ","
         << "\"captureFallbacks\":" << diagnostics.captureFallbacks << ","
+        << "\"captureClockMode\":\"" << jsonEscape(diagnostics.captureClockMode) << "\","
+        << "\"captureClockTickRequests\":" << diagnostics.captureClockTickRequests << ","
+        << "\"captureClockTickWakeups\":" << diagnostics.captureClockTickWakeups << ","
+        << "\"captureClockTickCoalesced\":" << diagnostics.captureClockTickCoalesced << ","
+        << "\"captureClockTickCompletions\":" << diagnostics.captureClockTickCompletions << ","
+        << "\"captureClockTickCompletionWaits\":" << diagnostics.captureClockTickCompletionWaits << ","
+        << "\"captureClockTickCompletionTimeouts\":" << diagnostics.captureClockTickCompletionTimeouts << ","
         << "\"desktopPresentFps\":" << diagnostics.desktopPresentFps << ","
         << "\"publishedFreshFps\":" << diagnostics.publishedFreshFps << ","
         << "\"recentPublishedFreshFps\":" << diagnostics.recentPublishedFreshFps << ","
         << "\"recentEncoderInputFps\":" << diagnostics.recentEncoderInputFps << ","
         << "\"recentEncoderOutputFps\":" << diagnostics.recentEncoderOutputFps << ","
+        << "\"recentEncoderDistinctSourceFps\":" << diagnostics.recentEncoderDistinctSourceFps << ","
         << "\"encodedRepeatRatio\":" << diagnostics.encodedRepeatRatio << ","
+        << "\"stillFrameDuplicationEnabled\":" << (diagnostics.stillFrameDuplicationEnabled ? "true" : "false") << ","
+        << "\"encoderDistinctSourceFrames\":" << diagnostics.encoderDistinctSourceFrames << ","
+        << "\"encoderRepeatedSourceFrames\":" << diagnostics.encoderRepeatedSourceFrames << ","
+        << "\"encoderUnknownSourceFrames\":" << diagnostics.encoderUnknownSourceFrames << ","
+        << "\"recentEncoderRepeatedSourceFrames\":" << diagnostics.recentEncoderRepeatedSourceFrames << ","
+        << "\"recentEncoderUnknownSourceFrames\":" << diagnostics.recentEncoderUnknownSourceFrames << ","
         << "\"activeEncoder\":\"" << encoderName(diagnostics.activeEncoder) << "\","
         << "\"encoderMode\":\"" << jsonEscape(diagnostics.encoderMode) << "\","
         << "\"gpu\":\"" << jsonEscape(diagnostics.gpu) << "\","
@@ -544,11 +610,23 @@ std::string toJson(const Diagnostics& diagnostics) {
         << "\"averageOutputDrainLatency100ns\":" << diagnostics.averageOutputDrainLatency100ns << ","
         << "\"maximumOutputDrainLatency100ns\":" << diagnostics.maximumOutputDrainLatency100ns << ","
         << "\"recentCaptureAcquireP95_100ns\":" << diagnostics.recentCaptureAcquireP95_100ns << ","
+        << "\"recentCaptureSourceIntervalP50_100ns\":" << diagnostics.recentCaptureSourceIntervalP50_100ns << ","
+        << "\"recentCaptureSourceIntervalP95_100ns\":" << diagnostics.recentCaptureSourceIntervalP95_100ns << ","
+        << "\"recentCaptureSourceIntervalMaximum100ns\":" << diagnostics.recentCaptureSourceIntervalMaximum100ns << ","
+        << "\"recentPublishedPtsIntervalP50_100ns\":" << diagnostics.recentPublishedPtsIntervalP50_100ns << ","
+        << "\"recentPublishedPtsIntervalP95_100ns\":" << diagnostics.recentPublishedPtsIntervalP95_100ns << ","
+        << "\"recentPublishedPtsIntervalMaximum100ns\":" << diagnostics.recentPublishedPtsIntervalMaximum100ns << ","
+        << "\"recentPublishedWallIntervalP50_100ns\":" << diagnostics.recentPublishedWallIntervalP50_100ns << ","
+        << "\"recentPublishedWallIntervalP95_100ns\":" << diagnostics.recentPublishedWallIntervalP95_100ns << ","
+        << "\"recentPublishedWallIntervalMaximum100ns\":" << diagnostics.recentPublishedWallIntervalMaximum100ns << ","
         << "\"recentCapturePreparationP50_100ns\":" << diagnostics.recentCapturePreparationP50_100ns << ","
         << "\"recentCapturePreparationP95_100ns\":" << diagnostics.recentCapturePreparationP95_100ns << ","
         << "\"recentCaptureCursorP95_100ns\":" << diagnostics.recentCaptureCursorP95_100ns << ","
         << "\"recentCaptureProcessingP50_100ns\":" << diagnostics.recentCaptureProcessingP50_100ns << ","
         << "\"recentCaptureProcessingP95_100ns\":" << diagnostics.recentCaptureProcessingP95_100ns << ","
+        << "\"recentSchedulerWakeLatenessP50_100ns\":" << diagnostics.recentSchedulerWakeLatenessP50_100ns << ","
+        << "\"recentSchedulerWakeLatenessP95_100ns\":" << diagnostics.recentSchedulerWakeLatenessP95_100ns << ","
+        << "\"recentSchedulerWakeLatenessMaximum100ns\":" << diagnostics.recentSchedulerWakeLatenessMaximum100ns << ","
         << "\"recentInputPreparationP50_100ns\":" << diagnostics.recentInputPreparationP50_100ns << ","
         << "\"recentInputPreparationP95_100ns\":" << diagnostics.recentInputPreparationP95_100ns << ","
         << "\"recentInputMapP50_100ns\":" << diagnostics.recentInputMapP50_100ns << ","
@@ -560,6 +638,15 @@ std::string toJson(const Diagnostics& diagnostics) {
         << "\"recentOutputLockP95_100ns\":" << diagnostics.recentOutputLockP95_100ns << ","
         << "\"recentOutputCopyP95_100ns\":" << diagnostics.recentOutputCopyP95_100ns << ","
         << "\"recentOutputUnmapP95_100ns\":" << diagnostics.recentOutputUnmapP95_100ns << ","
+        << "\"recentEncoderQueueResidenceP50_100ns\":" << diagnostics.recentEncoderQueueResidenceP50_100ns << ","
+        << "\"recentEncoderQueueResidenceP95_100ns\":" << diagnostics.recentEncoderQueueResidenceP95_100ns << ","
+        << "\"recentEncoderQueueResidenceMaximum100ns\":" << diagnostics.recentEncoderQueueResidenceMaximum100ns << ","
+        << "\"recentEncoderInputIntervalP50_100ns\":" << diagnostics.recentEncoderInputIntervalP50_100ns << ","
+        << "\"recentEncoderInputIntervalP95_100ns\":" << diagnostics.recentEncoderInputIntervalP95_100ns << ","
+        << "\"recentEncoderInputIntervalMaximum100ns\":" << diagnostics.recentEncoderInputIntervalMaximum100ns << ","
+        << "\"recentEncoderOutputIntervalP50_100ns\":" << diagnostics.recentEncoderOutputIntervalP50_100ns << ","
+        << "\"recentEncoderOutputIntervalP95_100ns\":" << diagnostics.recentEncoderOutputIntervalP95_100ns << ","
+        << "\"recentEncoderOutputIntervalMaximum100ns\":" << diagnostics.recentEncoderOutputIntervalMaximum100ns << ","
         << "\"nvencZeroCopyFrames\":" << diagnostics.nvencZeroCopyFrames << ","
         << "\"nvencCopyFallbackFrames\":" << diagnostics.nvencCopyFallbackFrames << ","
         << "\"nvencConvertedFrames\":" << diagnostics.nvencConvertedFrames << ","
@@ -596,6 +683,9 @@ std::string toJson(const Diagnostics& diagnostics) {
         << "\"encoderOutputPackets\":" << diagnostics.encoderOutputPackets << ","
         << "\"audioCapturedPackets\":" << diagnostics.audioCapturedPackets << ","
         << "\"bufferDurationSeconds\":" << diagnostics.bufferDurationSeconds << ","
+        << "\"lastClipCadence\":";
+    writeVideoCadenceJson(out, diagnostics.lastClipCadence);
+    out << ","
         << "\"degraded\":" << (diagnostics.degraded ? "true" : "false") << ","
         << "\"status\":\"" << jsonEscape(diagnostics.status) << "\""
         << "}";

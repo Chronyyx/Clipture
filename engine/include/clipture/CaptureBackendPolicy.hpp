@@ -15,6 +15,7 @@ enum class CaptureBackendKind {
     None,
     Dxgi,
     Wgc,
+    WgcWindow,
 };
 
 struct CaptureBackendDecision {
@@ -43,7 +44,8 @@ inline std::string_view captureBackendPreferenceName(CaptureBackendPreference pr
 inline std::string_view captureBackendKindName(CaptureBackendKind kind) {
     switch (kind) {
     case CaptureBackendKind::Dxgi: return "DXGI Desktop Duplication";
-    case CaptureBackendKind::Wgc: return "Windows.Graphics.Capture";
+    case CaptureBackendKind::Wgc: return "Windows.Graphics.Capture (monitor)";
+    case CaptureBackendKind::WgcWindow: return "Windows.Graphics.Capture (game window)";
     default: return "none";
     }
 }

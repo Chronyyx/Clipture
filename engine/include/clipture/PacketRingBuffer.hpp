@@ -87,6 +87,8 @@ struct EncodedPacket {
     int32_t audioPrimingFrames = 0;
     uint32_t encoderEpoch = 0;
     uint64_t sourceFrameSequence = 0;
+    bool sourceHadDesktopPresent = false;
+    bool sourceHadPointerUpdate = false;
     H264PacketLayout h264;
     PacketPayloadPtr payload;
     PacketPayloadReaderPtr payloadReader;

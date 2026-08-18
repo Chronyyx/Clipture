@@ -1,5 +1,7 @@
 #pragma once
 
+#include "clipture/VideoCadenceAnalysis.hpp"
+
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -19,6 +21,8 @@ struct Diagnostics {
     std::string requestedCaptureBackend = "auto";
     std::string activeCaptureBackend = "none";
     std::string captureFallbackReason;
+    std::string captureTargetKind = "monitor";
+    std::string captureTargetName = "Primary display";
     uint32_t displayRefreshNumerator = 0;
     uint32_t displayRefreshDenominator = 1;
     double displayRefreshHz = 0.0;
@@ -31,16 +35,33 @@ struct Diagnostics {
     uint64_t captureSamplerRejections = 0;
     uint64_t captureNonMonotonicTimestamps = 0;
     uint64_t captureAcquireTimeouts = 0;
+    uint64_t captureAcquireImmediateMisses = 0;
+    uint64_t captureAcquireGraceHits = 0;
+    uint64_t captureAcquireGraceTimeouts = 0;
     uint64_t captureAccessLosses = 0;
     uint64_t captureRecreationAttempts = 0;
     uint64_t captureRecreationSuccesses = 0;
     uint64_t captureFallbacks = 0;
+    std::string captureClockMode = "capture-sampled";
+    uint64_t captureClockTickRequests = 0;
+    uint64_t captureClockTickWakeups = 0;
+    uint64_t captureClockTickCoalesced = 0;
+    uint64_t captureClockTickCompletions = 0;
+    uint64_t captureClockTickCompletionWaits = 0;
+    uint64_t captureClockTickCompletionTimeouts = 0;
     double desktopPresentFps = 0.0;
     double publishedFreshFps = 0.0;
     double recentPublishedFreshFps = 0.0;
     double recentEncoderInputFps = 0.0;
     double recentEncoderOutputFps = 0.0;
+    double recentEncoderDistinctSourceFps = 0.0;
     double encodedRepeatRatio = 0.0;
+    bool stillFrameDuplicationEnabled = false;
+    uint64_t encoderDistinctSourceFrames = 0;
+    uint64_t encoderRepeatedSourceFrames = 0;
+    uint64_t encoderUnknownSourceFrames = 0;
+    uint64_t recentEncoderRepeatedSourceFrames = 0;
+    uint64_t recentEncoderUnknownSourceFrames = 0;
     EncoderName activeEncoder = EncoderName::Unavailable;
     std::string encoderMode = "Unavailable";
     std::string gpu = "Unknown";
@@ -83,11 +104,32 @@ struct Diagnostics {
     int64_t averageOutputDrainLatency100ns = 0;
     int64_t maximumOutputDrainLatency100ns = 0;
     int64_t recentCaptureAcquireP95_100ns = 0;
+    int64_t recentCaptureSourceIntervalP50_100ns = 0;
+    int64_t recentCaptureSourceIntervalP95_100ns = 0;
+    int64_t recentCaptureSourceIntervalMaximum100ns = 0;
+    int64_t recentPublishedPtsIntervalP50_100ns = 0;
+    int64_t recentPublishedPtsIntervalP95_100ns = 0;
+    int64_t recentPublishedPtsIntervalMaximum100ns = 0;
+    int64_t recentPublishedWallIntervalP50_100ns = 0;
+    int64_t recentPublishedWallIntervalP95_100ns = 0;
+    int64_t recentPublishedWallIntervalMaximum100ns = 0;
     int64_t recentCapturePreparationP50_100ns = 0;
     int64_t recentCapturePreparationP95_100ns = 0;
     int64_t recentCaptureCursorP95_100ns = 0;
     int64_t recentCaptureProcessingP50_100ns = 0;
     int64_t recentCaptureProcessingP95_100ns = 0;
+    int64_t recentSchedulerWakeLatenessP50_100ns = 0;
+    int64_t recentSchedulerWakeLatenessP95_100ns = 0;
+    int64_t recentSchedulerWakeLatenessMaximum100ns = 0;
+    int64_t recentEncoderQueueResidenceP50_100ns = 0;
+    int64_t recentEncoderQueueResidenceP95_100ns = 0;
+    int64_t recentEncoderQueueResidenceMaximum100ns = 0;
+    int64_t recentEncoderInputIntervalP50_100ns = 0;
+    int64_t recentEncoderInputIntervalP95_100ns = 0;
+    int64_t recentEncoderInputIntervalMaximum100ns = 0;
+    int64_t recentEncoderOutputIntervalP50_100ns = 0;
+    int64_t recentEncoderOutputIntervalP95_100ns = 0;
+    int64_t recentEncoderOutputIntervalMaximum100ns = 0;
     int64_t recentInputPreparationP50_100ns = 0;
     int64_t recentInputPreparationP95_100ns = 0;
     int64_t recentInputMapP50_100ns = 0;
@@ -135,6 +177,7 @@ struct Diagnostics {
     int encoderOutputPackets = 0;
     int audioCapturedPackets = 0;
     int bufferDurationSeconds = 0;
+    VideoCadenceAnalysis lastClipCadence;
     bool degraded = true;
     std::string status;
 };

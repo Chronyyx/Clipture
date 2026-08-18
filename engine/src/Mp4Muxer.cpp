@@ -2538,22 +2538,23 @@ MuxResult muxH264ToMp4(
         return result;
     }
 
-    // Compute per-frame durations from PTS gaps (timescale = 10,000,000 = 100ns units).
-    // Previously each frame had duration=1 at timescale=fps, which assumed exactly
-    // fps*seconds frames were captured. In practice WGC delivers frames at variable
-    // rates and the encoder throttle drops some, so fewer frames exist, causing speedup.
+    // Compute CFR-quantized per-frame durations in 100ns units (timescale = 10,000,000).
+    // Quantizing inter-frame PTS gaps to exact target-rate ticks eliminates arrival-jitter
+    // variance in the MP4 stts table, ensuring smooth 60 Hz display refresh during playback.
     const auto durationStartedAt = SaveTimingClock::now();
+    const int64_t targetDuration100ns = 10'000'000LL / std::max(1, fps);
     if (videoSamples.size() >= 2) {
         for (std::size_t i = 0; i + 1 < videoSamples.size(); ++i) {
             const int64_t gap = std::max<int64_t>(1, videoSamples[i + 1].packet->pts100ns - videoSamples[i].packet->pts100ns);
-            videoSamples[i].info.duration = static_cast<uint32_t>(std::min<int64_t>(gap, 0xFFFFFFFFLL));
+            const uint64_t ticks = std::max<uint64_t>(1, (gap + targetDuration100ns / 2) / targetDuration100ns);
+            videoSamples[i].info.duration = static_cast<uint32_t>(std::min<uint64_t>(
+                ticks * static_cast<uint64_t>(targetDuration100ns),
+                0xFFFFFFFFULL));
         }
-        // A large gap is already represented by the preceding sample. Reusing the
-        // average here would count that gap a second time at the end of the clip.
         videoSamples.back().info.duration = finalVideoSampleDuration100ns(
             videoSamples.back().packet->duration100ns, fps);
     } else if (videoSamples.size() == 1) {
-        videoSamples[0].info.duration = static_cast<uint32_t>(10'000'000LL / std::max(1, fps));
+        videoSamples[0].info.duration = static_cast<uint32_t>(targetDuration100ns);
     }
     if (videoSamples.empty()) {
         result.message = "MP4 muxing failed: the selected H.264 window contains no writable frame samples.";

@@ -6,15 +6,16 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 
-- DXGI Desktop Duplication capture with automatic Windows.Graphics.Capture fallback.
+- DXGI Desktop Duplication capture with automatic Windows.Graphics.Capture fallback and non-blocking frame caching.
+- High-precision hybrid clock combining Windows waitable timers with sub-millisecond CPU pause loops for jitter-free 60 FPS pacing.
 - Direct NVIDIA NVENC H.264 encoding with runtime API compatibility checks.
 - Configurable 24, 30, or 60 FPS capture and up to ten minutes of replay history.
 - Constant-frame-rate output with real encoded samples for unchanged desktop intervals, using compact repeated-frame runs instead of duplicate queued jobs.
-- Isolated capture and encoder D3D11 devices with a shared prepared-frame bridge and buffered NVENC output.
+- Unified capture and encoder D3D11 device architecture eliminating KeyedMutex cross-device stalls and GPU pipeline flushes.
 - System, microphone, detected game/app, and explicit per-app audio capture.
 - Separate AAC tracks with silent-track omission and short PCM recovery coverage.
 - Shared packet payloads that avoid copying the full replay buffer while saving.
-- MP4 muxing directly from buffered H.264 and AAC packets.
+- Judder-free MP4 muxing with CFR-quantized sample durations directly from buffered H.264 and AAC packets.
 - Adaptive storage-aware saves with preallocated files, low I/O priority, and writes capped at 512 KB.
 - Hybrid RAM/disk replay payload budgeting with automatic background disk spilling to preserve memory under high load.
 - Resolution-change segmentation and stream-copy stitching when compatible.
@@ -31,11 +32,9 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 ```text
 Video
 DXGI Desktop Duplication (WGC fallback)
-  -> D3D11 texture
-  -> phase-locked target-FPS sampler + compact CFR runs
-  -> keyed bridge to an isolated encoder D3D11 device
-  -> once-per-source BGRA-to-NV12 preparation
-  -> per-output registered surface + buffered NVENC H.264
+  -> unified D3D11 capture & encoder device
+  -> direct on-tick target-FPS sampler
+  -> native NVENC H.264 hardware encoding with 2.0s GOP & VBV buffering
   -> shared packet payload + cached NAL metadata
   -> rolling replay archive + bounded RAM fallback
 

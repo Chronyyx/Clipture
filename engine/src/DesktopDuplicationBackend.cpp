@@ -53,6 +53,23 @@ private:
     bool acquired_ = false;
 };
 
+class CaptureTickCompletion {
+public:
+    CaptureTickCompletion(CaptureTickGate* gate, uint64_t generation)
+        : gate_(gate), generation_(generation) {}
+    ~CaptureTickCompletion() { finish(); }
+
+    void finish() {
+        if (!gate_ || generation_ == 0) return;
+        gate_->complete(generation_);
+        generation_ = 0;
+    }
+
+private:
+    CaptureTickGate* gate_ = nullptr;
+    uint64_t generation_ = 0;
+};
+
 bool stopAwareSleep(std::stop_token stopToken, int milliseconds) {
     constexpr int quantumMs = 10;
     for (int elapsed = 0; elapsed < milliseconds; elapsed += quantumMs) {
@@ -257,6 +274,11 @@ BackendStartResult DesktopDuplicationBackend::start() {
     const auto result = impl_->initialize();
     if (!result.ok) return result;
     impl_->started = true;
+    if constexpr (kEnableEncoderDrivenDxgiCapture) {
+        if (auto* tickGate = impl_->shared->captureTickGate.load(std::memory_order_acquire)) {
+            tickGate->activate();
+        }
+    }
     impl_->shared->hdrTonemappingActive.store(impl_->hdrCapture, std::memory_order_relaxed);
     impl_->shared->setActiveBackend(CaptureBackendKind::Dxgi);
     impl_->shared->running.store(true, std::memory_order_release);
@@ -266,7 +288,12 @@ BackendStartResult DesktopDuplicationBackend::start() {
     std::cerr << "[capture] DXGI Desktop Duplication started on "
               << impl_->output.displayName
               << " format=" << static_cast<unsigned>(impl_->captureFormat)
-              << " hdr=" << (impl_->hdrCapture ? "true" : "false");
+              << " hdr=" << (impl_->hdrCapture ? "true" : "false")
+              << " encoderDrivenPollTimeoutMs=" << kEncoderDrivenDxgiPollTimeoutMs
+              << " graceTimeoutMs=" << kEncoderDrivenDxgiGraceTimeoutMs
+              << " prearm=" << (kEnableEncoderDrivenDxgiPrearm ? "true" : "false")
+              << " prearmLeadMs=" << kEncoderDrivenCapturePrearmLead.count()
+              << " completionWaitMs=" << kEncoderDrivenCaptureCompletionWait.count();
     if (impl_->hdrCapture) std::cerr << " sdrWhiteLevel=" << impl_->sdrWhiteLevel;
     std::cerr << ".\n";
     return { true, {} };
@@ -278,13 +305,52 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
     // active. Matching the encoder's Capture scheduling class avoids starving
     // acquisition whenever a game or a save briefly loads the machine.
     MmcssCaptureRegistration mmcss(true);
+    bool bootstrapComplete = false;
 
     while (!stopToken.stop_requested()) {
+        auto* tickGate = state.shared->captureTickGate.load(std::memory_order_acquire);
+        const bool encoderDriven =
+            kEnableEncoderDrivenDxgiCapture && tickGate && tickGate->active();
+        uint64_t captureGeneration = 0;
+        if (encoderDriven && bootstrapComplete) {
+            const auto request = tickGate->wait(stopToken);
+            if (!request) break;
+            captureGeneration = *request;
+        }
+        CaptureTickCompletion tickCompletion(tickGate, captureGeneration);
+
         DXGI_OUTDUPL_FRAME_INFO frameInfo {};
         Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
         AcquiredDesktopFrame acquiredFrame(state.duplication.Get());
         const int64_t acquireStarted100ns = monotonicNow100ns();
-        const HRESULT acquireHr = state.duplication->AcquireNextFrame(8, &frameInfo, &desktopResource);
+        // OBS can use a zero-timeout poll because capture and rendering share
+        // one graphics thread. Preserve that fast path, then give Clipture's
+        // separate capture thread one short grace wait only after a miss.
+        const UINT acquireTimeoutMs = encoderDriven && bootstrapComplete
+            ? kEncoderDrivenDxgiPollTimeoutMs
+            : 8U;
+        HRESULT acquireHr = state.duplication->AcquireNextFrame(
+            acquireTimeoutMs,
+            &frameInfo,
+            &desktopResource);
+        const bool initialPollTimedOut = acquireHr == DXGI_ERROR_WAIT_TIMEOUT;
+        if (encoderDriven && bootstrapComplete && initialPollTimedOut) {
+            ++state.shared->acquireImmediateMisses;
+        }
+        if (shouldUseEncoderDrivenDxgiGrace(
+                encoderDriven, bootstrapComplete, initialPollTimedOut)) {
+            frameInfo = {};
+            desktopResource.Reset();
+            acquireHr = state.duplication->AcquireNextFrame(
+                kEncoderDrivenDxgiGraceTimeoutMs,
+                &frameInfo,
+                &desktopResource);
+            if (SUCCEEDED(acquireHr)) {
+                ++state.shared->acquireGraceHits;
+            } else if (acquireHr == DXGI_ERROR_WAIT_TIMEOUT) {
+                ++state.shared->acquireGraceTimeouts;
+            }
+        }
         if (acquireHr == DXGI_ERROR_WAIT_TIMEOUT) {
             ++state.shared->acquireTimeouts;
             continue;
@@ -331,14 +397,16 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
         }
 
         const int64_t timestampTicks = dxgiEffectiveTimestampTicks(frameInfo);
-        if (timestampTicks <= 0 || state.qpcFrequency <= 0) {
-            ++state.shared->nonMonotonicTimestamps;
+        const int64_t sourceTimestamp100ns = (timestampTicks > 0 && state.qpcFrequency > 0)
+            ? mediaTimeFromSystemRelative100ns(detail::qpcTicksTo100ns(timestampTicks, state.qpcFrequency))
+            : monotonicNow100ns();
+        int64_t outputTimestamp100ns = 0;
+        if (!state.shared->selectFrameTimestamp(
+                sourceTimestamp100ns,
+                outputTimestamp100ns,
+                !encoderDriven)) {
             continue;
         }
-        const int64_t systemRelative100ns = detail::qpcTicksTo100ns(timestampTicks, state.qpcFrequency);
-        const int64_t sourceTimestamp100ns = mediaTimeFromSystemRelative100ns(systemRelative100ns);
-        int64_t outputTimestamp100ns = 0;
-        if (!state.shared->selectFrameTimestamp(sourceTimestamp100ns, outputTimestamp100ns)) continue;
         const int64_t frameProcessingStarted100ns = monotonicNow100ns();
 
         Microsoft::WRL::ComPtr<ID3D11Texture2D> desktopTexture;
@@ -376,7 +444,6 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             continue;
         }
 
-        ID3D11Texture2D* pointerBackground = desktopTexture.Get();
         const int64_t framePreparationStarted100ns = monotonicNow100ns();
         if (state.hdrCapture) {
             if (!owned.hdrInputTexture || !state.tonemapper) {
@@ -385,6 +452,7 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
                 return BackendOutcome::RequestFallback;
             }
             state.d3dContext->CopyResource(owned.hdrInputTexture.Get(), desktopTexture.Get());
+            acquiredFrame.release();
             std::string tonemapperError;
             if (!state.tonemapper->Process(
                     owned.hdrInputTexture, owned.texture, tonemapperError)) {
@@ -393,9 +461,9 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
                     "DXGI HDR tonemapping failed: " + tonemapperError);
                 return BackendOutcome::RequestFallback;
             }
-            pointerBackground = owned.texture.Get();
         } else {
             state.d3dContext->CopyResource(owned.texture.Get(), desktopTexture.Get());
+            acquiredFrame.release();
         }
         const int64_t framePrepared100ns = monotonicNow100ns();
         state.shared->framePreparationLatency.record(
@@ -403,7 +471,7 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             framePrepared100ns - framePreparationStarted100ns);
         const int64_t cursorCompositeStarted100ns = monotonicNow100ns();
         if (!state.pointerCompositor->composite(
-                pointerBackground,
+                owned.texture.Get(),
                 owned.renderTargetView.Get(),
                 state.width,
                 state.height,
@@ -422,12 +490,15 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             std::move(owned.lease),
             outputTimestamp100ns,
             static_cast<int>(state.width),
-            static_cast<int>(state.height));
+            static_cast<int>(state.height),
+            frameInfo.LastPresentTime.QuadPart != 0,
+            frameInfo.LastMouseUpdateTime.QuadPart != 0);
+        bootstrapComplete = true;
         const int64_t frameProcessed100ns = monotonicNow100ns();
         state.shared->frameProcessingLatency.record(
             frameProcessed100ns,
             frameProcessed100ns - frameProcessingStarted100ns);
-        acquiredFrame.release();
+        tickCompletion.finish();
         if (auto* queue = state.shared->frameQueue.load(std::memory_order_acquire);
             queue && queue->size() >= 2) {
             SwitchToThread();
@@ -438,6 +509,9 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
 
 void DesktopDuplicationBackend::stop() {
     if (!impl_) return;
+    if (auto* tickGate = impl_->shared->captureTickGate.load(std::memory_order_acquire)) {
+        tickGate->deactivate();
+    }
     impl_->started = false;
     impl_->releaseResources();
 }

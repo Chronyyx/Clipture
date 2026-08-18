@@ -1,4 +1,6 @@
 #include "clipture/EncoderWorker.hpp"
+#include "clipture/EncoderPipelinePolicy.hpp"
+#include "clipture/PrecisionTimer.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
 #include "clipture/MediaClock.hpp"
@@ -10,10 +12,12 @@
 #include <d3d11_1.h>
 #include <d3d11_4.h>
 #include <dxgi.h>
+#include <dxgi1_2.h>
 #include <ffnvcodec/nvEncodeAPI.h>
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <climits>
 #include <cstddef>
@@ -23,6 +27,7 @@
 #include <sstream>
 #include <span>
 #include <iostream>
+#include <iterator>
 #include <vector>
 
 namespace clipture {
@@ -36,12 +41,31 @@ constexpr uint32_t kNvencExtendedStructFlag = 1u << 31;
 
 // Developer capture-validation switch. Set false to encode only newly captured
 // source frames; keep true for normal CFR clips and editor-friendly still video.
+// Diagnostic switch: false exposes real source freshness instead of filling
+// missing CFR ticks with the last captured texture.
 constexpr bool kEnableStillFrameDuplication = true;
 
 // OBS's Windows NVENC path keeps several synchronous submissions in flight
 // before blocking for the oldest output. Keep this switch close to the CFR
 // switch so either path can be compared from a development build.
 constexpr bool kPreferObsStyleBufferedSyncNvenc = true;
+
+// OBS uses a single unified D3D11 device across capture and encoding.
+// Sharing the capture device eliminates cross-device KeyedMutex synchronization
+// stalls (AcquireSync/ReleaseSync), which cause severe frame latency and stutter.
+constexpr bool kPreferSharedCaptureDevice = true;
+
+// Round transitions can briefly saturate the graphics queue even when NVENC
+// itself remains fast. These switches keep that burst from reaching the
+// scheduler's retained source-frame queue and are intentionally easy to A/B.
+constexpr bool kEnableEncoderGpuSchedulingHeadroom = true;
+constexpr bool kEnableRoundTransitionOutputHeadroom = true;
+constexpr INT kEncoderGpuPriority = 7;
+constexpr UINT kEncoderMaximumFrameLatency = 1;
+constexpr std::size_t kDefaultNvencOutputSlots = 12;
+constexpr std::size_t kRoundTransitionNvencOutputSlots = 16;
+constexpr std::size_t kDefaultSyncOutputDelay = 3;
+constexpr std::size_t kRoundTransitionSyncOutputDelay = 8;
 
 using NvEncodeApiCreateInstance = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
 using NvEncodeApiGetMaxSupportedVersion = NVENCSTATUS(NVENCAPI*)(uint32_t*);
@@ -485,7 +509,7 @@ public:
             }
 
             encodeConfig_ = presetConfig.presetCfg;
-            encodeConfig_.gopLength = static_cast<uint32_t>(std::max(1, fps));
+            encodeConfig_.gopLength = static_cast<uint32_t>(std::max(1, fps) * 2);
             encodeConfig_.frameIntervalP = 1;
             encodeConfig_.frameFieldMode = NV_ENC_PARAMS_FRAME_FIELD_MODE_FRAME;
             encodeConfig_.rcParams = {};
@@ -494,6 +518,8 @@ public:
             encodeConfig_.rcParams.averageBitRate =
                 static_cast<uint32_t>(std::max(1, bitrateMbps) * 1'000'000);
             encodeConfig_.rcParams.maxBitRate = encodeConfig_.rcParams.averageBitRate;
+            encodeConfig_.rcParams.vbvBufferSize = encodeConfig_.rcParams.averageBitRate;
+            encodeConfig_.rcParams.vbvInitialDelay = encodeConfig_.rcParams.vbvBufferSize;
             encodeConfig_.rcParams.enableLookahead = 0;
             encodeConfig_.rcParams.lookaheadDepth = 0;
             encodeConfig_.rcParams.multiPass = NV_ENC_MULTI_PASS_DISABLED;
@@ -560,6 +586,12 @@ public:
                 boundedPreset + 1,
                 2,
                 static_cast<int>(maximumPreparedSubmissionDepth_)));
+            syncOutputDelay_ = boundedNvencSyncOutputDelay(
+                outputSlotCount_,
+                preparedSubmissionDepth_,
+                kEnableRoundTransitionOutputHeadroom
+                    ? kRoundTransitionSyncOutputDelay
+                    : kDefaultSyncOutputDelay);
             initialized_ = true;
             if (asyncEnabled_) startOutputThread();
             initFailureLogged_ = false;
@@ -578,6 +610,11 @@ public:
             }
             status += " Input preparation depth is " +
                 std::to_string(preparedSubmissionDepth_) + ".";
+            if (!asyncEnabled_) {
+                status += " Buffered output depth is " +
+                    std::to_string(syncOutputDelay_) + " of " +
+                    std::to_string(outputSlotCount_) + " slots.";
+            }
             status += " Single-pass low-resource rate control is active.";
             if (attempt.presetFamily == std::string("legacy")) {
                 status += " Legacy preset fallback is active.";
@@ -704,6 +741,8 @@ public:
         slot->frameSourceHeight = frame.height;
         slot->captureEpoch = frame.captureEpoch;
         slot->sourceFrameSequence = frame.sequence;
+        slot->sourceHadDesktopPresent = frame.sourceHadDesktopPresent;
+        slot->sourceHadPointerUpdate = frame.sourceHadPointerUpdate;
         if (timings.inputPath == NvencFrameTimings::InputPath::DirectCaptureBgra) {
             slot->retainedInputTexture = frame.texture;
             slot->retainedInputLease = frame.textureLease;
@@ -779,9 +818,9 @@ public:
             ? prepared.bufferFormat
             : mapped.mappedBufferFmt;
         pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
-        if (nextKeyframePts100ns_ == 0 || slot->framePts100ns >= nextKeyframePts100ns_) {
+        if (frameIndex_ == 0 || nextKeyframePts100ns_ == 0) {
             pic.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
-            nextKeyframePts100ns_ = slot->framePts100ns + 10'000'000LL;
+            nextKeyframePts100ns_ = 1;
         }
 
         const int64_t encodeCallStarted100ns = monotonicNow100ns();
@@ -822,8 +861,10 @@ public:
         }
 
         ++frameIndex_;
-        if (inFlightCount_.load(std::memory_order_relaxed) <
-            static_cast<int>(syncOutputDelay_)) {
+        const int currentInFlight = inFlightCount_.load(std::memory_order_relaxed);
+        if (!shouldDrainNvencSyncOutput(
+                static_cast<std::size_t>(std::max(0, currentInFlight)),
+                syncOutputDelay_)) {
             status = "Direct NVENC buffered sync pipeline is priming output.";
             return true;
         }
@@ -883,6 +924,8 @@ private:
         int frameSourceHeight = 0;
         uint64_t captureEpoch = 0;
         uint64_t sourceFrameSequence = 0;
+        bool sourceHadDesktopPresent = false;
+        bool sourceHadPointerUpdate = false;
         Microsoft::WRL::ComPtr<ID3D11Texture2D> retainedInputTexture;
         std::shared_ptr<void> retainedInputLease;
         Microsoft::WRL::ComPtr<ID3D11Texture2D> scaledTexture;
@@ -929,25 +972,16 @@ private:
             return false;
         }
 
-        D3D_FEATURE_LEVEL featureLevels[] {
-            D3D_FEATURE_LEVEL_11_1,
-            D3D_FEATURE_LEVEL_11_0,
-        };
-        D3D_FEATURE_LEVEL selectedFeatureLevel {};
-        UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
-        hr = D3D11CreateDevice(
-            adapter.Get(),
-            D3D_DRIVER_TYPE_UNKNOWN,
-            nullptr,
-            flags,
-            featureLevels,
-            ARRAYSIZE(featureLevels),
-            D3D11_SDK_VERSION,
-            &device_,
-            &selectedFeatureLevel,
-            &context_);
-        if (FAILED(hr)) {
-            flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        if constexpr (kPreferSharedCaptureDevice) {
+            device_ = captureDevice_;
+            context_ = captureContext_;
+        } else {
+            D3D_FEATURE_LEVEL featureLevels[] {
+                D3D_FEATURE_LEVEL_11_1,
+                D3D_FEATURE_LEVEL_11_0,
+            };
+            D3D_FEATURE_LEVEL selectedFeatureLevel {};
+            UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
             hr = D3D11CreateDevice(
                 adapter.Get(),
                 D3D_DRIVER_TYPE_UNKNOWN,
@@ -959,18 +993,64 @@ private:
                 &device_,
                 &selectedFeatureLevel,
                 &context_);
-        }
-        if (FAILED(hr) || !device_ || !context_) {
-            std::ostringstream message;
-            message << "NVENC initialize failed: separate D3D11 encoder device creation failed, HRESULT 0x"
-                    << std::hex << hr;
-            status = message.str();
-            return false;
+            if (FAILED(hr)) {
+                flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+                hr = D3D11CreateDevice(
+                    adapter.Get(),
+                    D3D_DRIVER_TYPE_UNKNOWN,
+                    nullptr,
+                    flags,
+                    featureLevels,
+                    ARRAYSIZE(featureLevels),
+                    D3D11_SDK_VERSION,
+                    &device_,
+                    &selectedFeatureLevel,
+                    &context_);
+            }
+            if (FAILED(hr) || !device_ || !context_) {
+                std::ostringstream message;
+                message << "NVENC initialize failed: separate D3D11 encoder device creation failed, HRESULT 0x"
+                        << std::hex << hr;
+                status = message.str();
+                return false;
+            }
+
+            Microsoft::WRL::ComPtr<ID3D11Multithread> encoderMultithread;
+            if (SUCCEEDED(context_.As(&encoderMultithread)) && encoderMultithread) {
+                encoderMultithread->SetMultithreadProtected(TRUE);
+            }
         }
 
-        Microsoft::WRL::ComPtr<ID3D11Multithread> encoderMultithread;
-        if (SUCCEEDED(context_.As(&encoderMultithread)) && encoderMultithread) {
-            encoderMultithread->SetMultithreadProtected(TRUE);
+        if constexpr (kEnableEncoderGpuSchedulingHeadroom) {
+            Microsoft::WRL::ComPtr<IDXGIDevice> encoderDxgiDevice;
+            const HRESULT dxgiDeviceHr = device_.As(&encoderDxgiDevice);
+            INT previousGpuPriority = 0;
+            INT activeGpuPriority = 0;
+            HRESULT getPriorityBeforeHr = E_NOINTERFACE;
+            HRESULT setPriorityHr = E_NOINTERFACE;
+            HRESULT getPriorityAfterHr = E_NOINTERFACE;
+            if (SUCCEEDED(dxgiDeviceHr) && encoderDxgiDevice) {
+                getPriorityBeforeHr = encoderDxgiDevice->GetGPUThreadPriority(&previousGpuPriority);
+                setPriorityHr = encoderDxgiDevice->SetGPUThreadPriority(kEncoderGpuPriority);
+                getPriorityAfterHr = encoderDxgiDevice->GetGPUThreadPriority(&activeGpuPriority);
+            }
+
+            Microsoft::WRL::ComPtr<IDXGIDevice1> encoderDxgiDevice1;
+            const HRESULT dxgiDevice1Hr = device_.As(&encoderDxgiDevice1);
+            const HRESULT maximumLatencyHr = SUCCEEDED(dxgiDevice1Hr) && encoderDxgiDevice1
+                ? encoderDxgiDevice1->SetMaximumFrameLatency(kEncoderMaximumFrameLatency)
+                : E_NOINTERFACE;
+
+            std::cerr << "[encoder] D3D11 scheduling"
+                      << " gpuPriorityRequested=" << kEncoderGpuPriority
+                      << " gpuPriorityPrevious="
+                      << (SUCCEEDED(getPriorityBeforeHr) ? std::to_string(previousGpuPriority) : "unknown")
+                      << " gpuPriorityActive="
+                      << (SUCCEEDED(getPriorityAfterHr) ? std::to_string(activeGpuPriority) : "unknown")
+                      << " gpuPrioritySetHr=" << hex32(static_cast<uint32_t>(setPriorityHr))
+                      << " maximumFrameLatency=" << kEncoderMaximumFrameLatency
+                      << " maximumFrameLatencyHr=" << hex32(static_cast<uint32_t>(maximumLatencyHr))
+                      << ".\n";
         }
         separateEncoderDevice_ = device_.Get() != captureDevice_.Get();
         return true;
@@ -1826,12 +1906,10 @@ private:
     }
 
     bool drainReady(std::vector<EncodedPacket>& packets, std::string& status) {
-        if (!asyncEnabled_) {
-            while (inFlightCount_.load(std::memory_order_relaxed) > 0) {
-                if (!drainOldestSyncOutput(packets, status)) return false;
-            }
-            return true;
-        }
+        // Buffered sync output is drained by submitPrepared only after the
+        // configured pipeline depth is reached. Draining here would serialize
+        // every frame and make syncOutputDelay_ ineffective.
+        if (!asyncEnabled_) return true;
         collectCompletedPackets(packets);
         if (outputFatal_.load()) {
             std::lock_guard lock(outputMutex_);
@@ -1847,7 +1925,12 @@ private:
             ignoredTimings = {};
             if (!submitPrepared(packets, status, ignoredTimings)) return false;
         }
-        if (!asyncEnabled_) return true;
+        if (!asyncEnabled_) {
+            while (inFlightCount_.load(std::memory_order_relaxed) > 0) {
+                if (!drainOldestSyncOutput(packets, status)) return false;
+            }
+            return true;
+        }
         std::unique_lock lock(outputMutex_);
         constexpr auto maximumDrainWait = std::chrono::milliseconds(
             outputSlotCount_ * asyncDrainWaitTimeoutMs_ + 500);
@@ -1953,6 +2036,8 @@ private:
         packet.sourceHeight = slot.frameSourceHeight;
         packet.encoderEpoch = static_cast<uint32_t>(slot.captureEpoch);
         packet.sourceFrameSequence = slot.sourceFrameSequence;
+        packet.sourceHadDesktopPresent = slot.sourceHadDesktopPresent;
+        packet.sourceHadPointerUpdate = slot.sourceHadPointerUpdate;
         const int64_t copyStarted100ns = monotonicNow100ns();
         packet.payload = packetPool_.acquirePayload(lock.bitstreamSizeInBytes);
         if (lock.bitstreamSizeInBytes > 0 && lock.bitstreamBufferPtr) {
@@ -2050,6 +2135,8 @@ private:
         slot.frameSourceHeight = 0;
         slot.captureEpoch = 0;
         slot.sourceFrameSequence = 0;
+        slot.sourceHadDesktopPresent = false;
+        slot.sourceHadPointerUpdate = false;
     }
 
     void releaseOutputSlotReservation(OutputSlot& slot) {
@@ -2215,6 +2302,7 @@ private:
         nextKeyframePts100ns_ = 0;
         nextOutputSlot_ = 0;
         preparedSubmissionDepth_ = minimumPreparedSubmissionDepth_;
+        syncOutputDelay_ = kDefaultSyncOutputDelay;
     }
 
     void destroy() {
@@ -2316,14 +2404,16 @@ private:
     uint32_t frameIndex_ = 0;
     int64_t nextKeyframePts100ns_ = 0;
     std::size_t nextOutputSlot_ = 0;
-    // The encoder rotates through 12 surfaces; keep every warm registration plus headroom.
-    static constexpr std::size_t maxRegisteredInputs_ = 16;
+    static constexpr std::size_t outputSlotCount_ = kEnableRoundTransitionOutputHeadroom
+        ? kRoundTransitionNvencOutputSlots
+        : kDefaultNvencOutputSlots;
+    // Keep all encoder-owned surfaces registered plus a small fallback cache.
+    static constexpr std::size_t maxRegisteredInputs_ = outputSlotCount_ + 4;
     static constexpr std::size_t maximumInputViewCacheSize_ = 16;
-    static constexpr std::size_t outputSlotCount_ = 12;
-    static constexpr std::size_t syncOutputDelay_ = 3;
     static constexpr std::size_t minimumPreparedSubmissionDepth_ = 2;
     static constexpr std::size_t maximumPreparedSubmissionDepth_ = outputSlotCount_ / 2;
     std::size_t preparedSubmissionDepth_ = minimumPreparedSubmissionDepth_;
+    std::size_t syncOutputDelay_ = kDefaultSyncOutputDelay;
     static constexpr bool useDedicatedInputSurfaces_ = true;
     static constexpr DWORD asyncDrainWaitTimeoutMs_ = 1000;
     static constexpr int64_t asyncDrainWaitTimeout100ns_ =
@@ -2334,10 +2424,14 @@ private:
 }  // namespace
 
 EncoderWorker::EncoderWorker(
+    CaptureTickGate& captureTickGate,
     FrameQueue& frames,
     PacketRingBuffer& packets,
     ReplaySegmentStore* replayStore)
-    : frames_(frames), packets_(packets), replayStore_(replayStore) {}
+    : captureTickGate_(captureTickGate),
+      frames_(frames),
+      packets_(packets),
+      replayStore_(replayStore) {}
 
 EncoderWorker::~EncoderWorker() {
     stop();
@@ -2345,8 +2439,15 @@ EncoderWorker::~EncoderWorker() {
 
 void EncoderWorker::start() {
     if (running_.exchange(true)) return;
+    recentSchedulerWakeLateness_.clear();
 
     recentInputPreparationLatency_.clear();
+    recentQueueResidenceLatency_.clear();
+    recentInputPtsInterval_.clear();
+    recentOutputPtsInterval_.clear();
+    recentDistinctSourceOutputEvents_.clear();
+    recentRepeatedSourceOutputEvents_.clear();
+    recentUnknownSourceOutputEvents_.clear();
     recentInputMapLatency_.clear();
     recentNvencCallLatency_.clear();
     recentOutputEventWaitLatency_.clear();
@@ -2473,6 +2574,10 @@ int EncoderWorker::schedulerRepeatedFrames() const {
     return schedulerRepeatedFrames_.load();
 }
 
+bool EncoderWorker::stillFrameDuplicationEnabled() const {
+    return kEnableStillFrameDuplication;
+}
+
 int EncoderWorker::encoderQueueDrops() const {
     return encoderQueueDrops_.load();
 }
@@ -2495,6 +2600,18 @@ int EncoderWorker::encoderBackpressureDrops() const {
 
 int EncoderWorker::nvencInFlightFrames() const {
     return nvencInFlightFrames_.load();
+}
+
+uint64_t EncoderWorker::distinctSourceOutputFrames() const {
+    return distinctSourceOutputFrames_.load(std::memory_order_relaxed);
+}
+
+uint64_t EncoderWorker::repeatedSourceOutputFrames() const {
+    return repeatedSourceOutputFrames_.load(std::memory_order_relaxed);
+}
+
+uint64_t EncoderWorker::unknownSourceOutputFrames() const {
+    return unknownSourceOutputFrames_.load(std::memory_order_relaxed);
 }
 
 uint64_t EncoderWorker::nvencZeroCopyFrames() const {
@@ -2561,6 +2678,13 @@ int64_t EncoderWorker::maximumOutputDrainLatency100ns() const {
 EncoderRecentPerformance EncoderWorker::recentPerformance() const {
     const int64_t now100ns = monotonicNow100ns();
     EncoderRecentPerformance result;
+    result.schedulerWakeLateness = recentSchedulerWakeLateness_.snapshot(now100ns);
+    result.queueResidence = recentQueueResidenceLatency_.snapshot(now100ns);
+    result.inputPtsInterval = recentInputPtsInterval_.snapshot(now100ns);
+    result.outputPtsInterval = recentOutputPtsInterval_.snapshot(now100ns);
+    const auto distinctSourceEvents = recentDistinctSourceOutputEvents_.snapshot(now100ns);
+    const auto repeatedSourceEvents = recentRepeatedSourceOutputEvents_.snapshot(now100ns);
+    const auto unknownSourceEvents = recentUnknownSourceOutputEvents_.snapshot(now100ns);
     result.inputPreparation = recentInputPreparationLatency_.snapshot(now100ns);
     result.inputMap = recentInputMapLatency_.snapshot(now100ns);
     result.encodeCall = recentNvencCallLatency_.snapshot(now100ns);
@@ -2577,7 +2701,11 @@ EncoderRecentPerformance EncoderWorker::recentPerformance() const {
             static_cast<double>(observationWindow100ns);
         result.outputFps = static_cast<double>(result.outputLock.samples) * 10'000'000.0 /
             static_cast<double>(observationWindow100ns);
+        result.distinctSourceOutputFps = static_cast<double>(distinctSourceEvents.samples) *
+            10'000'000.0 / static_cast<double>(observationWindow100ns);
     }
+    result.repeatedSourceOutputFrames = repeatedSourceEvents.samples;
+    result.unknownSourceOutputFrames = unknownSourceEvents.samples;
     return result;
 }
 
@@ -2652,14 +2780,28 @@ bool EncoderWorker::queueTick(EncodeJob job) {
             ++encoderRepeatCoalesced_;
             return false;
         }
-        const auto droppedRun = pendingJobs_.front().run;
+        std::array<CfrFrameRun, maximumPendingRuns_> pendingRuns {};
+        std::size_t pendingRunCount = 0;
+        for (const auto& queued : pendingJobs_) {
+            pendingRuns[pendingRunCount++] = queued.run;
+        }
+        const std::size_t evictionIndex = preferredEncoderQueueEvictionIndex(
+            std::span<const CfrFrameRun>(pendingRuns.data(), pendingRunCount));
+        auto droppedJob = pendingJobs_.begin();
+        std::advance(droppedJob, static_cast<std::ptrdiff_t>(evictionIndex));
+
+        const auto droppedRun = droppedJob->run;
         pendingOutputTicks_ -= std::min<std::size_t>(pendingOutputTicks_, droppedRun.tickCount);
         pendingFreshTicks_ -= std::min<std::size_t>(pendingFreshTicks_, cfrFreshTickCount(droppedRun));
         pendingRepeatTicks_ -= std::min<std::size_t>(pendingRepeatTicks_, cfrRepeatTickCount(droppedRun));
-        pendingJobs_.pop_front();
+        pendingJobs_.erase(droppedJob);
         const int droppedTicks = static_cast<int>(std::min<uint32_t>(droppedRun.tickCount, INT_MAX));
-        encoderQueueDrops_.fetch_add(droppedTicks);
-        encoderBackpressureDrops_.fetch_add(droppedTicks);
+        if (cfrFreshTickCount(droppedRun) == 0) {
+            encoderRepeatCoalesced_.fetch_add(droppedTicks);
+        } else {
+            encoderQueueDrops_.fetch_add(droppedTicks);
+            encoderBackpressureDrops_.fetch_add(droppedTicks);
+        }
     }
     pendingOutputTicks_ += job.run.tickCount;
     pendingFreshTicks_ += cfrFreshTickCount(job.run);
@@ -2674,7 +2816,8 @@ bool EncoderWorker::queueTick(EncodeJob job) {
 void EncoderWorker::run() {
     std::optional<CapturedFrame> currentFrame;
     while (running_ && !currentFrame) {
-        currentFrame = frames_.waitPop();
+        if (captureTickGate_.active()) captureTickGate_.request();
+        currentFrame = frames_.waitPopFor(std::chrono::milliseconds(50));
         if (auto latest = frames_.consumeAllAndGetLatest()) currentFrame = std::move(latest);
     }
 
@@ -2682,18 +2825,16 @@ void EncoderWorker::run() {
 
     DWORD taskIndex = 0;
     HANDLE avrtHandle = AvSetMmThreadCharacteristicsW(L"Games", &taskIndex);
-    if (avrtHandle) AvSetMmThreadPriority(avrtHandle, AVRT_PRIORITY_HIGH);
+    if (avrtHandle) AvSetMmThreadPriority(avrtHandle, AVRT_PRIORITY_CRITICAL);
+    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    PrecisionTimer precisionTimer;
 
     int activeFps = std::clamp(targetFps_.load(), 24, 60);
     int activeFreshFrameVersion = freshFrameVersion_.load();
     int64_t frameSpacing100ns = 10'000'000LL / activeFps;
     VideoTimeline timeline(currentFrame->pts100ns, activeFps);
     auto interval = std::chrono::nanoseconds(frameSpacing100ns * 100);
-    // Run one output interval behind capture. This gives asynchronous capture
-    // delivery time to publish the frame for a tick without changing its PTS.
-    constexpr int schedulerSourceArrivalCushionTicks = 1;
-    auto nextWake = std::chrono::steady_clock::now() +
-        interval * (1 + schedulerSourceArrivalCushionTicks);
+    auto nextWake = std::chrono::steady_clock::now() + interval;
     uint64_t lastSubmittedSourceSequence = 0;
 
     while (running_) {
@@ -2714,34 +2855,59 @@ void EncoderWorker::run() {
             interval = std::chrono::nanoseconds(frameSpacing100ns * 100);
             currentFrame.reset();
             while (running_ && !currentFrame) {
-                currentFrame = frames_.waitPop();
+                if (captureTickGate_.active()) captureTickGate_.request();
+                currentFrame = frames_.waitPopFor(std::chrono::milliseconds(50));
                 if (auto latest = frames_.consumeAllAndGetLatest()) currentFrame = std::move(latest);
             }
             if (!running_ || !currentFrame) break;
             timeline.reset(currentFrame->pts100ns, activeFps);
-            nextWake = std::chrono::steady_clock::now() +
-                interval * (1 + schedulerSourceArrivalCushionTicks);
+            nextWake = std::chrono::steady_clock::now() + interval;
             lastSubmittedSourceSequence = 0;
             continue;
         }
 
-        std::this_thread::sleep_until(nextWake);
+        const bool capturePrearmed =
+            kEnableEncoderDrivenDxgiPrearm && captureTickGate_.active();
+        std::optional<uint64_t> captureRequest;
+        if (capturePrearmed) {
+            // OBS performs desktop acquisition before output submission on one
+            // graphics thread. Start Clipture's separate capture-thread hop
+            // early enough for its bounded DXGI grace wait to finish before
+            // this output tick becomes due.
+            precisionTimer.sleepUntil(nextWake - kEncoderDrivenCapturePrearmLead);
+            if (!running_) break;
+            captureRequest = captureTickGate_.request();
+        }
+
+        precisionTimer.sleepUntil(nextWake);
         if (!running_) break;
 
         const auto now = std::chrono::steady_clock::now();
         const int64_t lateness100ns = now > nextWake
             ? std::chrono::duration_cast<std::chrono::nanoseconds>(now - nextWake).count() / 100
             : 0;
-        constexpr int64_t maximumCatchUpTicks = 8;
+        recentSchedulerWakeLateness_.record(monotonicNow100ns(), lateness100ns);
+        constexpr int64_t maximumCatchUpTicks = 1;
         const auto timelineStep = timeline.advance(lateness100ns, maximumCatchUpTicks);
         const int64_t skippedTicks = timelineStep.skippedTicks;
         if (skippedTicks > 0) {
             schedulerDroppedFrames_.fetch_add(static_cast<int>(std::min<int64_t>(skippedTicks, INT_MAX)));
         }
 
+        const bool encoderDrivenCapture = captureTickGate_.active();
+        if (encoderDrivenCapture && timelineStep.dueTicks > 0) {
+            // Backend restarts can activate the gate between the pre-arm point
+            // and this deadline. Preserve a bounded same-tick fallback for that
+            // rare transition without moving normal DXGI waits back here.
+            if (!captureRequest) captureRequest = captureTickGate_.request();
+            if (captureRequest) captureTickGate_.waitForCompletion(*captureRequest);
+        }
         for (int64_t tick = 0; tick < timelineStep.dueTicks && running_; ++tick) {
             const int64_t tickPts100ns = timelineStep.pts100ns + tick * frameSpacing100ns;
-            if (auto newest = frames_.consumeLatestAtOrBefore(tickPts100ns + frameSpacing100ns / 2)) {
+            auto newest = encoderDrivenCapture
+                ? frames_.consumeAllAndGetLatest()
+                : frames_.consumeLatestAtOrBefore(tickPts100ns + frameSpacing100ns / 2);
+            if (newest) {
                 currentFrame = std::move(newest);
             }
             if (currentFrame) {
@@ -2807,6 +2973,10 @@ void EncoderWorker::run() {
             }
         }
         nextWake += interval * (timelineStep.skippedTicks + timelineStep.dueTicks);
+        const auto postTickNow = std::chrono::steady_clock::now();
+        if (postTickNow > nextWake + interval) {
+            nextWake = postTickNow + interval;
+        }
     }
 
     if (avrtHandle) AvRevertMmThreadCharacteristics(avrtHandle);
@@ -2829,8 +2999,44 @@ void EncoderWorker::encodeLoop() {
     int appliedConfigDiscardVersion = 0;
     int appliedDiscardVersion = 0;
     uint64_t activeCaptureEpoch = 0;
-    auto pushPackets = [this](std::vector<EncodedPacket>& packets) {
+    int64_t previousInputPts100ns = 0;
+    uint64_t previousInputCaptureEpoch = 0;
+    int64_t previousOutputPts100ns = 0;
+    uint32_t previousOutputEncoderEpoch = 0;
+    uint64_t previousOutputSourceSequence = 0;
+    auto pushPackets = [
+        this,
+        &previousOutputPts100ns,
+        &previousOutputEncoderEpoch,
+        &previousOutputSourceSequence](std::vector<EncodedPacket>& packets) {
         for (auto& packet : packets) {
+            const int64_t recordedAt100ns = monotonicNow100ns();
+            if (packet.encoderEpoch != previousOutputEncoderEpoch ||
+                packet.pts100ns <= previousOutputPts100ns) {
+                previousOutputPts100ns = 0;
+                previousOutputSourceSequence = 0;
+            }
+            if (previousOutputPts100ns > 0) {
+                recentOutputPtsInterval_.record(
+                    recordedAt100ns,
+                    packet.pts100ns - previousOutputPts100ns);
+            }
+            previousOutputPts100ns = packet.pts100ns;
+            previousOutputEncoderEpoch = packet.encoderEpoch;
+
+            if (packet.sourceFrameSequence == 0) {
+                ++unknownSourceOutputFrames_;
+                recentUnknownSourceOutputEvents_.record(recordedAt100ns, 0);
+                previousOutputSourceSequence = 0;
+            } else if (packet.sourceFrameSequence == previousOutputSourceSequence) {
+                ++repeatedSourceOutputFrames_;
+                recentRepeatedSourceOutputEvents_.record(recordedAt100ns, 0);
+            } else {
+                ++distinctSourceOutputFrames_;
+                recentDistinctSourceOutputEvents_.record(recordedAt100ns, 0);
+                previousOutputSourceSequence = packet.sourceFrameSequence;
+            }
+
             if (replayStore_) {
                 replayStore_->push(packet);
                 EncodedPacket headerOnly = packet;
@@ -2870,6 +3076,23 @@ void EncoderWorker::encodeLoop() {
             frameForTick.pts100ns = job.run.firstPts100ns +
                 static_cast<int64_t>(tick) * job.run.frameSpacing100ns;
             const int64_t submitStarted100ns = monotonicNow100ns();
+            if (frameForTick.captureEpoch != previousInputCaptureEpoch ||
+                frameForTick.pts100ns <= previousInputPts100ns) {
+                previousInputPts100ns = 0;
+            }
+            if (previousInputPts100ns > 0) {
+                recentInputPtsInterval_.record(
+                    submitStarted100ns,
+                    frameForTick.pts100ns - previousInputPts100ns);
+            }
+            previousInputPts100ns = frameForTick.pts100ns;
+            previousInputCaptureEpoch = frameForTick.captureEpoch;
+            if (frameForTick.queuedAtSteady100ns > 0 &&
+                submitStarted100ns >= frameForTick.queuedAtSteady100ns) {
+                recentQueueResidenceLatency_.record(
+                    submitStarted100ns,
+                    submitStarted100ns - frameForTick.queuedAtSteady100ns);
+            }
             const bool freshEpochChanged = activeFreshFrameVersion >= 0 &&
                 job.freshFrameVersion != activeFreshFrameVersion;
             const bool sessionChanged =

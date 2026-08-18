@@ -5,6 +5,7 @@
 #include "clipture/Mp4Muxer.hpp"
 #include "clipture/NativeRuntime.hpp"
 #include "clipture/ProcessSnapshot.hpp"
+#include "clipture/VideoCadenceAnalysis.hpp"
 
 #include <Windows.h>
 #include <audiopolicy.h>
@@ -565,6 +566,48 @@ std::pair<std::string, bool> detectForegroundAppInfo(HMONITOR activeMonitor = nu
     return {"Foreground app", false};
 }
 
+struct ForegroundGameCaptureTarget {
+    HWND window = nullptr;
+    std::string name;
+};
+
+bool experimentalGameWindowCaptureEnabled() {
+    static const bool enabled = [] {
+        char value[16] {};
+        const DWORD length = GetEnvironmentVariableA(
+            "CLIPTURE_EXPERIMENTAL_GAME_WINDOW_CAPTURE",
+            value,
+            static_cast<DWORD>(sizeof(value)));
+        if (length == 0 || length >= sizeof(value)) return false;
+        const auto flag = lowerAscii(std::string(value, length));
+        return flag == "1" || flag == "true" || flag == "on";
+    }();
+    return enabled;
+}
+
+ForegroundGameCaptureTarget detectForegroundGameCaptureTarget(HMONITOR activeMonitor) {
+    HWND window = GetForegroundWindow();
+    if (!window || !IsWindowVisible(window) || IsIconic(window)) return {};
+
+    if (activeMonitor) {
+        const HMONITOR windowMonitor = MonitorFromWindow(window, MONITOR_DEFAULTTONULL);
+        if (windowMonitor && windowMonitor != activeMonitor) return {};
+    }
+
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    if (processId == 0) return {};
+
+    const auto processPath = RunningProcessSnapshot::queryProcessPath(processId);
+    if (processPath.empty()) return {};
+
+    const auto exeName = std::filesystem::path(processPath).filename().string();
+    if (isIgnoredForegroundProcess(exeName) ||
+        !isKnownGameProcess(exeName, processPath, processId, window)) {
+        return {};
+    }
+    return { window, getGameName(exeName) };
+}
 std::pair<int, int> parseResolution(const std::string& resolution) {
     const auto marker = resolution.find('x');
     if (marker == std::string::npos) return { 1920, 1080 };
@@ -717,6 +760,7 @@ Engine::Engine()
           pcmRecoveryStore_.get())),
       captureSession_(std::make_unique<CaptureSession>()),
       encoderWorker_(std::make_unique<EncoderWorker>(
+          captureTickGate_,
           frameQueue_,
           videoPackets_,
           videoReplayStore_.get())),
@@ -787,6 +831,22 @@ void Engine::gameDetectionLoop() {
         {
             HMONITOR activeMonitor = captureSession_ ? static_cast<HMONITOR>(captureSession_->activeMonitor()) : nullptr;
             auto [fgApp, fgIsGame] = detectForegroundAppInfo(activeMonitor);
+            if (experimentalGameWindowCaptureEnabled()) {
+                const auto gameCaptureTarget = detectForegroundGameCaptureTarget(activeMonitor);
+                if (captureSession_ && gameCaptureTarget.window) {
+                    captureSession_->preferGameWindow(gameCaptureTarget.window, gameCaptureTarget.name);
+                    activeGameCaptureWindow_ = gameCaptureTarget.window;
+                } else if (captureSession_ && activeGameCaptureWindow_ &&
+                           (!IsWindow(static_cast<HWND>(activeGameCaptureWindow_)) ||
+                            IsIconic(static_cast<HWND>(activeGameCaptureWindow_)))) {
+                    captureSession_->preferMonitor();
+                    activeGameCaptureWindow_ = nullptr;
+                }
+            } else if (captureSession_ && activeGameCaptureWindow_) {
+                captureSession_->preferMonitor();
+                activeGameCaptureWindow_ = nullptr;
+            }
+
             std::lock_guard<std::mutex> lock(historyMutex_);
             auto now = std::chrono::steady_clock::now();
             if (fgApp != "Foreground app") {
@@ -1187,7 +1247,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
                     encoderWorker_->requireFreshFrame(true);
                 }
             }
-            const bool captureStarted = captureSession_->startMonitor(&frameQueue_, settings_.monitorId);
+            const bool captureStarted = captureSession_->startMonitor(&frameQueue_, &captureTickGate_, settings_.monitorId);
             diagnostics_.captureReady = captureStarted;
             diagnostics_.degraded = !diagnostics_.hardwareAcceleration || !captureStarted;
             diagnostics_.status = captureSession_->status();
@@ -1243,7 +1303,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     diagnostics_.fps = settings_.fps;
     diagnostics_.bitrateMbps = settings_.bitrateMbps;
     diagnostics_.bufferDurationSeconds = settings_.clipLengthSeconds;
-    diagnostics_.encoderMode = "NVENC P" + std::to_string(settings_.nvencPreset) + " (async with sync compatibility fallback)";
+    diagnostics_.encoderMode = "NVENC P" + std::to_string(settings_.nvencPreset) + " (buffered sync preferred; async compatibility fallback)";
     diagnostics_.microphoneDevice = audioCaptureWorker_ ? audioCaptureWorker_->microphoneStatus() : microphoneDeviceName(settings_.micDeviceId);
     diagnostics_.clipTargetResolution = settings_.targetWidth > 0 && settings_.targetHeight > 0
         ? formatResolution(settings_.targetWidth, settings_.targetHeight)
@@ -1442,6 +1502,7 @@ std::vector<EncodedPacket> mixPcmPackets(
 
 SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     SaveClipResult result;
+    diagnostics_.lastClipCadence = {};
     const auto totalStartedAt = SaveTimingClock::now();
     logEngineSaveTiming("start", totalStartedAt, "durationSeconds=" + std::to_string(request.durationSeconds));
     auto currentVideoDropCount = [this]() {
@@ -1548,7 +1609,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                 0,
                 static_cast<int>(sample.frameQueueDepth) - saveStartFrameQueueDepth);
             const int encoderQueueGrowth = std::max(0, sample.encoderQueueDepth - saveStartEncoderQueueDepth);
-            const int nvencInFlightGrowth = std::max(0, sample.nvencInFlight - saveStartNvencInFlight);
+
             const int64_t oldestAgeGrowth = std::max<int64_t>(
                 0,
                 sample.oldestFrameAge100ns - saveStartOldestFrameAge100ns);
@@ -1567,13 +1628,11 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             if (frameQueueGrowth >= 4 ||
                 oldestAgeGrowth > frameInterval100ns * 4 ||
                 encoderQueueGrowth >= 4 ||
-                nvencInFlightGrowth >= 6 ||
                 captureCritical) {
                 sample.level = MuxPressureLevel::Critical;
             } else if (frameQueueGrowth >= 2 ||
                        oldestAgeGrowth > frameInterval100ns * 2 ||
                        encoderQueueGrowth >= 2 ||
-                       nvencInFlightGrowth >= 3 ||
                        captureElevated) {
                 sample.level = MuxPressureLevel::Elevated;
             }
@@ -1640,6 +1699,9 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         return result;
     }
     const int actualDuration = actualClipDurationSeconds(clipPackets, duration);
+    diagnostics_.lastClipCadence = analyzeVideoCadence(
+        std::span<const EncodedPacket>(clipPackets.data(), clipPackets.size()),
+        diagnostics_.fps);
     if (clipPackets.size() >= 2) {
         const auto videoTimelineStartedAt = SaveTimingClock::now();
         const int64_t targetFrameDuration100ns = 10'000'000LL / std::max(1, diagnostics_.fps);
@@ -1702,6 +1764,18 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                 " repeatedSourceTicks=" + std::to_string(repeatedSourceTicks) +
                 " freshSourceFps=" + fixedNumber(freshSourceFps) +
                 " repeatRatio=" + fixedNumber(repeatRatio, 4) +
+                " worstSecondFreshSourceFps=" + fixedNumber(
+                    diagnostics_.lastClipCadence.worstSecondDistinctSourceFps) +
+                " desktopPresentSourceFps=" + fixedNumber(
+                    diagnostics_.lastClipCadence.desktopPresentSourceFps) +
+                " pointerOnlySourceFrames=" + std::to_string(
+                    diagnostics_.lastClipCadence.pointerOnlySourceFrames) +
+                " underTargetSeconds=" + std::to_string(
+                    diagnostics_.lastClipCadence.underTargetSeconds) +
+                " longestHeldRunSamples=" + std::to_string(
+                    diagnostics_.lastClipCadence.longestHeldRunSamples) +
+                " stillFrameDuplication=" + std::string(
+                    diagnostics_.stillFrameDuplicationEnabled ? "true" : "false") +
                 " captureBackend=\"" + jsonEscape(captureStats.activeBackend) + "\"" +
                 " desktopPresentFps=" + fixedNumber(captureStats.desktopPresentFps) +
                 " publishedFreshFps=" + fixedNumber(captureStats.publishedFreshFps) +
@@ -2133,7 +2207,7 @@ void Engine::arm() {
             settings_.nvencPreset);
     }
     captureSession_->setTargetFps(settings_.fps);
-    const bool captureStarted = captureSession_->startMonitor(&frameQueue_, settings_.monitorId);
+    const bool captureStarted = captureSession_->startMonitor(&frameQueue_, &captureTickGate_, settings_.monitorId);
     diagnostics_.captureReady = captureStarted;
     if (captureStarted) {
         diagnostics_.resolution = captureSession_->resolution();
@@ -2159,7 +2233,7 @@ void Engine::refreshPacketCounts() {
             nextCaptureRestart100ns_ = currentTime100ns + 2LL * 10'000'000LL;
             if (encoderWorker_) encoderWorker_->requireFreshFrame();
             captureSession_->setTargetFps(settings_.fps);
-            const bool restarted = captureSession_->startMonitor(&frameQueue_, settings_.monitorId);
+            const bool restarted = captureSession_->startMonitor(&frameQueue_, &captureTickGate_, settings_.monitorId);
             diagnostics_.captureReady = restarted;
             if (restarted) {
                 nextCaptureRestart100ns_ = 0;
@@ -2259,6 +2333,8 @@ void Engine::refreshPacketCounts() {
     diagnostics_.requestedCaptureBackend = captureStats.requestedBackend;
     diagnostics_.activeCaptureBackend = captureStats.activeBackend;
     diagnostics_.captureFallbackReason = captureStats.fallbackReason;
+    diagnostics_.captureTargetKind = captureStats.targetKind;
+    diagnostics_.captureTargetName = captureStats.targetName;
     diagnostics_.displayRefreshNumerator = captureStats.refreshNumerator;
     diagnostics_.displayRefreshDenominator = captureStats.refreshDenominator;
     diagnostics_.displayRefreshHz = captureStats.refreshHz;
@@ -2271,14 +2347,33 @@ void Engine::refreshPacketCounts() {
     diagnostics_.captureSamplerRejections = captureStats.samplerRejections;
     diagnostics_.captureNonMonotonicTimestamps = captureStats.nonMonotonicTimestamps;
     diagnostics_.captureAcquireTimeouts = captureStats.acquireTimeouts;
+    diagnostics_.captureAcquireImmediateMisses = captureStats.acquireImmediateMisses;
+    diagnostics_.captureAcquireGraceHits = captureStats.acquireGraceHits;
+    diagnostics_.captureAcquireGraceTimeouts = captureStats.acquireGraceTimeouts;
     diagnostics_.captureAccessLosses = captureStats.accessLosses;
     diagnostics_.captureRecreationAttempts = captureStats.recreationAttempts;
     diagnostics_.captureRecreationSuccesses = captureStats.recreationSuccesses;
     diagnostics_.captureFallbacks = captureStats.fallbackCount;
+    diagnostics_.captureClockMode = captureStats.clockMode;
+    diagnostics_.captureClockTickRequests = captureStats.clockTickRequests;
+    diagnostics_.captureClockTickWakeups = captureStats.clockTickWakeups;
+    diagnostics_.captureClockTickCoalesced = captureStats.clockTickCoalesced;
+    diagnostics_.captureClockTickCompletions = captureStats.clockTickCompletions;
+    diagnostics_.captureClockTickCompletionWaits = captureStats.clockTickCompletionWaits;
+    diagnostics_.captureClockTickCompletionTimeouts = captureStats.clockTickCompletionTimeouts;
     diagnostics_.desktopPresentFps = captureStats.desktopPresentFps;
     diagnostics_.publishedFreshFps = captureStats.publishedFreshFps;
     diagnostics_.recentPublishedFreshFps = captureStats.recentPublishedFreshFps;
     diagnostics_.recentCaptureAcquireP95_100ns = captureStats.acquireWaitLatency.p95_100ns;
+    diagnostics_.recentCaptureSourceIntervalP50_100ns = captureStats.sourceUpdateInterval.p50_100ns;
+    diagnostics_.recentCaptureSourceIntervalP95_100ns = captureStats.sourceUpdateInterval.p95_100ns;
+    diagnostics_.recentCaptureSourceIntervalMaximum100ns = captureStats.sourceUpdateInterval.maximum100ns;
+    diagnostics_.recentPublishedPtsIntervalP50_100ns = captureStats.publishedPtsInterval.p50_100ns;
+    diagnostics_.recentPublishedPtsIntervalP95_100ns = captureStats.publishedPtsInterval.p95_100ns;
+    diagnostics_.recentPublishedPtsIntervalMaximum100ns = captureStats.publishedPtsInterval.maximum100ns;
+    diagnostics_.recentPublishedWallIntervalP50_100ns = captureStats.publishedWallInterval.p50_100ns;
+    diagnostics_.recentPublishedWallIntervalP95_100ns = captureStats.publishedWallInterval.p95_100ns;
+    diagnostics_.recentPublishedWallIntervalMaximum100ns = captureStats.publishedWallInterval.maximum100ns;
     diagnostics_.recentCapturePreparationP50_100ns = captureStats.framePreparationLatency.p50_100ns;
     diagnostics_.recentCapturePreparationP95_100ns = captureStats.framePreparationLatency.p95_100ns;
     diagnostics_.recentCaptureCursorP95_100ns = captureStats.cursorCompositeLatency.p95_100ns;
@@ -2302,9 +2397,21 @@ void Engine::refreshPacketCounts() {
     diagnostics_.captureEpoch = captureSession_ ? captureSession_->captureEpoch() : 0;
     diagnostics_.schedulerDroppedFrames = encoderWorker_ ? encoderWorker_->schedulerDroppedFrames() : 0;
     diagnostics_.schedulerRepeatedFrames = encoderWorker_ ? encoderWorker_->schedulerRepeatedFrames() : 0;
-    diagnostics_.encodedRepeatRatio = diagnostics_.encoderAcceptedFrames > 0
-        ? static_cast<double>(diagnostics_.schedulerRepeatedFrames) /
-            static_cast<double>(diagnostics_.encoderAcceptedFrames)
+    diagnostics_.stillFrameDuplicationEnabled = encoderWorker_
+        ? encoderWorker_->stillFrameDuplicationEnabled()
+        : false;
+    diagnostics_.encoderDistinctSourceFrames = encoderWorker_
+        ? encoderWorker_->distinctSourceOutputFrames()
+        : 0;
+    diagnostics_.encoderRepeatedSourceFrames = encoderWorker_
+        ? encoderWorker_->repeatedSourceOutputFrames()
+        : 0;
+    diagnostics_.encoderUnknownSourceFrames = encoderWorker_
+        ? encoderWorker_->unknownSourceOutputFrames()
+        : 0;
+    diagnostics_.encodedRepeatRatio = diagnostics_.encoderOutputPackets > 0
+        ? static_cast<double>(diagnostics_.encoderRepeatedSourceFrames) /
+            static_cast<double>(diagnostics_.encoderOutputPackets)
         : 0.0;
     diagnostics_.encoderQueueDrops = encoderWorker_ ? encoderWorker_->encoderQueueDrops() : 0;
     diagnostics_.encoderRepeatCoalesced = encoderWorker_ ? encoderWorker_->encoderRepeatCoalesced() : 0;
@@ -2328,6 +2435,21 @@ void Engine::refreshPacketCounts() {
         : EncoderRecentPerformance {};
     diagnostics_.recentEncoderInputFps = encoderRecent.inputFps;
     diagnostics_.recentEncoderOutputFps = encoderRecent.outputFps;
+    diagnostics_.recentEncoderDistinctSourceFps = encoderRecent.distinctSourceOutputFps;
+    diagnostics_.recentEncoderRepeatedSourceFrames = encoderRecent.repeatedSourceOutputFrames;
+    diagnostics_.recentEncoderUnknownSourceFrames = encoderRecent.unknownSourceOutputFrames;
+    diagnostics_.recentSchedulerWakeLatenessP50_100ns = encoderRecent.schedulerWakeLateness.p50_100ns;
+    diagnostics_.recentSchedulerWakeLatenessP95_100ns = encoderRecent.schedulerWakeLateness.p95_100ns;
+    diagnostics_.recentSchedulerWakeLatenessMaximum100ns = encoderRecent.schedulerWakeLateness.maximum100ns;
+    diagnostics_.recentEncoderQueueResidenceP50_100ns = encoderRecent.queueResidence.p50_100ns;
+    diagnostics_.recentEncoderQueueResidenceP95_100ns = encoderRecent.queueResidence.p95_100ns;
+    diagnostics_.recentEncoderQueueResidenceMaximum100ns = encoderRecent.queueResidence.maximum100ns;
+    diagnostics_.recentEncoderInputIntervalP50_100ns = encoderRecent.inputPtsInterval.p50_100ns;
+    diagnostics_.recentEncoderInputIntervalP95_100ns = encoderRecent.inputPtsInterval.p95_100ns;
+    diagnostics_.recentEncoderInputIntervalMaximum100ns = encoderRecent.inputPtsInterval.maximum100ns;
+    diagnostics_.recentEncoderOutputIntervalP50_100ns = encoderRecent.outputPtsInterval.p50_100ns;
+    diagnostics_.recentEncoderOutputIntervalP95_100ns = encoderRecent.outputPtsInterval.p95_100ns;
+    diagnostics_.recentEncoderOutputIntervalMaximum100ns = encoderRecent.outputPtsInterval.maximum100ns;
     diagnostics_.recentInputPreparationP50_100ns = encoderRecent.inputPreparation.p50_100ns;
     diagnostics_.recentInputPreparationP95_100ns = encoderRecent.inputPreparation.p95_100ns;
     diagnostics_.recentInputMapP50_100ns = encoderRecent.inputMap.p50_100ns;
@@ -2351,12 +2473,12 @@ void Engine::refreshPacketCounts() {
     const int64_t frameInterval100ns = 10'000'000LL / std::max(1, diagnostics_.fps);
     const int64_t oldestFrameAge100ns = frameQueue_.oldestFrameAge100ns();
     if (diagnostics_.queuedFrames >= 4 ||
-        oldestFrameAge100ns > frameInterval100ns * 4 ||
-        diagnostics_.nvencInFlightFrames >= 6) {
+        diagnostics_.encoderQueuedFreshFrames >= 4 ||
+        oldestFrameAge100ns > frameInterval100ns * 4) {
         diagnostics_.capturePressure = "critical";
     } else if (diagnostics_.queuedFrames >= 2 ||
-               oldestFrameAge100ns > frameInterval100ns * 2 ||
-               diagnostics_.nvencInFlightFrames >= 4) {
+               diagnostics_.encoderQueuedFreshFrames >= 2 ||
+               oldestFrameAge100ns > frameInterval100ns * 2) {
         diagnostics_.capturePressure = "elevated";
     } else {
         diagnostics_.capturePressure = "healthy";

@@ -8,7 +8,11 @@ namespace clipture::capture {
 
 class WgcCaptureBackend final : public CaptureBackend {
 public:
-    WgcCaptureBackend(std::shared_ptr<CaptureSharedState> shared, SelectedOutput output);
+    WgcCaptureBackend(
+        std::shared_ptr<CaptureSharedState> shared,
+        SelectedOutput output,
+        void* window = nullptr,
+        std::string targetName = {});
     ~WgcCaptureBackend() override;
 
     BackendStartResult start() override;

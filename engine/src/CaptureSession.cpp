@@ -44,8 +44,15 @@ struct CaptureSession::Impl {
     std::shared_ptr<capture::CaptureSharedState> shared =
         std::make_shared<capture::CaptureSharedState>();
     std::jthread controllerThread;
+    std::recursive_mutex lifecycleMutex;
     std::mutex controllerMutex;
     std::string quarantinedMonitorKey;
+
+    FrameQueue* configuredFrameQueue = nullptr;
+    CaptureTickGate* configuredTickGate = nullptr;
+    std::string configuredMonitorId = "primary";
+    std::atomic<void*> activeWindow = nullptr;
+    std::atomic<void*> failedWindow = nullptr;
 
     std::mutex initialMutex;
     std::condition_variable initialCv;
@@ -75,14 +82,42 @@ struct CaptureSession::Impl {
         return !monitorKey.empty() && quarantinedMonitorKey == monitorKey;
     }
 
+    CaptureBackendKind monitorFallbackKind(
+        const capture::SelectedOutput& output,
+        CaptureBackendPreference preference) const {
+        const bool identityRotation =
+            output.desc.Rotation == DXGI_MODE_ROTATION_IDENTITY ||
+            output.desc.Rotation == DXGI_MODE_ROTATION_UNSPECIFIED;
+        if (preference == CaptureBackendPreference::Wgc || !identityRotation) {
+            return CaptureBackendKind::Wgc;
+        }
+        return CaptureBackendKind::Dxgi;
+    }
+
     void runController(
         std::stop_token stopToken,
         capture::SelectedOutput selectedOutput,
         std::string monitorId,
         CaptureBackendPreference preference,
-        CaptureBackendKind initialKind) {
+        CaptureBackendKind initialKind,
+        HWND initialWindow,
+        std::string targetName) {
         CaptureBackendKind kind = initialKind;
+        HWND captureWindow = initialWindow;
         bool backendHasRun = false;
+
+        auto fallBackFromWindow = [&](const std::string& reason) {
+            shared->setFallbackReason(reason);
+            ++shared->fallbackCount;
+            shared->beginEpoch();
+            failedWindow.store(captureWindow, std::memory_order_release);
+            activeWindow.store(nullptr, std::memory_order_release);
+            captureWindow = nullptr;
+            shared->setCaptureTarget("monitor", selectedOutput.displayName);
+            kind = monitorFallbackKind(selectedOutput, preference);
+            std::cerr << "[capture] Game-window capture unavailable; falling back to "
+                      << captureBackendKindName(kind) << ": " << reason << '\n';
+        };
 
         while (!stopToken.stop_requested()) {
             std::unique_ptr<capture::CaptureBackend> backend;
@@ -91,6 +126,9 @@ struct CaptureSession::Impl {
                     shared, selectedOutput, monitorId);
             } else if (kind == CaptureBackendKind::Wgc) {
                 backend = std::make_unique<capture::WgcCaptureBackend>(shared, selectedOutput);
+            } else if (kind == CaptureBackendKind::WgcWindow) {
+                backend = std::make_unique<capture::WgcCaptureBackend>(
+                    shared, selectedOutput, captureWindow, targetName);
             } else {
                 shared->setStatus("No capture backend was selected.");
                 completeInitial(false);
@@ -100,6 +138,10 @@ struct CaptureSession::Impl {
             const auto startResult = backend->start();
             if (!startResult.ok) {
                 backend->stop();
+                if (kind == CaptureBackendKind::WgcWindow) {
+                    fallBackFromWindow(startResult.message);
+                    continue;
+                }
                 if (kind == CaptureBackendKind::Dxgi && preference == CaptureBackendPreference::Auto) {
                     shared->setFallbackReason(startResult.message);
                     ++shared->fallbackCount;
@@ -121,6 +163,15 @@ struct CaptureSession::Impl {
             backend->stop();
             if (stopToken.stop_requested() || outcome == capture::BackendOutcome::Stopped) break;
 
+            if (kind == CaptureBackendKind::WgcWindow) {
+                const auto reason = shared->snapshot().fallbackReason;
+                fallBackFromWindow(
+                    reason.empty()
+                        ? "Windows.Graphics.Capture game-window source stopped."
+                        : reason);
+                continue;
+            }
+
             if (kind == CaptureBackendKind::Dxgi &&
                 outcome == capture::BackendOutcome::RequestFallback &&
                 preference == CaptureBackendPreference::Auto) {
@@ -134,6 +185,7 @@ struct CaptureSession::Impl {
                 if (capture::selectOutput(monitorId, refreshedOutput)) {
                     selectedOutput = std::move(refreshedOutput);
                     shared->setSelectedOutput(selectedOutput);
+                    shared->setCaptureTarget("monitor", selectedOutput.displayName);
                 }
                 kind = CaptureBackendKind::Wgc;
                 continue;
@@ -151,11 +203,122 @@ struct CaptureSession::Impl {
 
         if (!backendHasRun) completeInitial(false);
         shared->running.store(false, std::memory_order_release);
+        activeWindow.store(nullptr, std::memory_order_release);
         {
             std::lock_guard lock(shared->stateMutex);
             shared->activeBackend = "none";
             shared->activeBackendStarted100ns = 0;
         }
+    }
+
+    void stopController(bool releaseBindings) {
+        if (auto* tickGate = shared->captureTickGate.load(std::memory_order_acquire)) {
+            tickGate->deactivate();
+        }
+        if (controllerThread.joinable()) {
+            controllerThread.request_stop();
+            controllerThread.join();
+        }
+        shared->running.store(false, std::memory_order_release);
+        shared->hdrTonemappingActive.store(false, std::memory_order_relaxed);
+        activeWindow.store(nullptr, std::memory_order_release);
+        if (releaseBindings) {
+            configuredFrameQueue = nullptr;
+            configuredTickGate = nullptr;
+            configuredMonitorId = "primary";
+            failedWindow.store(nullptr, std::memory_order_release);
+            shared->frameQueue.store(nullptr, std::memory_order_release);
+            shared->captureTickGate.store(nullptr, std::memory_order_release);
+            shared->activeMonitor.store(nullptr, std::memory_order_release);
+        }
+    }
+
+    bool startTarget(HWND requestedWindow, std::string targetName) {
+        stopController(false);
+
+        capture::SelectedOutput selectedOutput;
+        if (!capture::selectOutput(configuredMonitorId, selectedOutput) ||
+            !selectedOutput.adapter || !selectedOutput.output) {
+            shared->setStatus("No matching monitor was found for capture.");
+            return false;
+        }
+
+        HWND captureWindow = requestedWindow;
+        if (captureWindow &&
+            (!IsWindow(captureWindow) ||
+             MonitorFromWindow(captureWindow, MONITOR_DEFAULTTONULL) != selectedOutput.desc.Monitor)) {
+            captureWindow = nullptr;
+        }
+
+        const auto preference = captureBackendPreferenceFromEnvironment();
+        const bool identityRotation =
+            selectedOutput.desc.Rotation == DXGI_MODE_ROTATION_IDENTITY ||
+            selectedOutput.desc.Rotation == DXGI_MODE_ROTATION_UNSPECIFIED;
+        const auto monitorDecision = decideCaptureBackend(
+            preference,
+            selectedOutput.hdrEnabled,
+            identityRotation,
+            isQuarantinedForSelection(selectedOutput.monitorKey));
+        const CaptureBackendDecision decision =
+            captureWindow && preference != CaptureBackendPreference::Dxgi
+                ? CaptureBackendDecision {
+                    CaptureBackendKind::WgcWindow,
+                    true,
+                    "foreground game uses non-injected window capture",
+                }
+                : monitorDecision;
+
+        shared->resetForStart(
+            configuredFrameQueue,
+            configuredTickGate,
+            selectedOutput,
+            preference);
+        shared->setCaptureTarget(
+            captureWindow ? "game-window" : "monitor",
+            captureWindow && !targetName.empty() ? targetName : selectedOutput.displayName);
+        if (!decision.supported) {
+            shared->setStatus(std::string(decision.reason));
+            return false;
+        }
+
+        activeWindow.store(captureWindow, std::memory_order_release);
+        {
+            std::lock_guard lock(initialMutex);
+            initialComplete = false;
+            initialSuccess = false;
+        }
+        controllerThread = std::jthread(
+            [this,
+             selectedOutput,
+             monitorId = configuredMonitorId,
+             preference,
+             kind = decision.kind,
+             captureWindow,
+             targetName = std::move(targetName)](std::stop_token stopToken) mutable {
+                runController(
+                    stopToken,
+                    std::move(selectedOutput),
+                    std::move(monitorId),
+                    preference,
+                    kind,
+                    captureWindow,
+                    std::move(targetName));
+            });
+
+        std::unique_lock initialLock(initialMutex);
+        const bool completed = initialCv.wait_for(
+            initialLock,
+            std::chrono::seconds(5),
+            [this] { return initialComplete; });
+        const bool success = completed && initialSuccess;
+        initialLock.unlock();
+        if (!completed) {
+            shared->setStatus("Capture backend startup timed out.");
+            stopController(false);
+        } else if (!success && controllerThread.joinable()) {
+            controllerThread.join();
+        }
+        return success;
     }
 };
 
@@ -166,60 +329,46 @@ CaptureSession::~CaptureSession() {
     stop();
 }
 
-bool CaptureSession::startMonitor(FrameQueue* frameQueue, const std::string& monitorId) {
-    stop();
+bool CaptureSession::startMonitor(
+    FrameQueue* frameQueue,
+    CaptureTickGate* captureTickGate,
+    const std::string& monitorId) {
+    std::lock_guard lock(impl_->lifecycleMutex);
+    impl_->configuredFrameQueue = frameQueue;
+    impl_->configuredTickGate = captureTickGate;
+    impl_->configuredMonitorId = monitorId.empty() ? "primary" : monitorId;
+    impl_->failedWindow.store(nullptr, std::memory_order_release);
+    return impl_->startTarget(nullptr, {});
+}
 
-    capture::SelectedOutput selectedOutput;
-    if (!capture::selectOutput(monitorId, selectedOutput) ||
-        !selectedOutput.adapter || !selectedOutput.output) {
-        impl_->shared->setStatus("No matching monitor was found for capture.");
+bool CaptureSession::preferGameWindow(void* window, const std::string& targetName) {
+    auto captureWindow = static_cast<HWND>(window);
+    if (!captureWindow || !IsWindow(captureWindow)) return false;
+
+    std::lock_guard lock(impl_->lifecycleMutex);
+    if (!impl_->configuredFrameQueue || !impl_->configuredTickGate) return false;
+    if (impl_->activeWindow.load(std::memory_order_acquire) == captureWindow &&
+        impl_->shared->running.load(std::memory_order_acquire)) {
+        return true;
+    }
+    if (impl_->failedWindow.load(std::memory_order_acquire) == captureWindow &&
+        impl_->shared->running.load(std::memory_order_acquire)) {
         return false;
     }
 
-    const auto preference = captureBackendPreferenceFromEnvironment();
-    const bool identityRotation =
-        selectedOutput.desc.Rotation == DXGI_MODE_ROTATION_IDENTITY ||
-        selectedOutput.desc.Rotation == DXGI_MODE_ROTATION_UNSPECIFIED;
-    const auto decision = decideCaptureBackend(
-        preference,
-        selectedOutput.hdrEnabled,
-        identityRotation,
-        impl_->isQuarantinedForSelection(selectedOutput.monitorKey));
-    impl_->shared->resetForStart(frameQueue, selectedOutput, preference);
-    if (!decision.supported) {
-        impl_->shared->setStatus(std::string(decision.reason));
-        return false;
-    }
+    impl_->failedWindow.store(nullptr, std::memory_order_release);
+    return impl_->startTarget(captureWindow, targetName);
+}
 
-    {
-        std::lock_guard lock(impl_->initialMutex);
-        impl_->initialComplete = false;
-        impl_->initialSuccess = false;
+bool CaptureSession::preferMonitor() {
+    std::lock_guard lock(impl_->lifecycleMutex);
+    if (!impl_->configuredFrameQueue || !impl_->configuredTickGate) return false;
+    if (impl_->activeWindow.load(std::memory_order_acquire) == nullptr &&
+        impl_->shared->running.load(std::memory_order_acquire)) {
+        return true;
     }
-    impl_->controllerThread = std::jthread(
-        [this, selectedOutput, monitorId, preference, kind = decision.kind](std::stop_token stopToken) mutable {
-            impl_->runController(
-                stopToken,
-                std::move(selectedOutput),
-                std::move(monitorId),
-                preference,
-                kind);
-        });
-
-    std::unique_lock initialLock(impl_->initialMutex);
-    const bool completed = impl_->initialCv.wait_for(
-        initialLock,
-        std::chrono::seconds(5),
-        [this] { return impl_->initialComplete; });
-    const bool success = completed && impl_->initialSuccess;
-    initialLock.unlock();
-    if (!completed) {
-        impl_->shared->setStatus("Capture backend startup timed out.");
-        stop();
-    } else if (!success && impl_->controllerThread.joinable()) {
-        impl_->controllerThread.join();
-    }
-    return success;
+    impl_->failedWindow.store(nullptr, std::memory_order_release);
+    return impl_->startTarget(nullptr, {});
 }
 
 void CaptureSession::setTargetFps(int fps) {
@@ -227,14 +376,8 @@ void CaptureSession::setTargetFps(int fps) {
 }
 
 void CaptureSession::stop() {
-    if (impl_->controllerThread.joinable()) {
-        impl_->controllerThread.request_stop();
-        impl_->controllerThread.join();
-    }
-    impl_->shared->running.store(false, std::memory_order_release);
-    impl_->shared->hdrTonemappingActive.store(false, std::memory_order_relaxed);
-    impl_->shared->frameQueue.store(nullptr, std::memory_order_release);
-    impl_->shared->activeMonitor.store(nullptr, std::memory_order_release);
+    std::lock_guard lock(impl_->lifecycleMutex);
+    impl_->stopController(true);
 }
 
 bool CaptureSession::running() const {
