@@ -51,6 +51,13 @@ const zeroActivity = (): FrameDropActivityDeltas => ({
   captureClockTickCompletions: 0,
   captureClockTickCompletionWaits: 0,
   captureClockTickCompletionTimeouts: 0,
+  presentLatchWaits: 0,
+  presentLatchHits: 0,
+  presentLatchTimeouts: 0,
+  catchUpEvents: 0,
+  historicalFramesRecovered: 0,
+  catchUpRepeatedTicks: 0,
+  encoderAdmissionRejections: 0,
   encoderFramesAccepted: 0,
   encoderPacketsProduced: 0,
   encoderDistinctSourceFrames: 0,
@@ -108,6 +115,13 @@ function snapshot(diagnostics: EngineDiagnostics, sampledAtMs: number): CounterS
       captureClockTickCompletions: nonNegativeCounter(diagnostics.captureClockTickCompletions),
       captureClockTickCompletionWaits: nonNegativeCounter(diagnostics.captureClockTickCompletionWaits),
       captureClockTickCompletionTimeouts: nonNegativeCounter(diagnostics.captureClockTickCompletionTimeouts),
+      presentLatchWaits: nonNegativeCounter(diagnostics.presentLatchWaits),
+      presentLatchHits: nonNegativeCounter(diagnostics.presentLatchHits),
+      presentLatchTimeouts: nonNegativeCounter(diagnostics.presentLatchTimeouts),
+      catchUpEvents: nonNegativeCounter(diagnostics.catchUpEvents),
+      historicalFramesRecovered: nonNegativeCounter(diagnostics.historicalFramesRecovered),
+      catchUpRepeatedTicks: nonNegativeCounter(diagnostics.catchUpRepeatedTicks),
+      encoderAdmissionRejections: nonNegativeCounter(diagnostics.encoderAdmissionRejections),
       encoderFramesAccepted: nonNegativeCounter(diagnostics.encoderAcceptedFrames),
       encoderPacketsProduced: nonNegativeCounter(diagnostics.encoderOutputPackets),
       encoderDistinctSourceFrames: nonNegativeCounter(diagnostics.encoderDistinctSourceFrames),
@@ -179,6 +193,9 @@ export function classifyVisualFreshness(
     captureClockRequests: perSecond(activity.captureClockTickRequests),
     captureClockWakeups: perSecond(activity.captureClockTickWakeups),
     captureClockCompletionTimeouts: perSecond(activity.captureClockTickCompletionTimeouts),
+    presentLatchWaits: perSecond(activity.presentLatchWaits),
+    presentLatchHits: perSecond(activity.presentLatchHits),
+    presentLatchTimeouts: perSecond(activity.presentLatchTimeouts),
     captureAcquireImmediateMisses: perSecond(activity.captureAcquireImmediateMisses),
     captureAcquireGraceHits: perSecond(activity.captureAcquireGraceHits),
     captureAcquireGraceTimeouts: perSecond(activity.captureAcquireGraceTimeouts),
@@ -194,15 +211,16 @@ export function classifyVisualFreshness(
   };
   if (windowMs <= 0) return { bottleneck: "collecting", rates };
 
-  const lowRate = rates.targetFps * 0.92;
+  const tolerance = 0.92;
+  const lowTargetRate = rates.targetFps * tolerance;
   if (
     diagnostics.captureClockMode === "encoder-driven-dxgi" ||
     diagnostics.captureClockMode === "encoder-prearmed-dxgi"
   ) {
-    if (rates.captureClockRequests < lowRate) {
+    if (rates.captureClockRequests < lowTargetRate) {
       return { bottleneck: "capture-clock-request-limited", rates };
     }
-    if (rates.captureClockWakeups < Math.min(lowRate, rates.captureClockRequests * 0.92)) {
+    if (rates.captureClockWakeups < Math.min(lowTargetRate, rates.captureClockRequests * tolerance)) {
       return { bottleneck: "capture-clock-handoff-limited", rates };
     }
     if (rates.captureClockCompletionTimeouts >= Math.max(1, rates.targetFps * 0.08)) {
@@ -212,29 +230,33 @@ export function classifyVisualFreshness(
       return { bottleneck: "dxgi-poll-grace-exhausted", rates };
     }
   }
-  if (rates.desktopUpdateSupply < lowRate) {
-    return { bottleneck: "desktop-source-present-limited", rates };
-  }
-  if (rates.freshFramesPublished < lowRate) {
+  const expectedPublishedRate = Math.min(rates.targetFps, rates.desktopUpdateSupply);
+  if (rates.freshFramesPublished < expectedPublishedRate * tolerance) {
     if (activity.accumulationEvents > 0 || activity.accumulatedSourceFrames > 0) {
       return { bottleneck: "capture-acquisition-backlog", rates };
     }
-    if (rates.captureUpdates >= lowRate) {
+    if (rates.captureUpdates >= expectedPublishedRate * tolerance) {
       return { bottleneck: "capture-sampler-or-publication-limited", rates };
     }
-    return { bottleneck: "capture-source-update-limited", rates };
+    return { bottleneck: "capture-acquisition-limited", rates };
   }
-  if (rates.encoderFramesAccepted < Math.min(lowRate, rates.freshFramesPublished * 0.92)) {
-    return { bottleneck: "scheduler-admission-limited", rates };
+  const expectedEncoderInputRate = Math.min(rates.targetFps, rates.freshFramesPublished);
+  if (rates.encoderFramesAccepted < expectedEncoderInputRate * tolerance) {
+    return { bottleneck: "encoder-admission-limited", rates };
   }
-  if (rates.encoderPacketsProduced < Math.min(lowRate, rates.encoderFramesAccepted * 0.92)) {
+  const expectedEncoderOutputRate = Math.min(expectedEncoderInputRate, rates.encoderFramesAccepted);
+  if (rates.encoderPacketsProduced < expectedEncoderOutputRate * tolerance) {
     return { bottleneck: "nvenc-output-limited", rates };
   }
-  if (rates.distinctSourceFramesEncoded < lowRate) {
-    if (diagnostics.stillFrameDuplicationEnabled && rates.encoderPacketsProduced >= lowRate) {
+  const expectedDistinctRate = Math.min(expectedEncoderOutputRate, rates.encoderPacketsProduced);
+  if (rates.distinctSourceFramesEncoded < expectedDistinctRate * tolerance) {
+    if (diagnostics.stillFrameDuplicationEnabled && rates.encoderPacketsProduced >= lowTargetRate) {
       return { bottleneck: "frame-duplication-masking-source-freshness", rates };
     }
     return { bottleneck: "encoded-source-freshness-limited", rates };
+  }
+  if (rates.desktopUpdateSupply < lowTargetRate) {
+    return { bottleneck: "healthy-vfr-source-limited", rates };
   }
   return { bottleneck: "healthy", rates };
 }
@@ -249,6 +271,7 @@ export class FrameDropDiagnosticsRecorder {
   private baseline: CounterSnapshot | undefined;
   private timeline: FrameDropTimelineSample[] = [];
   private latestReasons = zeroReasons();
+  private latestActivity = zeroActivity();
   private latestWindowMs = 0;
   private latestDominantReason = "none";
   private latestVisualFreshnessBottleneck = "collecting";
@@ -346,6 +369,7 @@ export class FrameDropDiagnosticsRecorder {
 
     this.baseline = current;
     this.latestReasons = reasons;
+    this.latestActivity = activity;
     this.latestWindowMs = windowMs;
     this.latestDominantReason = dominantReason;
     this.latestVisualFreshnessBottleneck = visualFreshnessBottleneck;
@@ -364,26 +388,26 @@ export class FrameDropDiagnosticsRecorder {
       maximumRetainedSamples: this.maximumRetainedSamples,
       retainedWindowMs: this.timeline.reduce((total, sample) => total + sample.windowMs, 0),
       definitions: {
-        reportedDroppedFrames: "The dashboard headline: a sum of capture queue evictions, capture-slot failures, scheduler ticks skipped while late, and encoder-backpressure losses. The components are different pipeline units, so use the reason timeline rather than treating this as measured MP4 frame loss.",
+        reportedDroppedFrames: "The dashboard headline: a sum of capture queue evictions, capture-slot failures, legacy scheduler losses, and encoder-backpressure losses. Target-capped VFR intentionally produces fewer than the target FPS when the source is slower; that is not a drop.",
         countedReasons: [
           "captureQueueOverflow: the bounded capture queue evicted its oldest captured frame",
           "captureSlotExhaustion: no owned capture texture slot was available",
-          "schedulerDeadlineMisses: the CFR scheduler was too late to catch up every target tick",
+          "schedulerDeadlineMisses: legacy CFR scheduler losses; the event-driven VFR encoder does not generate these",
           "encoderBackpressure: umbrella count for encoder queue eviction, NVENC output-surface starvation, NVENC input still in flight, or another encoder-side pressure loss"
         ],
         supportingIndicators: [
           "captureQueueCoalesced, sourceFramesSuperseded, and sampler rejections describe replaced or intentionally rejected source work and are not added to reportedDroppedFrames",
           "encoderQueueDrops, nvencSurfaceDrops, nvencInputDrops, and encoderBackpressureOther subdivide encoderBackpressure and are not added twice",
           "NVENC surface/input drops isolate failures after encoder admission",
-          "schedulerRepeats describe intentional CFR duplication rather than loss",
+          "schedulerRepeats are legacy CFR telemetry and remain zero in target-capped VFR mode",
           "acquire timeouts on a static desktop can be normal when DXGI has no new frame; correlate them with desktop presents and output FPS",
           "desktopUpdateSupply combines acquired desktop-present events with DXGI AccumulatedFrames so capture backlog is not mislabeled as a slow source",
           "captureClockTickRequests and captureClockTickWakeups identify scheduler-side request loss or coalescing before DXGI acquisition",
           "captureClockTickCompletions and completion timeouts identify capture-thread work that did not publish inside the scheduler tick budget",
-          "schedulerWakeLateness measures how late the video clock woke after its target deadline, before capture, queueing, or NVENC work",
+          "schedulerWakeLateness is legacy fixed-clock telemetry and remains empty in target-capped VFR mode",
           "captureAcquireImmediateMisses, captureAcquireGraceHits, and captureAcquireGraceTimeouts show whether the bounded DXGI grace recovered a zero-timeout OBS-style poll miss",
-          "visualFreshnessBottleneck names the first one-second pipeline boundary below 92% of target; it remains meaningful even when reportedDroppedFrames is zero",
-          "distinctSourceFramesEncoded follows sourceFrameSequence, so repeated CFR samples cannot make source freshness look healthier than it is"
+          "visualFreshnessBottleneck compares each stage with the source-capped expected rate, so healthy below-target gameplay is reported as healthy-vfr-source-limited",
+          "distinctSourceFramesEncoded follows sourceFrameSequence and therefore measures only fresh source delivery"
         ]
       },
       totals,
@@ -419,6 +443,10 @@ export class FrameDropDiagnosticsRecorder {
       recentSchedulerRepeatedFrames: this.latestReasons.schedulerRepeats,
       recentEncoderQueueDrops: this.latestReasons.encoderQueueDrops,
       recentEncoderRepeatCoalesced: this.latestReasons.encoderRepeatsCoalesced,
+      recentCatchUpEvents: this.latestActivity.catchUpEvents,
+      recentHistoricalFramesRecovered: this.latestActivity.historicalFramesRecovered,
+      recentCatchUpRepeatedTicks: this.latestActivity.catchUpRepeatedTicks,
+      recentEncoderAdmissionRejections: this.latestActivity.encoderAdmissionRejections,
       recentNvencSurfaceDrops: this.latestReasons.nvencSurfaceDrops,
       recentNvencInputDrops: this.latestReasons.nvencInputDrops,
       recentDropDominantReason: this.latestDominantReason,

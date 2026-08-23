@@ -3,6 +3,7 @@
 #include "DesktopPointerCompositor.hpp"
 #include "clipture/CaptureBackendPolicy.hpp"
 #include "clipture/DesktopDuplicationHelpers.hpp"
+#include "clipture/FixedRateFrameSampler.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/Tonemapper.hpp"
 
@@ -106,6 +107,7 @@ struct DesktopDuplicationBackend::Impl {
     UINT height = 0;
     bool hdrCapture = false;
     float sdrWhiteLevel = 0.0f;
+    FixedRateFrameSampler sampler;
     bool started = false;
 
     Impl(
@@ -323,36 +325,15 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
         Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
         AcquiredDesktopFrame acquiredFrame(state.duplication.Get());
         const int64_t acquireStarted100ns = monotonicNow100ns();
-        // OBS can use a zero-timeout poll because capture and rendering share
-        // one graphics thread. Preserve that fast path, then give Clipture's
-        // separate capture thread one short grace wait only after a miss.
-        const UINT acquireTimeoutMs = encoderDriven && bootstrapComplete
-            ? kEncoderDrivenDxgiPollTimeoutMs
-            : 8U;
+        // Immediate non-blocking poll matching OBS Studio's instant acquisition.
+        const UINT acquireTimeoutMs = 0U;
         HRESULT acquireHr = state.duplication->AcquireNextFrame(
             acquireTimeoutMs,
             &frameInfo,
             &desktopResource);
-        const bool initialPollTimedOut = acquireHr == DXGI_ERROR_WAIT_TIMEOUT;
-        if (encoderDriven && bootstrapComplete && initialPollTimedOut) {
-            ++state.shared->acquireImmediateMisses;
-        }
-        if (shouldUseEncoderDrivenDxgiGrace(
-                encoderDriven, bootstrapComplete, initialPollTimedOut)) {
-            frameInfo = {};
-            desktopResource.Reset();
-            acquireHr = state.duplication->AcquireNextFrame(
-                kEncoderDrivenDxgiGraceTimeoutMs,
-                &frameInfo,
-                &desktopResource);
-            if (SUCCEEDED(acquireHr)) {
-                ++state.shared->acquireGraceHits;
-            } else if (acquireHr == DXGI_ERROR_WAIT_TIMEOUT) {
-                ++state.shared->acquireGraceTimeouts;
-            }
-        }
         if (acquireHr == DXGI_ERROR_WAIT_TIMEOUT) {
             ++state.shared->acquireTimeouts;
+            SwitchToThread();
             continue;
         }
         if (FAILED(acquireHr)) {
@@ -400,11 +381,11 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
         const int64_t sourceTimestamp100ns = (timestampTicks > 0 && state.qpcFrequency > 0)
             ? mediaTimeFromSystemRelative100ns(detail::qpcTicksTo100ns(timestampTicks, state.qpcFrequency))
             : monotonicNow100ns();
+
         int64_t outputTimestamp100ns = 0;
         if (!state.shared->selectFrameTimestamp(
                 sourceTimestamp100ns,
-                outputTimestamp100ns,
-                !encoderDriven)) {
+                outputTimestamp100ns)) {
             continue;
         }
         const int64_t frameProcessingStarted100ns = monotonicNow100ns();
@@ -499,10 +480,6 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             frameProcessed100ns,
             frameProcessed100ns - frameProcessingStarted100ns);
         tickCompletion.finish();
-        if (auto* queue = state.shared->frameQueue.load(std::memory_order_acquire);
-            queue && queue->size() >= 2) {
-            SwitchToThread();
-        }
     }
     return BackendOutcome::Stopped;
 }

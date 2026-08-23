@@ -52,7 +52,7 @@ inline std::string_view captureBackendKindName(CaptureBackendKind kind) {
 
 inline CaptureBackendDecision decideCaptureBackend(
     CaptureBackendPreference preference,
-    bool hdrEnabled,
+    bool /*hdrEnabled*/,
     bool identityRotation,
     bool dxgiQuarantined) {
     if (preference == CaptureBackendPreference::Wgc) {
@@ -67,7 +67,7 @@ inline CaptureBackendDecision decideCaptureBackend(
     return {
         CaptureBackendKind::Dxgi,
         true,
-        hdrEnabled ? "default HDR backend" : "default SDR backend",
+        "default high-performance DirectX Desktop Duplication",
     };
 }
 

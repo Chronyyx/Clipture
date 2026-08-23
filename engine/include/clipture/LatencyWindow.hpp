@@ -19,7 +19,7 @@ struct LatencyWindowSnapshot {
 
 // A bounded recent-sample window. Recording is allocation-free; allocations
 // only occur when diagnostics request percentile data.
-template <std::size_t Capacity = 512>
+template <std::size_t Capacity = 2048>
 class LatencyWindow {
 public:
     static_assert(Capacity > 0);
@@ -34,7 +34,7 @@ public:
 
     LatencyWindowSnapshot snapshot(
         int64_t now100ns,
-        int64_t horizon100ns = 50'000'000LL) const {
+        int64_t horizon100ns = 10'000'000LL) const {
         std::vector<int64_t> values;
         values.reserve(Capacity);
         const int64_t oldestAllowed100ns = now100ns > horizon100ns

@@ -1,7 +1,5 @@
 #pragma once
 
-#include "clipture/CfrFrameScheduler.hpp"
-#include "clipture/CaptureTickGate.hpp"
 #include "clipture/FrameQueue.hpp"
 #include "clipture/LatencyWindow.hpp"
 #include "clipture/PacketRingBuffer.hpp"
@@ -24,6 +22,8 @@ struct EncoderRecentPerformance {
     double distinctSourceOutputFps = 0.0;
     uint64_t repeatedSourceOutputFrames = 0;
     uint64_t unknownSourceOutputFrames = 0;
+    uint64_t motionFramesTotal = 0;
+    uint64_t motionFramesRepeated = 0;
     LatencyWindowSnapshot schedulerWakeLateness;
     LatencyWindowSnapshot queueResidence;
     LatencyWindowSnapshot inputPtsInterval;
@@ -40,7 +40,6 @@ struct EncoderRecentPerformance {
 class EncoderWorker {
 public:
     EncoderWorker(
-        CaptureTickGate& captureTickGate,
         FrameQueue& frames,
         PacketRingBuffer& packets,
         ReplaySegmentStore* replayStore = nullptr);
@@ -72,9 +71,16 @@ public:
     int queuedRepeatEncodeFrames() const;
     int schedulerDroppedFrames() const;
     int schedulerRepeatedFrames() const;
+    uint64_t presentLatchWaits() const;
+    uint64_t presentLatchHits() const;
+    uint64_t presentLatchTimeouts() const;
+    uint64_t catchUpEvents() const;
+    uint64_t historicalFramesRecovered() const;
+    uint64_t catchUpRepeatedTicks() const;
     bool stillFrameDuplicationEnabled() const;
     int encoderQueueDrops() const;
     int encoderRepeatCoalesced() const;
+    uint64_t encoderAdmissionRejections() const;
     int nvencSurfaceDrops() const;
     int nvencInputDrops() const;
     int encoderBackpressureDrops() const;
@@ -82,6 +88,8 @@ public:
     uint64_t distinctSourceOutputFrames() const;
     uint64_t repeatedSourceOutputFrames() const;
     uint64_t unknownSourceOutputFrames() const;
+    uint64_t motionFramesTotal() const;
+    uint64_t motionFramesRepeated() const;
     uint64_t nvencZeroCopyFrames() const;
     uint64_t nvencCopyFallbackFrames() const;
     uint64_t nvencConvertedFrames() const;
@@ -115,15 +123,13 @@ private:
         int nvencPreset = 3;
         int configVersion = 0;
         int freshFrameVersion = 0;
-        CfrFrameRun run;
     };
 
     void run();
     void encodeLoop();
-    bool queueTick(EncodeJob job);
+    bool queueFrame(EncodeJob job);
     void setStatus(std::string status);
 
-    CaptureTickGate& captureTickGate_;
     FrameQueue& frames_;
     PacketRingBuffer& packets_;
     ReplaySegmentStore* replayStore_ = nullptr;
@@ -132,9 +138,9 @@ private:
     mutable std::mutex submitMutex_;
     std::condition_variable submitCv_;
     std::deque<EncodeJob> pendingJobs_;
-    std::size_t pendingOutputTicks_ = 0;
-    std::size_t pendingFreshTicks_ = 0;
-    std::size_t pendingRepeatTicks_ = 0;
+    std::size_t pendingOutputFrames_ = 0;
+    std::size_t pendingFreshFrames_ = 0;
+    std::size_t pendingRepeatFrames_ = 0;
     mutable std::mutex statusMutex_;
     std::atomic<bool> running_ = false;
     std::atomic<bool> nvencRuntimeLoaded_ = false;
@@ -142,8 +148,15 @@ private:
     std::atomic<int> framesEncoded_ = 0;
     std::atomic<int> schedulerDroppedFrames_ = 0;
     std::atomic<int> schedulerRepeatedFrames_ = 0;
+    std::atomic<uint64_t> presentLatchWaits_ = 0;
+    std::atomic<uint64_t> presentLatchHits_ = 0;
+    std::atomic<uint64_t> presentLatchTimeouts_ = 0;
+    std::atomic<uint64_t> catchUpEvents_ = 0;
+    std::atomic<uint64_t> historicalFramesRecovered_ = 0;
+    std::atomic<uint64_t> catchUpRepeatedTicks_ = 0;
     std::atomic<int> encoderQueueDrops_ = 0;
     std::atomic<int> encoderRepeatCoalesced_ = 0;
+    std::atomic<uint64_t> encoderAdmissionRejections_ = 0;
     std::atomic<int> nvencSurfaceDrops_ = 0;
     std::atomic<int> nvencInputDrops_ = 0;
     std::atomic<int> encoderBackpressureDrops_ = 0;
@@ -152,6 +165,8 @@ private:
     std::atomic<uint64_t> distinctSourceOutputFrames_ = 0;
     std::atomic<uint64_t> repeatedSourceOutputFrames_ = 0;
     std::atomic<uint64_t> unknownSourceOutputFrames_ = 0;
+    std::atomic<uint64_t> motionFramesTotal_ = 0;
+    std::atomic<uint64_t> motionFramesRepeated_ = 0;
     std::atomic<uint64_t> nvencZeroCopyFrames_ = 0;
     std::atomic<uint64_t> nvencCopyFallbackFrames_ = 0;
     std::atomic<uint64_t> nvencConvertedFrames_ = 0;
@@ -174,6 +189,8 @@ private:
     LatencyWindow<> recentDistinctSourceOutputEvents_;
     LatencyWindow<> recentRepeatedSourceOutputEvents_;
     LatencyWindow<> recentUnknownSourceOutputEvents_;
+    LatencyWindow<> recentMotionOutputEvents_;
+    LatencyWindow<> recentMotionRepeatEvents_;
     LatencyWindow<> recentInputMapLatency_;
     LatencyWindow<> recentNvencCallLatency_;
     LatencyWindow<> recentOutputEventWaitLatency_;
@@ -198,7 +215,9 @@ private:
     std::atomic<int> discardPacketsAtConfigVersion_ = 0;
     std::atomic<int> freshFrameVersion_ = 0;
     std::atomic<int> discardPacketsAtFreshFrameVersion_ = 0;
-    static constexpr std::size_t maximumPendingRuns_ = 8;
+    static constexpr std::size_t maximumPendingFrames_ = 64;
+    mutable double smoothedDistinctFps_ = 0.0;
+    mutable int64_t lastSmoothedFpsTime100ns_ = 0;
     std::string status_ = "Encoder worker has not started.";
 };
 

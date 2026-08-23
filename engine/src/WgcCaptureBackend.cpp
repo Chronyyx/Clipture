@@ -151,26 +151,14 @@ BackendStartResult WgcCaptureBackend::start() {
         });
 
         DirectXPixelFormat pixelFormat = DirectXPixelFormat::B8G8R8A8UIntNormalized;
-        if (state.output.hdrEnabled) {
-            pixelFormat = DirectXPixelFormat::R16G16B16A16Float;
-            state.tonemapper = std::make_unique<Tonemapper>(state.d3dDevice);
-            std::string tonemapperError;
-            if (!state.tonemapper->Initialize(
-                    tonemapperError,
-                    monitorSdrWhiteLevel(state.output.desc.Monitor))) {
-                return { false, "WGC HDR tonemapper initialization failed: " + tonemapperError };
-            }
-            state.shared->hdrTonemappingActive.store(true, std::memory_order_relaxed);
-        } else {
-            state.shared->hdrTonemappingActive.store(false, std::memory_order_relaxed);
-        }
+        state.shared->hdrTonemappingActive.store(false, std::memory_order_relaxed);
 
         state.framePoolPixelFormat = pixelFormat;
         state.framePoolSize = state.item.Size();
         state.framePool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             state.direct3DDevice,
             pixelFormat,
-            3,
+            4,
             state.framePoolSize);
 
         state.frameArrivedToken = state.framePool.FrameArrived([this](auto const& sender, auto const&) {
@@ -179,110 +167,99 @@ BackendStartResult WgcCaptureBackend::start() {
                 std::lock_guard callbackLock(callbackState.callbackMutex);
                 if (!callbackState.started.load(std::memory_order_acquire)) return;
 
-                auto frame = sender.TryGetNextFrame();
-                if (!frame) return;
-                ++callbackState.shared->acquiredUpdates;
-                ++callbackState.shared->desktopPresents;
-                while (auto newerFrame = sender.TryGetNextFrame()) {
-                    frame = std::move(newerFrame);
+                while (auto frame = sender.TryGetNextFrame()) {
                     ++callbackState.shared->acquiredUpdates;
                     ++callbackState.shared->desktopPresents;
-                    ++callbackState.shared->sourceFramesSuperseded;
-                }
 
-                const auto size = frame.ContentSize();
-                if (size.Width <= 0 || size.Height <= 0) return;
-                if (size.Width != callbackState.framePoolSize.Width ||
-                    size.Height != callbackState.framePoolSize.Height) {
-                    frame = nullptr;
-                    callbackState.framePoolSize = size;
-                    if (callbackState.tonemapper) callbackState.tonemapper->ResetViewCache();
-                    callbackState.texturePool.reset();
-                    callbackState.shared->beginEpoch();
-                    {
-                        std::lock_guard stateLock(callbackState.shared->stateMutex);
-                        callbackState.shared->resolution =
-                            std::to_string(size.Width) + "x" + std::to_string(size.Height);
+                    const auto size = frame.ContentSize();
+                    if (size.Width <= 0 || size.Height <= 0) {
+                        try { frame.Close(); } catch (...) {}
+                        continue;
                     }
-                    sender.Recreate(
-                        callbackState.direct3DDevice,
-                        callbackState.framePoolPixelFormat,
-                        3,
-                        size);
-                    return;
-                }
-
-                const int64_t sourceTimestamp100ns = mediaTimeFromSystemRelative100ns(
-                    frame.SystemRelativeTime().count());
-                int64_t outputTimestamp100ns = 0;
-                if (!callbackState.shared->selectFrameTimestamp(
-                        sourceTimestamp100ns, outputTimestamp100ns)) return;
-                const int64_t frameProcessingStarted100ns = monotonicNow100ns();
-
-                auto access = frame.Surface().template as<
-                    ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                Microsoft::WRL::ComPtr<ID3D11Texture2D> sourceTexture;
-                if (FAILED(access->GetInterface(IID_PPV_ARGS(&sourceTexture))) || !sourceTexture) {
-                    ++callbackState.shared->callbackErrors;
-                    return;
-                }
-
-                D3D11_TEXTURE2D_DESC sourceDesc {};
-                sourceTexture->GetDesc(&sourceDesc);
-                const bool needsTonemapping = callbackState.tonemapper &&
-                    sourceDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT;
-                std::string slotError;
-                auto owned = callbackState.texturePool.acquire(
-                    callbackState.d3dDevice.Get(),
-                    static_cast<UINT>(size.Width),
-                    static_cast<UINT>(size.Height),
-                    needsTonemapping,
-                    slotError);
-                if (!owned.texture || !owned.lease) {
-                    if (!slotError.empty()) callbackState.fail(slotError);
-                    return;
-                }
-
-                D3D11_BOX sourceBox {
-                    0,
-                    0,
-                    0,
-                    static_cast<UINT>(size.Width),
-                    static_cast<UINT>(size.Height),
-                    1,
-                };
-                const int64_t framePreparationStarted100ns = monotonicNow100ns();
-                if (needsTonemapping) {
-                    if (!owned.hdrInputTexture) return;
-                    callbackState.d3dContext->CopySubresourceRegion(
-                        owned.hdrInputTexture.Get(), 0, 0, 0, 0, sourceTexture.Get(), 0, &sourceBox);
-                    std::string error;
-                    if (!callbackState.tonemapper->Process(owned.hdrInputTexture, owned.texture, error)) {
-                        ++callbackState.shared->callbackErrors;
-                        callbackState.fail("WGC HDR tonemapping failed: " + error);
+                    if (size.Width != callbackState.framePoolSize.Width ||
+                        size.Height != callbackState.framePoolSize.Height) {
+                        try { frame.Close(); } catch (...) {}
+                        frame = nullptr;
+                        callbackState.framePoolSize = size;
+                        if (callbackState.tonemapper) callbackState.tonemapper->ResetViewCache();
+                        callbackState.texturePool.reset();
+                        callbackState.shared->beginEpoch();
+                        {
+                            std::lock_guard stateLock(callbackState.shared->stateMutex);
+                            callbackState.shared->resolution =
+                                std::to_string(size.Width) + "x" + std::to_string(size.Height);
+                        }
+                        sender.Recreate(
+                            callbackState.direct3DDevice,
+                            callbackState.framePoolPixelFormat,
+                            4,
+                            size);
                         return;
                     }
-                } else {
-                    callbackState.d3dContext->CopySubresourceRegion(
-                        owned.texture.Get(), 0, 0, 0, 0, sourceTexture.Get(), 0, &sourceBox);
-                }
-                const int64_t framePrepared100ns = monotonicNow100ns();
-                callbackState.shared->framePreparationLatency.record(
-                    framePrepared100ns,
-                    framePrepared100ns - framePreparationStarted100ns);
 
-                callbackState.shared->publish(
-                    std::move(owned.texture),
-                    std::move(owned.lease),
-                    outputTimestamp100ns,
-                    size.Width,
-                    size.Height,
-                    true,
-                    false);
-                const int64_t frameProcessed100ns = monotonicNow100ns();
-                callbackState.shared->frameProcessingLatency.record(
-                    frameProcessed100ns,
-                    frameProcessed100ns - frameProcessingStarted100ns);
+                    const int64_t sourceTimestamp100ns = mediaTimeFromSystemRelative100ns(
+                        frame.SystemRelativeTime().count());
+                    int64_t outputTimestamp100ns = 0;
+                    if (!callbackState.shared->selectFrameTimestamp(
+                            sourceTimestamp100ns, outputTimestamp100ns)) {
+                        try { frame.Close(); } catch (...) {}
+                        continue;
+                    }
+                    const int64_t frameProcessingStarted100ns = monotonicNow100ns();
+
+                    auto access = frame.Surface().template as<
+                        ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                    Microsoft::WRL::ComPtr<ID3D11Texture2D> sourceTexture;
+                    if (FAILED(access->GetInterface(IID_PPV_ARGS(&sourceTexture))) || !sourceTexture) {
+                        ++callbackState.shared->callbackErrors;
+                        try { frame.Close(); } catch (...) {}
+                        continue;
+                    }
+
+                    D3D11_TEXTURE2D_DESC sourceDesc {};
+                    sourceTexture->GetDesc(&sourceDesc);
+                    const bool needsTonemapping = callbackState.tonemapper &&
+                        sourceDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+                    std::string slotError;
+                    auto owned = callbackState.texturePool.acquire(
+                        callbackState.d3dDevice.Get(),
+                        static_cast<UINT>(size.Width),
+                        static_cast<UINT>(size.Height),
+                        needsTonemapping,
+                        slotError);
+                    if (!owned.texture || !owned.lease) {
+                        if (!slotError.empty()) {
+                            callbackState.fail(slotError);
+                        } else {
+                            ++callbackState.shared->ownedSlotDrops;
+                        }
+                        try { frame.Close(); } catch (...) {}
+                        continue;
+                    }
+
+                    const int64_t framePreparationStarted100ns = monotonicNow100ns();
+                    callbackState.d3dContext->CopyResource(owned.texture.Get(), sourceTexture.Get());
+                    sourceTexture.Reset();
+                    try { frame.Close(); } catch (...) {}
+                    frame = nullptr;
+                    const int64_t framePrepared100ns = monotonicNow100ns();
+                    callbackState.shared->framePreparationLatency.record(
+                        framePrepared100ns,
+                        framePrepared100ns - framePreparationStarted100ns);
+
+                    callbackState.shared->publish(
+                        std::move(owned.texture),
+                        std::move(owned.lease),
+                        outputTimestamp100ns,
+                        size.Width,
+                        size.Height,
+                        true,
+                        false);
+                    const int64_t frameProcessed100ns = monotonicNow100ns();
+                    callbackState.shared->frameProcessingLatency.record(
+                        frameProcessed100ns,
+                        frameProcessed100ns - frameProcessingStarted100ns);
+                }
             } catch (const winrt::hresult_error& error) {
                 ++callbackState.shared->callbackErrors;
                 callbackState.fail("WGC frame callback failed: " + narrow(error.message().c_str()));

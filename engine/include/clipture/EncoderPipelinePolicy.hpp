@@ -1,11 +1,7 @@
 #pragma once
 
-#include "clipture/CfrFrameScheduler.hpp"
-
 #include <algorithm>
 #include <cstddef>
-#include <limits>
-#include <span>
 
 namespace clipture {
 
@@ -32,17 +28,8 @@ constexpr bool shouldDrainNvencSyncOutput(
         (configuredDelay == 0 || inFlightCount >= configuredDelay);
 }
 
-inline constexpr std::size_t noEncoderQueueEviction =
-    std::numeric_limits<std::size_t>::max();
-
-constexpr std::size_t preferredEncoderQueueEvictionIndex(
-    std::span<const CfrFrameRun> pendingRuns) {
-    if (pendingRuns.empty()) return noEncoderQueueEviction;
-
-    for (std::size_t index = 0; index < pendingRuns.size(); ++index) {
-        if (cfrFreshTickCount(pendingRuns[index]) == 0) return index;
-    }
-    return 0;
-}
+// When true, the encoder ticks at fixed CFR intervals and holds/duplicates the last frame on idle ticks.
+// When false, the encoder only encodes when a fresh, unique frame arrives from capture (zero duplication).
+inline constexpr bool kEnableFrameDuplication = true;
 
 }  // namespace clipture

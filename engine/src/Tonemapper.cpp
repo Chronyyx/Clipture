@@ -6,50 +6,32 @@
 
 namespace clipture {
 
-// Capture rotates through 12 output textures, so a smaller cache recreates views every frame.
 constexpr std::size_t kMaximumCachedTonemapperViews = 16;
 
 const char* TonemapShaderCode = R"(
 Texture2D<float4> InputTexture : register(t0);
 RWTexture2D<unorm float4> OutputTexture : register(u0);
 
-// Exact sRGB piece-wise transfer function
-float sRGBGamma(float v) {
-    if (v <= 0.0031308f) {
-        return 12.92f * v;
-    }
-    return 1.055f * pow(v, 1.0f / 2.4f) - 0.055f;
-}
-
-[numthreads(8, 8, 1)]
+[numthreads(16, 16, 1)]
 void main(uint3 DTid : SV_DispatchThreadID) {
     float4 hdrColor = InputTexture[DTid.xy];
     float3 linearColor = max(hdrColor.rgb, 0.0f);
     
     // Normalize to SDR White Level (e.g., 400 nits -> 1.0)
-    float3 scaledColor = linearColor / SDR_WHITE_LEVEL;
+    float3 scaledColor = linearColor * (1.0f / SDR_WHITE_LEVEL);
     
-    // Calculate pure luminance
+    // Calculate pure luminance (Rec.709)
     float L = dot(scaledColor, float3(0.2126f, 0.7152f, 0.0722f));
     
-    if (L > 0.0f) {
-        float T = 0.75f; // Threshold: 75% of SDR brightness is perfectly preserved
-        float L_new = L;
-
-        if (L > T) {
-            // Smooth exponential roll-off for HDR highlights
-            L_new = T + (1.0f - T) * (1.0f - exp(-(L - T) / (1.0f - T)));
-        }
-
-        // Re-apply to the RGB ratios to preserve perfectly accurate hues
+    [branch]
+    if (L > 0.75f) {
+        // Smooth exponential roll-off for HDR highlights (75% threshold)
+        float L_new = 0.75f + 0.25f * (1.0f - exp(-(L - 0.75f) * 4.0f));
         scaledColor = scaledColor * (L_new / L);
     }
     
-    // Apply exact sRGB transfer function
-    float3 sdrColor;
-    sdrColor.r = sRGBGamma(scaledColor.r);
-    sdrColor.g = sRGBGamma(scaledColor.g);
-    sdrColor.b = sRGBGamma(scaledColor.b);
+    // Fast standard gamma 2.2 transfer curve (OBS standard)
+    float3 sdrColor = saturate(pow(max(scaledColor, 0.0f), 0.45454545f));
     
     OutputTexture[DTid.xy] = float4(sdrColor, hdrColor.a);
 }
@@ -195,9 +177,9 @@ bool Tonemapper::Process(
     ID3D11UnorderedAccessView* uavs[] = { outputViewIt->view.Get() };
     context_->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
-    // Calculate thread groups (8x8 threads per group)
-    UINT dispatchX = (outDesc.Width + 7) / 8;
-    UINT dispatchY = (outDesc.Height + 7) / 8;
+    // Calculate thread groups (16x16 threads per group for maximum GPU occupancy)
+    UINT dispatchX = (outDesc.Width + 15) / 16;
+    UINT dispatchY = (outDesc.Height + 15) / 16;
     context_->Dispatch(dispatchX, dispatchY, 1);
 
     // Unbind resources

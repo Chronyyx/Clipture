@@ -34,16 +34,56 @@ constexpr bool shouldUseAdaptiveWritePacing(
     return storageAware;
 }
 
+constexpr bool shouldPreallocateMuxOutput(StorageSeekPenalty seekPenalty) {
+    // Reserving an entire replay file can become one long, uninterruptible
+    // metadata/allocation operation on rotational or unidentified storage.
+    // Sequential writes already extend those files naturally; retain the
+    // fragmentation optimization only where Windows reports no seek penalty.
+    return seekPenalty == StorageSeekPenalty::DoesNotIncur;
+}
+
 enum class AdaptiveWritePressure {
     Healthy,
     Elevated,
     Critical
 };
 
+struct CaptureWritePressureInputs {
+    std::size_t frameQueueDepth = 0;
+    int64_t oldestFrameAge100ns = 0;
+    int encoderQueueDepth = 0;
+    int nvencInFlight = 0;
+    int64_t captureGap100ns = 0;
+    int64_t capturePublicationAge100ns = 0;
+    int64_t frameInterval100ns = 1;
+    bool captureWasActive = false;
+    bool newFrameDrop = false;
+};
+
+constexpr AdaptiveWritePressure classifyCaptureWritePressure(
+    const CaptureWritePressureInputs& input) {
+    const int64_t frameInterval100ns = std::max<int64_t>(1, input.frameInterval100ns);
+
+    if (input.newFrameDrop ||
+        input.frameQueueDepth >= 14 ||
+        (input.frameQueueDepth >= 4 && input.oldestFrameAge100ns > frameInterval100ns * 8) ||
+        input.encoderQueueDepth >= 64 ||
+        input.nvencInFlight >= 16) {
+        return AdaptiveWritePressure::Critical;
+    }
+    if (input.frameQueueDepth >= 8 ||
+        (input.frameQueueDepth >= 4 && input.oldestFrameAge100ns > frameInterval100ns * 4) ||
+        input.encoderQueueDepth >= 32 ||
+        input.nvencInFlight >= 10) {
+        return AdaptiveWritePressure::Elevated;
+    }
+    return AdaptiveWritePressure::Healthy;
+}
+
 struct AdaptiveWritePacerConfig {
     uint64_t initialBytesPerSecond = 96ULL * 1024ULL * 1024ULL;
     uint64_t minimumBytesPerSecond = 16ULL * 1024ULL * 1024ULL;
-    uint64_t maximumLearnedBytesPerSecond = 4ULL * 1024ULL * 1024ULL * 1024ULL;
+    uint64_t maximumLearnedBytesPerSecond = 8ULL * 1024ULL * 1024ULL * 1024ULL;
     std::size_t adjustmentWindowBytes = 16u * 1024u * 1024u;
     uint32_t targetUtilizationPercent = 75;
     uint32_t minimumMeasuredServicePercent = 20;
@@ -56,9 +96,34 @@ struct AdaptiveWritePacerConfig {
 constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
     AdaptiveWritePacerConfig config,
     StorageSeekPenalty seekPenalty) {
-    if (seekPenalty != StorageSeekPenalty::DoesNotIncur) return config;
-
     constexpr uint64_t mib = 1024ULL * 1024ULL;
+    if (seekPenalty == StorageSeekPenalty::Incurs) {
+        config.initialBytesPerSecond = std::min(config.initialBytesPerSecond, 96ULL * mib);
+        config.maximumLearnedBytesPerSecond = std::min(
+            config.maximumLearnedBytesPerSecond,
+            160ULL * mib);
+        config.minimumMeasuredWriteUs = std::max<uint64_t>(
+            config.minimumMeasuredWriteUs,
+            2'000);
+        config.adjustmentWindowBytes = std::max<std::size_t>(
+            config.adjustmentWindowBytes,
+            32u * 1024u * 1024u);
+        return config;
+    }
+    if (seekPenalty == StorageSeekPenalty::Unknown) {
+        config.initialBytesPerSecond = std::min(config.initialBytesPerSecond, 128ULL * mib);
+        config.maximumLearnedBytesPerSecond = std::min(
+            config.maximumLearnedBytesPerSecond,
+            256ULL * mib);
+        config.minimumMeasuredWriteUs = std::max<uint64_t>(
+            config.minimumMeasuredWriteUs,
+            1'500);
+        config.adjustmentWindowBytes = std::max<std::size_t>(
+            config.adjustmentWindowBytes,
+            32u * 1024u * 1024u);
+        return config;
+    }
+
     constexpr uint64_t solidStateInitialRate = 640ULL * mib;
     constexpr uint64_t solidStateMaximumRate = 768ULL * mib;
     constexpr std::size_t solidStateAdjustmentWindow = 128u * 1024u * 1024u;
@@ -72,7 +137,7 @@ constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
     config.initialBytesPerSecond = std::min(
         std::max(config.initialBytesPerSecond, solidStateInitialRate),
         config.maximumLearnedBytesPerSecond);
-    config.adjustmentWindowBytes = std::max(
+    config.adjustmentWindowBytes = std::max<std::size_t>(
         config.adjustmentWindowBytes,
         solidStateAdjustmentWindow);
     config.writeLatencyBackoffUs = std::min(
@@ -84,6 +149,9 @@ constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
     config.latencyRecoveryBytes = std::max(
         config.latencyRecoveryBytes,
         solidStateLatencyRecoveryBytes);
+    config.minimumMeasuredWriteUs = std::max<uint64_t>(
+        config.minimumMeasuredWriteUs,
+        1'000);
     return config;
 }
 

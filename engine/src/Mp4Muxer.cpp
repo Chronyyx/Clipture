@@ -1,7 +1,8 @@
 #include "clipture/Mp4Muxer.hpp"
 #include "clipture/AacEncoderSession.hpp"
 #include "clipture/BoundedWrite.hpp"
-#include "clipture/VideoTimeline.hpp"
+
+#include <clipture/VideoSampleTiming.hpp>
 
 #include <Windows.h>
 #include <winioctl.h>
@@ -57,7 +58,9 @@ std::span<const std::byte> samplePayload(const OwnedSample& sample) {
 }
 
 struct PcmSampleView {
-    std::span<const std::byte> payload;
+    PacketPayloadPtr sharedPayload;
+    PacketPayloadReaderPtr payloadReader;
+    std::size_t payloadSize = 0;
     int64_t pts100ns = 0;
     uint32_t durationFrames = 1;
 };
@@ -258,227 +261,6 @@ Bytes fullBox(const char type[4], uint8_t version, uint32_t flags, const Bytes& 
     return box(type, full);
 }
 
-bool appendSamplePayload(IMFSample* sample, OwnedSample& outSample) {
-    if (!sample) return false;
-
-    Microsoft::WRL::ComPtr<IMFMediaBuffer> contiguous;
-    if (FAILED(sample->ConvertToContiguousBuffer(&contiguous))) return false;
-
-    BYTE* data = nullptr;
-    DWORD maxLength = 0;
-    DWORD currentLength = 0;
-    if (FAILED(contiguous->Lock(&data, &maxLength, &currentLength))) return false;
-    outSample.payload.resize(currentLength);
-    if (currentLength > 0 && data) {
-        std::memcpy(outSample.payload.data(), data, currentLength);
-    }
-    contiguous->Unlock();
-
-    outSample.info.size = outSample.payload.size();
-    return !outSample.payload.empty();
-}
-
-bool drainAacOutput(IMFTransform* encoder, AacAudioTrack& output, bool finalDrain, std::string& error) {
-    MFT_OUTPUT_STREAM_INFO streamInfo {};
-    HRESULT hr = encoder->GetOutputStreamInfo(0, &streamInfo);
-    if (FAILED(hr)) {
-        error = hresultMessage("AAC encoder output stream info failed.", hr);
-        return false;
-    }
-
-    const DWORD bufferSize = std::max<DWORD>(streamInfo.cbSize, 64 * 1024);
-    while (true) {
-        Microsoft::WRL::ComPtr<IMFSample> outSample;
-        hr = MFCreateSample(&outSample);
-        if (FAILED(hr)) {
-            error = hresultMessage("AAC output sample allocation failed.", hr);
-            return false;
-        }
-
-        Microsoft::WRL::ComPtr<IMFMediaBuffer> outBuffer;
-        hr = MFCreateMemoryBuffer(bufferSize, &outBuffer);
-        if (FAILED(hr)) {
-            error = hresultMessage("AAC output buffer allocation failed.", hr);
-            return false;
-        }
-        outSample->AddBuffer(outBuffer.Get());
-
-        MFT_OUTPUT_DATA_BUFFER outputBuffer {};
-        outputBuffer.dwStreamID = 0;
-        outputBuffer.pSample = outSample.Get();
-        DWORD processStatus = 0;
-        hr = encoder->ProcessOutput(0, 1, &outputBuffer, &processStatus);
-        if (outputBuffer.pEvents) outputBuffer.pEvents->Release();
-
-        if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) return true;
-        if (FAILED(hr)) {
-            if (!finalDrain && hr == MF_E_TRANSFORM_STREAM_CHANGE) return true;
-            error = hresultMessage("AAC encoder output failed.", hr);
-            return false;
-        }
-
-        OwnedSample encoded;
-        encoded.info.duration = 1024;
-        if (appendSamplePayload(outSample.Get(), encoded)) {
-            output.samples.push_back(std::move(encoded));
-        }
-    }
-}
-
-bool encodePcmTrackToAac(const PcmAudioTrack& pcmTrack, AacAudioTrack& aacTrack, std::string& error) {
-    if (pcmTrack.samples.empty()) return false;
-
-    MFT_REGISTER_TYPE_INFO outputInfo {};
-    outputInfo.guidMajorType = MFMediaType_Audio;
-    outputInfo.guidSubtype = MFAudioFormat_AAC;
-
-    IMFActivate** activates = nullptr;
-    UINT32 activateCount = 0;
-    HRESULT hr = MFTEnumEx(
-        MFT_CATEGORY_AUDIO_ENCODER,
-        MFT_ENUM_FLAG_ALL,
-        nullptr,
-        &outputInfo,
-        &activates,
-        &activateCount);
-    if (FAILED(hr) || activateCount == 0 || !activates) {
-        error = hresultMessage("No Media Foundation AAC encoder found.", FAILED(hr) ? hr : MF_E_TOPO_CODEC_NOT_FOUND);
-        return false;
-    }
-
-    Microsoft::WRL::ComPtr<IMFTransform> encoder;
-    hr = activates[0]->ActivateObject(IID_PPV_ARGS(&encoder));
-    for (UINT32 i = 0; i < activateCount; ++i) activates[i]->Release();
-    CoTaskMemFree(activates);
-    if (FAILED(hr)) {
-        error = hresultMessage("AAC encoder activation failed.", hr);
-        return false;
-    }
-
-    const int channels = std::clamp(pcmTrack.channels, 1, 2);
-    const int sampleRate = std::max(8000, pcmTrack.sampleRate);
-    const int audioBitrate = channels == 1 ? 96000 : 160000;
-
-    Microsoft::WRL::ComPtr<IMFMediaType> inputType;
-    MFCreateMediaType(&inputType);
-    inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
-    inputType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
-    inputType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, static_cast<UINT32>(channels));
-    inputType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, static_cast<UINT32>(sampleRate));
-    inputType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
-    inputType->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, static_cast<UINT32>(channels * 2));
-    inputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, static_cast<UINT32>(sampleRate * channels * 2));
-
-    hr = encoder->SetInputType(0, inputType.Get(), 0);
-    if (FAILED(hr)) {
-        error = hresultMessage("AAC encoder input type failed.", hr);
-        return false;
-    }
-
-    Microsoft::WRL::ComPtr<IMFMediaType> selectedOutputType;
-    for (DWORD index = 0;; ++index) {
-        Microsoft::WRL::ComPtr<IMFMediaType> candidate;
-        hr = encoder->GetOutputAvailableType(0, index, &candidate);
-        if (hr == MF_E_NO_MORE_TYPES) break;
-        if (FAILED(hr)) continue;
-
-        GUID subtype {};
-        if (FAILED(candidate->GetGUID(MF_MT_SUBTYPE, &subtype)) || subtype != MFAudioFormat_AAC) continue;
-
-        candidate->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, static_cast<UINT32>(channels));
-        candidate->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, static_cast<UINT32>(sampleRate));
-        candidate->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, static_cast<UINT32>(audioBitrate / 8));
-        candidate->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
-        candidate->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
-        candidate->SetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, 0x29);
-
-        hr = encoder->SetOutputType(0, candidate.Get(), 0);
-        if (SUCCEEDED(hr)) {
-            selectedOutputType = candidate;
-            break;
-        }
-    }
-
-    if (!selectedOutputType) {
-        Microsoft::WRL::ComPtr<IMFMediaType> outputType;
-        MFCreateMediaType(&outputType);
-        outputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
-        outputType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
-        outputType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, static_cast<UINT32>(channels));
-        outputType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, static_cast<UINT32>(sampleRate));
-        outputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, static_cast<UINT32>(audioBitrate / 8));
-        outputType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
-        outputType->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
-        outputType->SetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, 0x29);
-
-        hr = encoder->SetOutputType(0, outputType.Get(), 0);
-        if (FAILED(hr)) {
-            error = hresultMessage("AAC encoder output type failed.", hr);
-            return false;
-        }
-        selectedOutputType = outputType;
-    }
-
-    encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
-    encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
-
-    int64_t sampleTime = 0;
-    for (const auto& pcmSample : pcmTrack.samples) {
-        Microsoft::WRL::ComPtr<IMFSample> sample;
-        hr = MFCreateSample(&sample);
-        if (FAILED(hr)) {
-            error = hresultMessage("AAC input sample allocation failed.", hr);
-            return false;
-        }
-
-        Microsoft::WRL::ComPtr<IMFMediaBuffer> buffer;
-        hr = MFCreateMemoryBuffer(static_cast<DWORD>(pcmSample.payload.size()), &buffer);
-        if (FAILED(hr)) {
-            error = hresultMessage("AAC input buffer allocation failed.", hr);
-            return false;
-        }
-
-        BYTE* dest = nullptr;
-        DWORD maxLength = 0;
-        DWORD currentLength = 0;
-        buffer->Lock(&dest, &maxLength, &currentLength);
-        std::memcpy(dest, pcmSample.payload.data(), pcmSample.payload.size());
-        buffer->Unlock();
-        buffer->SetCurrentLength(static_cast<DWORD>(pcmSample.payload.size()));
-        sample->AddBuffer(buffer.Get());
-
-        const int64_t duration100ns = static_cast<int64_t>((10'000'000.0 * pcmSample.durationFrames) / sampleRate);
-        sample->SetSampleTime(sampleTime);
-        sample->SetSampleDuration(duration100ns);
-        sampleTime += duration100ns;
-
-        while (true) {
-            hr = encoder->ProcessInput(0, sample.Get(), 0);
-            if (hr == MF_E_NOTACCEPTING) {
-                if (!drainAacOutput(encoder.Get(), aacTrack, false, error)) return false;
-                continue;
-            }
-            if (FAILED(hr)) {
-                error = hresultMessage("AAC encoder input failed.", hr);
-                return false;
-            }
-            break;
-        }
-        if (!drainAacOutput(encoder.Get(), aacTrack, false, error)) return false;
-    }
-
-    encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
-    encoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
-    if (!drainAacOutput(encoder.Get(), aacTrack, true, error)) return false;
-
-    aacTrack.sourceId = pcmTrack.sourceId;
-    aacTrack.sampleRate = sampleRate;
-    aacTrack.channels = channels;
-    aacTrack.decoderConfig = makeAacAudioSpecificConfig(sampleRate, channels);
-    if (!aacTrack.samples.empty()) aacTrack.firstPts100ns = aacTrack.samples.front().pts100ns;
-    return !aacTrack.samples.empty();
-}
-
 PcmAudioTrack selectUncoveredPcm(const PcmAudioTrack& pcmTrack, const AacAudioTrack* encodedTrack) {
     if (!encodedTrack || encodedTrack->samples.empty()) return pcmTrack;
 
@@ -593,7 +375,7 @@ bool encodePcmTrackToAacBatched(const PcmAudioTrack& pcmTrack, AacAudioTrack& aa
     };
 
     for (const auto& pcmSample : pcmTrack.samples) {
-        const uint32_t availableFrames = static_cast<uint32_t>(pcmSample.payload.size() / bytesPerFrame);
+        const uint32_t availableFrames = static_cast<uint32_t>(pcmSample.payloadSize / bytesPerFrame);
         if (availableFrames == 0) continue;
         constexpr int64_t kContiguousTolerance100ns = 50'000LL;
         if (epochActive && std::abs(pcmSample.pts100ns - expectedInputPts100ns) > kContiguousTolerance100ns) {
@@ -609,10 +391,20 @@ bool encodePcmTrackToAacBatched(const PcmAudioTrack& pcmTrack, AacAudioTrack& aa
             const uint32_t copiedFrames = std::min(targetBatchFrames - batchFrames, availableFrames - consumedFrames);
             const auto byteOffset = static_cast<std::size_t>(consumedFrames) * bytesPerFrame;
             const auto byteCount = static_cast<std::size_t>(copiedFrames) * bytesPerFrame;
-            batch.insert(
-                batch.end(),
-                pcmSample.payload.begin() + static_cast<std::ptrdiff_t>(byteOffset),
-                pcmSample.payload.begin() + static_cast<std::ptrdiff_t>(byteOffset + byteCount));
+            const std::size_t batchOffset = batch.size();
+            batch.resize(batchOffset + byteCount);
+            auto destination = std::span<std::byte>(batch).subspan(batchOffset, byteCount);
+            bool copied = false;
+            if (pcmSample.sharedPayload && byteOffset + byteCount <= pcmSample.sharedPayload->size()) {
+                std::memcpy(destination.data(), pcmSample.sharedPayload->data() + byteOffset, byteCount);
+                copied = true;
+            } else if (pcmSample.payloadReader) {
+                copied = pcmSample.payloadReader->read(byteOffset, destination);
+            }
+            if (!copied) {
+                error = "PCM replay payload could not be read during AAC recovery.";
+                return false;
+            }
             batchFrames += copiedFrames;
             consumedFrames += copiedFrames;
             if (batchFrames == targetBatchFrames && !flushBatch()) return false;
@@ -1936,8 +1728,8 @@ public:
             const std::size_t previousSize = buffer_.size();
             buffer_.resize(previousSize + count);
             // Replay reads and final MP4 writes compete for the same storage,
-            // so both consume one aggregate I/O budget.
-            paceToTarget(count);
+            // so both obey capture pressure and consume one aggregate I/O budget.
+            prepareForIo(count);
             const auto readStartedAt = std::chrono::steady_clock::now();
             const bool read = reader.read(
                 offset,
@@ -1969,7 +1761,7 @@ public:
         std::size_t offset = 0;
         while (offset < buffer_.size()) {
             const std::size_t count = std::min(ioChunkBytes_, buffer_.size() - offset);
-            prepareForWrite(count);
+            prepareForIo(count);
             const auto writeStartedAt = std::chrono::steady_clock::now();
             const bool wrote = out_.write(std::span<const std::byte>(buffer_.data() + offset, count));
             const auto writeDurationUs = static_cast<uint64_t>(std::max<int64_t>(
@@ -2127,7 +1919,7 @@ private:
         elevatedBytesSinceYield_ %= elevatedYieldIntervalBytes_;
     }
 
-    void prepareForWrite(std::size_t pendingBytes) {
+    void prepareForIo(std::size_t pendingBytes) {
         if (samplePressure_) {
             auto sample = observePressure();
             if (sample.level == MuxPressureLevel::Elevated) {
@@ -2136,24 +1928,15 @@ private:
                 elevatedBytesSinceYield_ = 0;
                 ++recoveryWaits_;
                 const auto waitStartedAt = std::chrono::steady_clock::now();
-                constexpr auto maximumRecoveryWait = std::chrono::milliseconds(16);
-                do {
-                    Sleep(1);
-                    ++sleeps_;
-                    ++sleepMs_;
-                    sample = observePressure();
-                } while (
-                    sample.level == MuxPressureLevel::Critical &&
-                    std::chrono::steady_clock::now() - waitStartedAt < maximumRecoveryWait);
-                recoveryWaitMs_ += static_cast<std::size_t>(std::max<int64_t>(
+                SwitchToThread();
+                ++yields_;
+                sample = observePressure();
+                const auto waitedUs = static_cast<uint64_t>(std::max<int64_t>(
                     0,
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - waitStartedAt).count()));
+                recoveryWaitMs_ += static_cast<std::size_t>(waitedUs / 1000);
                 if (ioRecorder_) {
-                    const auto waitedUs = static_cast<uint64_t>(std::max<int64_t>(
-                        0,
-                        std::chrono::duration_cast<std::chrono::microseconds>(
-                            std::chrono::steady_clock::now() - waitStartedAt).count()));
                     ioRecorder_->recordPacingWait(
                         waitStartedAt,
                         waitedUs,
@@ -2246,7 +2029,7 @@ private:
     bool rateLimitStarted_ = false;
     std::chrono::steady_clock::time_point nextRateLimitedIo_ {};
     std::size_t elevatedBytesSinceYield_ = 0;
-    static constexpr std::size_t elevatedYieldIntervalBytes_ = 16u * 1024u * 1024u;
+    static constexpr std::size_t elevatedYieldIntervalBytes_ = 4u * 1024u * 1024u;
 };
 
 void writeU32(BufferedByteWriter& out, uint32_t value) {
@@ -2504,11 +2287,17 @@ MuxResult muxH264ToMp4(
                 track = std::prev(pcmAudioTracks.end());
             }
 
-            const auto bytes = payloadBytes(packet);
-            pcmSourceBytes += bytes.size();
+            const auto bytes = payloadSize(packet);
+            pcmSourceBytes += bytes;
             const auto bytesPerFrame = static_cast<std::size_t>(std::max(1, packet.channelCount) * 2);
-            const auto frames = static_cast<uint32_t>(std::max<std::size_t>(1, bytes.size() / bytesPerFrame));
-            track->samples.push_back(PcmSampleView { bytes, packet.pts100ns, frames });
+            const auto frames = static_cast<uint32_t>(std::max<std::size_t>(1, bytes / bytesPerFrame));
+            track->samples.push_back(PcmSampleView {
+                packet.payload,
+                packet.payloadReader,
+                bytes,
+                packet.pts100ns,
+                frames
+            });
         }
     }
     logMuxSaveTiming(
@@ -2538,23 +2327,20 @@ MuxResult muxH264ToMp4(
         return result;
     }
 
-    // Compute CFR-quantized per-frame durations in 100ns units (timescale = 10,000,000).
-    // Quantizing inter-frame PTS gaps to exact target-rate ticks eliminates arrival-jitter
-    // variance in the MP4 stts table, ensuring smooth 60 Hz display refresh during playback.
+    // The video media timescale is 10,000,000, so each stts duration can carry
+    // the exact 100 ns delta between consecutive hardware capture timestamps.
     const auto durationStartedAt = SaveTimingClock::now();
-    const int64_t targetDuration100ns = 10'000'000LL / std::max(1, fps);
     if (videoSamples.size() >= 2) {
         for (std::size_t i = 0; i + 1 < videoSamples.size(); ++i) {
-            const int64_t gap = std::max<int64_t>(1, videoSamples[i + 1].packet->pts100ns - videoSamples[i].packet->pts100ns);
-            const uint64_t ticks = std::max<uint64_t>(1, (gap + targetDuration100ns / 2) / targetDuration100ns);
-            videoSamples[i].info.duration = static_cast<uint32_t>(std::min<uint64_t>(
-                ticks * static_cast<uint64_t>(targetDuration100ns),
-                0xFFFFFFFFULL));
+            videoSamples[i].info.duration = videoSampleDuration100ns(
+                videoSamples[i].packet->pts100ns,
+                videoSamples[i + 1].packet->pts100ns);
         }
         videoSamples.back().info.duration = finalVideoSampleDuration100ns(
             videoSamples.back().packet->duration100ns, fps);
     } else if (videoSamples.size() == 1) {
-        videoSamples[0].info.duration = static_cast<uint32_t>(targetDuration100ns);
+        videoSamples[0].info.duration = finalVideoSampleDuration100ns(
+            videoSamples[0].packet->duration100ns, fps);
     }
     if (videoSamples.empty()) {
         result.message = "MP4 muxing failed: the selected H.264 window contains no writable frame samples.";
@@ -2594,8 +2380,8 @@ MuxResult muxH264ToMp4(
         videoPresentationStartPts100ns - videoMediaStartPts100ns);
     const uint32_t targetFrameDuration100ns = static_cast<uint32_t>(10'000'000LL / std::max(1, fps));
     uint32_t maxSampleDuration100ns = 0;
-    std::size_t gapEvents = 0;
-    uint64_t missingFrameSlots = 0;
+    std::size_t longVfrSamples = 0;
+    uint64_t unfilledTargetIntervals = 0;
     for (const auto& sample : videoSamples) {
         maxSampleDuration100ns = std::max(maxSampleDuration100ns, sample.info.duration);
         const uint64_t roundedTicks =
@@ -2603,8 +2389,8 @@ MuxResult muxH264ToMp4(
             targetFrameDuration100ns;
         const uint64_t missing = roundedTicks > 1 ? roundedTicks - 1 : 0;
         if (missing > 0) {
-            ++gapEvents;
-            missingFrameSlots += missing;
+            ++longVfrSamples;
+            unfilledTargetIntervals += missing;
         }
     }
     logMuxSaveTiming(
@@ -2615,8 +2401,8 @@ MuxResult muxH264ToMp4(
             " presentationDuration100ns=" + std::to_string(movieDuration100ns) +
             " decoderPreroll100ns=" + std::to_string(videoMediaStart100ns) +
             " maxSampleDuration100ns=" + std::to_string(maxSampleDuration100ns) +
-            " gapEvents=" + std::to_string(gapEvents) +
-            " missingFrameSlots=" + std::to_string(missingFrameSlots));
+            " longVfrSamples=" + std::to_string(longVfrSamples) +
+            " unfilledTargetIntervals=" + std::to_string(unfilledTargetIntervals));
 
     if (!pcmAudioTracks.empty()) {
         const auto aacStartedAt = SaveTimingClock::now();
@@ -2755,7 +2541,8 @@ MuxResult muxH264ToMp4(
     }
     const uint64_t finalFileSize = ftyp.size() + mdatHeaderSize + mdatPayloadSize + moov.size();
     const auto preallocateStartedAt = SaveTimingClock::now();
-    const bool preallocated = out.preallocate(finalFileSize);
+    const bool preallocationAttempted = shouldPreallocateMuxOutput(out.storageSeekPenalty());
+    const bool preallocated = preallocationAttempted && out.preallocate(finalFileSize);
     const auto preallocateDurationUs = static_cast<uint64_t>(std::max<int64_t>(
         0,
         std::chrono::duration_cast<std::chrono::microseconds>(
@@ -2768,7 +2555,8 @@ MuxResult muxH264ToMp4(
     logMuxSaveTiming(
         "preallocate",
         preallocateStartedAt,
-        "ok=" + std::string(preallocated ? "true" : "false") +
+        "attempted=" + std::string(preallocationAttempted ? "true" : "false") +
+            " ok=" + std::string(preallocated ? "true" : "false") +
             " finalBytes=" + std::to_string(finalFileSize) +
             " durationUs=" + std::to_string(preallocateDurationUs));
     const bool adaptiveWritePacing = shouldUseAdaptiveWritePacing(

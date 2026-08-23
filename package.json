@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "description": "NVENC-first Windows clipping app with Electron UI and native C++ capture engine.",
-  "releaseTitle": "Clipture 1.4.0: Smooth 60 FPS Capture Engine & Precision Frame Pacing",
+  "releaseTitle": "Clipture 1.4.1: Asymmetric Cadence Smoothing & Rock-Solid 60 FPS Pacing",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {
@@ -11,7 +11,7 @@
     "build": "npm run build:engine && npm run build:ui",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:ui": "npm run build:electron && tsc --noEmit && vite build",
-    "build:engine": "cmake -S engine -B build/engine -A x64 && cmake --build build/engine --config Release",
+    "build:engine": "node scripts/prebuild-kill.cjs && cmake -S engine -B build/engine -A x64 && cmake --build build/engine --config Release",
     "pack:win": "npm run build && electron-builder --win --x64 --dir",
     "dist:win": "npm run build && electron-builder --win --x64",
     "typecheck": "tsc --noEmit",

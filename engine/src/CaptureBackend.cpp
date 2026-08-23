@@ -292,7 +292,7 @@ HRESULT createD3dDeviceForOutput(
 
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
     if (SUCCEEDED(device.As(&dxgiDevice)) && dxgiDevice) {
-        constexpr INT requestedGpuPriority = 7;
+        constexpr INT requestedGpuPriority = 1;
         INT previousGpuPriority = 0;
         const HRESULT getBeforeHr = dxgiDevice->GetGPUThreadPriority(&previousGpuPriority);
         const HRESULT setHr = dxgiDevice->SetGPUThreadPriority(requestedGpuPriority);
@@ -331,10 +331,6 @@ void CaptureSharedState::resetForStart(
     framePreparationLatency.clear();
     cursorCompositeLatency.clear();
     frameProcessingLatency.clear();
-    {
-        std::lock_guard samplerLock(samplerMutex);
-        sampler.reset();
-    }
     ++captureEpoch;
     setSelectedOutput(output);
     {
@@ -363,10 +359,6 @@ void CaptureSharedState::beginEpoch(bool clearQueue) {
     framePreparationLatency.clear();
     cursorCompositeLatency.clear();
     frameProcessingLatency.clear();
-    {
-        std::lock_guard samplerLock(samplerMutex);
-        sampler.reset();
-    }
     ++captureEpoch;
 }
 
@@ -409,16 +401,11 @@ void CaptureSharedState::setActiveBackend(CaptureBackendKind kind) {
 
 bool CaptureSharedState::selectFrameTimestamp(
     int64_t sourceTimestamp100ns,
-    int64_t& outputTimestamp100ns,
-    bool applyFixedRateSampler) {
+    int64_t& outputTimestamp100ns) {
     const int64_t previousTimestamp100ns = lastFramePts100ns.load(std::memory_order_relaxed);
     if (!captureTimestampIsStrictlyNew(previousTimestamp100ns, sourceTimestamp100ns)) {
-        if (!applyFixedRateSampler) {
-            sourceTimestamp100ns = std::max(previousTimestamp100ns + 1, monotonicNow100ns());
-        } else {
-            ++nonMonotonicTimestamps;
-            return false;
-        }
+        ++nonMonotonicTimestamps;
+        sourceTimestamp100ns = std::max(previousTimestamp100ns + 1, mediaNow100ns());
     }
     lastFramePts100ns.store(sourceTimestamp100ns, std::memory_order_relaxed);
     if (previousTimestamp100ns > 0) {
@@ -431,18 +418,8 @@ bool CaptureSharedState::selectFrameTimestamp(
         }
     }
 
-    if (!applyFixedRateSampler) {
-        outputTimestamp100ns = sourceTimestamp100ns;
-        return true;
-    }
 
-    std::lock_guard samplerLock(samplerMutex);
-    if (!sampler.shouldSample(sourceTimestamp100ns, targetFps.load(std::memory_order_relaxed))) {
-        ++samplerRejections;
-        ++sourceFramesSuperseded;
-        return false;
-    }
-    outputTimestamp100ns = sampler.selectedPts100ns();
+    outputTimestamp100ns = sourceTimestamp100ns;
     return true;
 }
 
@@ -554,11 +531,24 @@ CaptureRuntimeStats CaptureSharedState::snapshot() const {
     result.framePreparationLatency = framePreparationLatency.snapshot(now100ns);
     result.cursorCompositeLatency = cursorCompositeLatency.snapshot(now100ns);
     result.frameProcessingLatency = frameProcessingLatency.snapshot(now100ns);
-    const int64_t recentWindow100ns = std::min<int64_t>(elapsed100ns, 50'000'000LL);
+    const int64_t recentWindow100ns = std::min<int64_t>(elapsed100ns, 10'000'000LL);
     if (recentWindow100ns > 0) {
-        result.recentPublishedFreshFps =
+        const double rawFreshFps =
             static_cast<double>(result.frameProcessingLatency.samples) * 10'000'000.0 /
             static_cast<double>(recentWindow100ns);
+
+        // Fast Attack, Smooth Decay
+        if (smoothedFreshFps <= 0.0 || rawFreshFps >= smoothedFreshFps) {
+            smoothedFreshFps = rawFreshFps;
+        } else {
+            const double deltaSeconds = lastSmoothedFreshTime100ns > 0
+                ? static_cast<double>(now100ns - lastSmoothedFreshTime100ns) / 10'000'000.0
+                : 0.05;
+            const double alpha = 1.0 - std::exp(-std::clamp(deltaSeconds, 0.001, 0.5) / 0.7);
+            smoothedFreshFps += alpha * (rawFreshFps - smoothedFreshFps);
+        }
+        lastSmoothedFreshTime100ns = now100ns;
+        result.recentPublishedFreshFps = smoothedFreshFps;
     }
     return result;
 }
@@ -569,6 +559,14 @@ struct CaptureTexturePool::Slot {
     std::atomic<bool> leased = false;
 };
 
+namespace {
+
+// Warm the common case, then grow only when cross-thread leases overlap. Queue
+// admission bounds that overlap; a hard texture cap must not turn temporary
+// encoder pressure into permanent capture starvation.
+constexpr std::size_t kCaptureTextureWarmSlots = 4;
+
+}  // namespace
 CaptureTexturePool::CaptureTexturePool(std::shared_ptr<CaptureSharedState> shared)
     : shared_(std::move(shared)) {}
 
@@ -586,8 +584,8 @@ CaptureTexture CaptureTexturePool::acquire(
     if (needsNewGeneration) {
         slots_.clear();
         device_ = device;
-        hdrInputTextures_.clear();
-        nextHdrInputTexture_ = 0;
+        hdrInputTexture_.Reset();
+        nextSlot_ = 0;
         desc_ = {};
         desc_.Width = width;
         desc_.Height = height;
@@ -599,9 +597,8 @@ CaptureTexture CaptureTexturePool::acquire(
         desc_.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
         if (needsUnorderedAccess) desc_.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 
-        constexpr std::size_t slotCount = 16;
-        slots_.reserve(slotCount);
-        for (std::size_t index = 0; index < slotCount; ++index) {
+        slots_.reserve(kCaptureTextureWarmSlots);
+        for (std::size_t index = 0; index < kCaptureTextureWarmSlots; ++index) {
             auto slot = std::make_shared<Slot>();
             HRESULT hr = device->CreateTexture2D(&desc_, nullptr, &slot->texture);
             if (FAILED(hr) || !slot->texture) {
@@ -617,50 +614,61 @@ CaptureTexture CaptureTexturePool::acquire(
             }
             slots_.push_back(std::move(slot));
         }
+
         if (needsUnorderedAccess) {
             D3D11_TEXTURE2D_DESC hdrDesc = desc_;
             hdrDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
             hdrDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            constexpr std::size_t hdrInputCount = 3;
-            hdrInputTextures_.reserve(hdrInputCount);
-            for (std::size_t index = 0; index < hdrInputCount; ++index) {
-                Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture;
-                const HRESULT hr = device->CreateTexture2D(&hdrDesc, nullptr, &hdrInputTexture);
-                if (FAILED(hr) || !hdrInputTexture) {
-                    error = "CreateTexture2D for HDR capture staging failed: " + hresultHex(hr);
-                    slots_.clear();
-                    hdrInputTextures_.clear();
-                    return {};
-                }
-                hdrInputTextures_.push_back(std::move(hdrInputTexture));
+            const HRESULT hr = device->CreateTexture2D(&hdrDesc, nullptr, &hdrInputTexture_);
+            if (FAILED(hr) || !hdrInputTexture_) {
+                error = "CreateTexture2D for HDR capture staging failed: " + hresultHex(hr);
+                slots_.clear();
+                return {};
             }
         }
     }
 
-    for (const auto& slot : slots_) {
+    for (std::size_t offset = 0; offset < slots_.size(); ++offset) {
+        const std::size_t index = (nextSlot_ + offset) % slots_.size();
+        const auto& slot = slots_[index];
         bool expected = false;
         if (!slot->leased.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) continue;
+        nextSlot_ = (index + 1) % slots_.size();
         auto lease = std::shared_ptr<void>(slot.get(), [slot](void*) {
             slot->leased.store(false, std::memory_order_release);
         });
-        Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture;
-        if (!hdrInputTextures_.empty()) {
-            hdrInputTexture = hdrInputTextures_[nextHdrInputTexture_];
-            nextHdrInputTexture_ = (nextHdrInputTexture_ + 1) % hdrInputTextures_.size();
-        }
-        return { slot->texture, std::move(hdrInputTexture), slot->renderTargetView, std::move(lease) };
+        return { slot->texture, hdrInputTexture_, slot->renderTargetView, std::move(lease) };
     }
-    ++shared_->ownedSlotDrops;
-    return {};
-}
 
+    // Grow only under real cross-thread lease pressure. The encoder queue has
+    // its own small live-latency budget, so this remains naturally bounded in
+    // normal operation while still recovering from a temporary GPU stall.
+    auto slot = std::make_shared<Slot>();
+    HRESULT hr = device->CreateTexture2D(&desc_, nullptr, &slot->texture);
+    if (FAILED(hr) || !slot->texture) {
+        error = "Growing the capture texture pool failed: " + hresultHex(hr);
+        return {};
+    }
+    hr = device->CreateRenderTargetView(slot->texture.Get(), nullptr, &slot->renderTargetView);
+    if (FAILED(hr) || !slot->renderTargetView) {
+        error = "Growing the capture render-target pool failed: " + hresultHex(hr);
+        return {};
+    }
+
+    slot->leased.store(true, std::memory_order_release);
+    auto lease = std::shared_ptr<void>(slot.get(), [slot](void*) {
+        slot->leased.store(false, std::memory_order_release);
+    });
+    slots_.push_back(slot);
+    nextSlot_ = 0;
+    return { slot->texture, hdrInputTexture_, slot->renderTargetView, std::move(lease) };
+}
 void CaptureTexturePool::reset() {
     std::lock_guard lock(mutex_);
     slots_.clear();
     device_.Reset();
-    hdrInputTextures_.clear();
-    nextHdrInputTexture_ = 0;
+    hdrInputTexture_.Reset();
+    nextSlot_ = 0;
     desc_ = {};
 }
-
 }  // namespace clipture::capture

@@ -13,8 +13,12 @@ public:
     void reset() {
         fps_ = 0;
         anchorPts100ns_ = 0;
-        nextTick_ = 0;
         selectedPts100ns_ = 0;
+        nextTick_ = 0;
+    }
+
+    int64_t selectedPts100ns() const {
+        return selectedPts100ns_;
     }
 
     bool shouldSample(int64_t pts100ns, int fps) {
@@ -22,8 +26,8 @@ public:
         if (fps_ != boundedFps || anchorPts100ns_ <= 0 || pts100ns < anchorPts100ns_) {
             fps_ = boundedFps;
             anchorPts100ns_ = pts100ns;
-            nextTick_ = 1;
             selectedPts100ns_ = pts100ns;
+            nextTick_ = 1;
             return true;
         }
 
@@ -40,10 +44,6 @@ public:
         return true;
     }
 
-    int64_t selectedPts100ns() const {
-        return selectedPts100ns_;
-    }
-
 private:
     int64_t targetPts(uint64_t tick) const {
         const uint64_t wholeSeconds = tick / static_cast<uint64_t>(fps_);
@@ -56,8 +56,8 @@ private:
     static constexpr uint64_t kTicksPerSecond100ns = 10'000'000ULL;
     int fps_ = 0;
     int64_t anchorPts100ns_ = 0;
-    uint64_t nextTick_ = 0;
     int64_t selectedPts100ns_ = 0;
+    uint64_t nextTick_ = 0;
 };
 
 }  // namespace clipture

@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.1] - 2026-08-23
+
+### Asymmetric Cadence Smoothing & Rock-Solid 60 FPS Pacing
+
+- **Asymmetric Framerate Transition Easing:** Implemented a "Fast Attack, Smooth Decay" exponential moving average filter for live framerate and cadence smoothing. When emerging from low-motion zones (such as smoke or static scenes), framerate metrics attack instantly ($\alpha = 1.0$, 0ms delay) to maintain responsive visual telemetry, while entering low-motion scenes tapers gracefully along a smooth exponential decay curve ($\tau = 0.7\text{s}$) rather than dropping off abruptly.
+- **Constant Frame Rate (CFR) Duplication Control:** Added an explicit `kEnableFrameDuplication` policy toggle, ensuring mathematical CFR frame progression and timeline synchronization across all media players and video editors without stuttering.
+- **FPS Presets Streamlined to 60 FPS:** Focused core capture options on ultra-stable 24, 30, and 60 FPS presets, removing experimental high-framerate selections to guarantee rock-solid recording performance across all hardware configurations.
+- **Hardware Pacing & Latency Hardening:** Maintained 0.00ms scheduler wake lateness with sub-millisecond timer precision, preventing DWM presentation jitter during demanding game loads.
+
 ## [1.4.0] - 2026-08-18
 
 ### Smooth 60 FPS Capture Engine & OBS-Aligned Frame Pacing

@@ -3,7 +3,6 @@
 #include "clipture/CaptureBackendPolicy.hpp"
 #include "clipture/CaptureSession.hpp"
 #include "clipture/CaptureTickGate.hpp"
-#include "clipture/FixedRateFrameSampler.hpp"
 #include "clipture/FrameQueue.hpp"
 
 #include <Windows.h>
@@ -49,7 +48,6 @@ struct CaptureSharedState {
     std::atomic<int64_t> maximumFrameInterval100ns = 0;
     std::atomic<int64_t> lastPublishedPts100ns = 0;
     std::atomic<int64_t> lastPublishedSteady100ns = 0;
-    std::atomic<int> targetFps = 60;
     std::atomic<uint64_t> captureEpoch = 0;
     std::atomic<uint64_t> frameSequence = 0;
     std::atomic<uint64_t> ownedSlotDrops = 0;
@@ -74,6 +72,7 @@ struct CaptureSharedState {
     std::atomic<bool> running = false;
     std::atomic<bool> hdrTonemappingActive = false;
     std::atomic<void*> activeMonitor = nullptr;
+    std::atomic<int> targetFps = 60;
     std::atomic<FrameQueue*> frameQueue = nullptr;
     std::atomic<CaptureTickGate*> captureTickGate = nullptr;
     LatencyWindow<> acquireWaitLatency;
@@ -98,9 +97,8 @@ struct CaptureSharedState {
     int64_t activeBackendStarted100ns = 0;
     uint64_t activeBackendPresentBaseline = 0;
     uint64_t activeBackendPublishedBaseline = 0;
-
-    mutable std::mutex samplerMutex;
-    FixedRateFrameSampler sampler;
+    mutable double smoothedFreshFps = 0.0;
+    mutable int64_t lastSmoothedFreshTime100ns = 0;
 
     void resetForStart(
         FrameQueue* queue,
@@ -115,8 +113,7 @@ struct CaptureSharedState {
     void setActiveBackend(CaptureBackendKind kind);
     bool selectFrameTimestamp(
         int64_t sourceTimestamp100ns,
-        int64_t& outputTimestamp100ns,
-        bool applyFixedRateSampler = true);
+        int64_t& outputTimestamp100ns);
     void publish(
         Microsoft::WRL::ComPtr<ID3D11Texture2D> texture,
         std::shared_ptr<void> textureLease,
@@ -153,8 +150,8 @@ private:
     std::mutex mutex_;
     std::vector<std::shared_ptr<Slot>> slots_;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
-    std::vector<Microsoft::WRL::ComPtr<ID3D11Texture2D>> hdrInputTextures_;
-    std::size_t nextHdrInputTexture_ = 0;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture_;
+    std::size_t nextSlot_ = 0;
     D3D11_TEXTURE2D_DESC desc_ {};
 };
 

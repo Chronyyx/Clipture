@@ -39,6 +39,13 @@ export interface FrameDropActivityDeltas {
   captureClockTickCompletions: number;
   captureClockTickCompletionWaits: number;
   captureClockTickCompletionTimeouts: number;
+  presentLatchWaits: number;
+  presentLatchHits: number;
+  presentLatchTimeouts: number;
+  catchUpEvents: number;
+  historicalFramesRecovered: number;
+  catchUpRepeatedTicks: number;
+  encoderAdmissionRejections: number;
   encoderFramesAccepted: number;
   encoderPacketsProduced: number;
   encoderDistinctSourceFrames: number;
@@ -62,6 +69,9 @@ export interface FrameDropTimelineSample {
     captureClockRequests: number;
     captureClockWakeups: number;
     captureClockCompletionTimeouts: number;
+    presentLatchWaits: number;
+    presentLatchHits: number;
+    presentLatchTimeouts: number;
     captureAcquireImmediateMisses: number;
     captureAcquireGraceHits: number;
     captureAcquireGraceTimeouts: number;
@@ -204,6 +214,12 @@ export interface EngineDiagnostics {
   captureClockTickCompletions: number;
   captureClockTickCompletionWaits: number;
   captureClockTickCompletionTimeouts: number;
+  presentLatchWaits: number;
+  presentLatchHits: number;
+  presentLatchTimeouts: number;
+  catchUpEvents: number;
+  historicalFramesRecovered: number;
+  catchUpRepeatedTicks: number;
   desktopPresentFps: number;
   publishedFreshFps: number;
   recentPublishedFreshFps: number;
@@ -211,6 +227,12 @@ export interface EngineDiagnostics {
   recentEncoderOutputFps: number;
   recentEncoderDistinctSourceFps: number;
   encodedRepeatRatio: number;
+  encodedMotionRepeatRatioPercent: number;
+  recentMotionRepeatRatioPercent: number;
+  motionFramesTotal: number;
+  motionFramesRepeated: number;
+  recentMotionFramesTotal: number;
+  recentMotionFramesRepeated: number;
   stillFrameDuplicationEnabled: boolean;
   encoderDistinctSourceFrames: number;
   encoderRepeatedSourceFrames: number;
@@ -235,6 +257,7 @@ export interface EngineDiagnostics {
   droppedFrames: number;
   captureOverflowDrops: number;
   captureCoalescedDrops: number;
+  frameQueueMaxDepth: number;
   sourceFramesSuperseded: number;
   captureSlotDrops: number;
   captureCallbackErrors: number;
@@ -242,6 +265,7 @@ export interface EngineDiagnostics {
   schedulerRepeatedFrames: number;
   encoderQueueDrops: number;
   encoderRepeatCoalesced: number;
+  encoderAdmissionRejections: number;
   encoderQueuedFreshFrames: number;
   encoderQueuedRepeatFrames: number;
   nvencSurfaceDrops: number;
@@ -266,6 +290,10 @@ export interface EngineDiagnostics {
   recentSchedulerRepeatedFrames: number;
   recentEncoderQueueDrops: number;
   recentEncoderRepeatCoalesced: number;
+  recentCatchUpEvents: number;
+  recentHistoricalFramesRecovered: number;
+  recentCatchUpRepeatedTicks: number;
+  recentEncoderAdmissionRejections: number;
   recentNvencSurfaceDrops: number;
   recentNvencInputDrops: number;
   recentDropDominantReason: string;

@@ -372,7 +372,9 @@ bool CaptureSession::preferMonitor() {
 }
 
 void CaptureSession::setTargetFps(int fps) {
-    impl_->shared->targetFps.store(std::clamp(fps, 1, 240), std::memory_order_relaxed);
+    if (impl_ && impl_->shared) {
+        impl_->shared->targetFps.store(std::clamp(fps, 1, 240), std::memory_order_relaxed);
+    }
 }
 
 void CaptureSession::stop() {

@@ -41,6 +41,8 @@ public:
     void push(CapturedFrame frame);
     std::optional<CapturedFrame> waitPop();
     std::optional<CapturedFrame> waitPopFor(std::chrono::milliseconds timeout);
+    std::optional<CapturedFrame> waitConsumeLatestUntil(
+        std::chrono::steady_clock::time_point deadline);
     std::optional<CapturedFrame> consumeAllAndGetLatest();
     std::optional<CapturedFrame> consumeLatestAtOrBefore(int64_t pts100ns);
     void stop();

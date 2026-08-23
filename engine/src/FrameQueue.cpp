@@ -42,6 +42,17 @@ std::optional<CapturedFrame> FrameQueue::waitPopFor(std::chrono::milliseconds ti
     return frame;
 }
 
+std::optional<CapturedFrame> FrameQueue::waitConsumeLatestUntil(
+    std::chrono::steady_clock::time_point deadline) {
+    std::unique_lock lock(mutex_);
+    cv_.wait_until(lock, deadline, [this] { return stopped_ || !frames_.empty(); });
+    if (frames_.empty()) return std::nullopt;
+    if (frames_.size() > 1) stats_.coalescedDrops += frames_.size() - 1;
+    auto frame = std::move(frames_.back());
+    frames_.clear();
+    return frame;
+}
+
 std::optional<CapturedFrame> FrameQueue::consumeAllAndGetLatest() {
     std::lock_guard lock(mutex_);
     if (frames_.empty()) return std::nullopt;

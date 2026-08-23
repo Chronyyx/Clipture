@@ -10,9 +10,9 @@
 
 namespace clipture {
 
-// OBS polls Desktop Duplication without blocking at the beginning of each
-// graphics tick, before it submits that tick for output.
-inline constexpr bool kEnableEncoderDrivenDxgiCapture = true;
+// Continuous decoupled DXGI sampler captures DWM flips at high refresh rate (144Hz/240Hz)
+// as they occur without scheduler-to-capture thread hop jitter, while EncoderWorker consumes the newest frame.
+inline constexpr bool kEnableEncoderDrivenDxgiCapture = false;
 inline constexpr uint32_t kEncoderDrivenDxgiPollTimeoutMs = 0;
 inline constexpr bool kEnableEncoderDrivenDxgiGrace = false;
 inline constexpr uint32_t kEncoderDrivenDxgiGraceTimeoutMs = 0;

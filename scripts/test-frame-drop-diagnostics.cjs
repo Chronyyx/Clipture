@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { classifyVisualFreshness } = require("../dist/main/FrameDropDiagnostics.js");
+const { FrameDropDiagnosticsRecorder, classifyVisualFreshness } = require("../dist/main/FrameDropDiagnostics.js");
 
 function activity(overrides = {}) {
   return {
@@ -18,6 +18,13 @@ function activity(overrides = {}) {
     captureClockTickCompletions: 60,
     captureClockTickCompletionWaits: 60,
     captureClockTickCompletionTimeouts: 0,
+    presentLatchWaits: 0,
+    presentLatchHits: 0,
+    presentLatchTimeouts: 0,
+    catchUpEvents: 0,
+    historicalFramesRecovered: 0,
+    catchUpRepeatedTicks: 0,
+    encoderAdmissionRejections: 0,
     encoderFramesAccepted: 60,
     encoderPacketsProduced: 60,
     encoderDistinctSourceFrames: 60,
@@ -66,8 +73,37 @@ assert.equal(
   "dxgi-poll-grace-exhausted"
 );
 assert.equal(
-  classify({ desktopPresents: 30, captureUpdatesAcquired: 30 }),
-  "desktop-source-present-limited"
+  classify({
+    desktopPresents: 45,
+    captureUpdatesAcquired: 45,
+    freshFramesPublished: 45,
+    encoderFramesAccepted: 45,
+    encoderPacketsProduced: 45,
+    encoderDistinctSourceFrames: 45
+  }),
+  "healthy-vfr-source-limited"
+);
+assert.equal(
+  classify({
+    desktopPresents: 0,
+    captureUpdatesAcquired: 0,
+    freshFramesPublished: 0,
+    encoderFramesAccepted: 0,
+    encoderPacketsProduced: 0,
+    encoderDistinctSourceFrames: 0
+  }),
+  "healthy-vfr-source-limited"
+);
+assert.equal(
+  classify({
+    desktopPresents: 45,
+    captureUpdatesAcquired: 45,
+    freshFramesPublished: 45,
+    encoderFramesAccepted: 45,
+    encoderPacketsProduced: 30,
+    encoderDistinctSourceFrames: 30
+  }),
+  "nvenc-output-limited"
 );
 assert.equal(
   classify({
@@ -91,8 +127,12 @@ assert.equal(
   "capture-sampler-or-publication-limited"
 );
 assert.equal(
+  classify({ captureUpdatesAcquired: 30, freshFramesPublished: 30 }),
+  "capture-acquisition-limited"
+);
+assert.equal(
   classify({ encoderFramesAccepted: 40, encoderPacketsProduced: 40, encoderDistinctSourceFrames: 40 }),
-  "scheduler-admission-limited"
+  "encoder-admission-limited"
 );
 assert.equal(
   classify({ encoderPacketsProduced: 40, encoderDistinctSourceFrames: 40 }),
@@ -106,5 +146,29 @@ assert.equal(
   classify({ encoderDistinctSourceFrames: 30 }),
   "encoded-source-freshness-limited"
 );
+
+const recorder = new FrameDropDiagnosticsRecorder(0);
+const telemetryBase = {
+  fps: 60,
+  captureEpoch: 1,
+  captureClockMode: "capture-sampled",
+  stillFrameDuplicationEnabled: false,
+  catchUpEvents: 4,
+  historicalFramesRecovered: 3,
+  catchUpRepeatedTicks: 1,
+  encoderAdmissionRejections: 2
+};
+recorder.observe(telemetryBase, 1_000);
+const recentTelemetry = recorder.observe({
+  ...telemetryBase,
+  catchUpEvents: 6,
+  historicalFramesRecovered: 5,
+  catchUpRepeatedTicks: 2,
+  encoderAdmissionRejections: 5
+}, 2_000);
+assert.equal(recentTelemetry.recentCatchUpEvents, 2);
+assert.equal(recentTelemetry.recentHistoricalFramesRecovered, 2);
+assert.equal(recentTelemetry.recentCatchUpRepeatedTicks, 1);
+assert.equal(recentTelemetry.recentEncoderAdmissionRejections, 3);
 
 console.log("Frame freshness diagnostics tests passed.");

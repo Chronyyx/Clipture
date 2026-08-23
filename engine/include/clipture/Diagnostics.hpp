@@ -49,6 +49,12 @@ struct Diagnostics {
     uint64_t captureClockTickCompletions = 0;
     uint64_t captureClockTickCompletionWaits = 0;
     uint64_t captureClockTickCompletionTimeouts = 0;
+    uint64_t presentLatchWaits = 0;
+    uint64_t presentLatchHits = 0;
+    uint64_t presentLatchTimeouts = 0;
+    uint64_t catchUpEvents = 0;
+    uint64_t historicalFramesRecovered = 0;
+    uint64_t catchUpRepeatedTicks = 0;
     double desktopPresentFps = 0.0;
     double publishedFreshFps = 0.0;
     double recentPublishedFreshFps = 0.0;
@@ -56,6 +62,12 @@ struct Diagnostics {
     double recentEncoderOutputFps = 0.0;
     double recentEncoderDistinctSourceFps = 0.0;
     double encodedRepeatRatio = 0.0;
+    double encodedMotionRepeatRatioPercent = 0.0;
+    double recentMotionRepeatRatioPercent = 0.0;
+    uint64_t motionFramesTotal = 0;
+    uint64_t motionFramesRepeated = 0;
+    uint64_t recentMotionFramesTotal = 0;
+    uint64_t recentMotionFramesRepeated = 0;
     bool stillFrameDuplicationEnabled = false;
     uint64_t encoderDistinctSourceFrames = 0;
     uint64_t encoderRepeatedSourceFrames = 0;
@@ -80,6 +92,7 @@ struct Diagnostics {
     int droppedFrames = 0;
     int captureOverflowDrops = 0;
     int captureCoalescedDrops = 0;
+    uint64_t frameQueueMaxDepth = 0;
     int sourceFramesSuperseded = 0;
     int captureSlotDrops = 0;
     int captureCallbackErrors = 0;
@@ -87,6 +100,7 @@ struct Diagnostics {
     int schedulerRepeatedFrames = 0;
     int encoderQueueDrops = 0;
     int encoderRepeatCoalesced = 0;
+    uint64_t encoderAdmissionRejections = 0;
     int encoderQueuedFreshFrames = 0;
     int encoderQueuedRepeatFrames = 0;
     int nvencSurfaceDrops = 0;

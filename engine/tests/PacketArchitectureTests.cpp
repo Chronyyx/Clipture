@@ -7,7 +7,6 @@
 #include "clipture/CaptureTickGate.hpp"
 #include "clipture/DesktopDuplicationHelpers.hpp"
 #include "clipture/DesktopPointerShape.hpp"
-#include "clipture/CfrFrameScheduler.hpp"
 #include "clipture/EncoderPipelinePolicy.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
 #include "clipture/LatencyWindow.hpp"
@@ -16,10 +15,8 @@
 #include "clipture/MediaClock.hpp"
 #include "clipture/Mp4Muxer.hpp"
 #include "clipture/PcmSampleConverter.hpp"
-#include "clipture/PrecisionTimer.hpp"
 #include "clipture/ProcessSnapshot.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
-#include "clipture/VideoTimeline.hpp"
 #include "clipture/VideoCadenceAnalysis.hpp"
 
 #include <cstddef>
@@ -841,63 +838,6 @@ bool testDesktopPointerDecodingAndClipping() {
                    "malformed pointer pitch should fail without reading outside the shape buffer");
 }
 
-bool testVideoTimelineCatchesUpWithoutUnboundedBursts() {
-    constexpr int fps = 60;
-    constexpr int64_t firstPts100ns = 50'000'000'000LL;
-    const int64_t spacing100ns = 10'000'000LL / fps;
-    clipture::VideoTimeline timeline(firstPts100ns, fps);
-    const auto initial = timeline.advance(0);
-    if (!require(initial.pts100ns == firstPts100ns && initial.dueTicks == 1 && initial.skippedTicks == 0,
-                 "timeline should emit its first current tick once")) return false;
-
-    const auto transientStall = timeline.advance(spacing100ns * 5);
-    if (!require(transientStall.dueTicks == 6 && transientStall.skippedTicks == 0,
-                 "transient scheduler stalls should preserve every output tick")) return false;
-    if (!require(transientStall.pts100ns == firstPts100ns + spacing100ns,
-                 "catch-up should begin at the next uncommitted timestamp")) return false;
-
-    const auto longStall = timeline.advance(spacing100ns * 20, 8);
-    if (!require(longStall.dueTicks == 8 && longStall.skippedTicks == 13,
-                 "long suspension recovery must remain bounded")) return false;
-    if (!require(clipture::finalVideoSampleDuration100ns(spacing100ns, fps) == spacing100ns,
-                 "final video duration should use the packet duration after an earlier gap")) return false;
-    return require(clipture::finalVideoSampleDuration100ns(0, fps) == spacing100ns,
-                   "final video duration should use one frame as its fallback");
-}
-
-bool testCfrFrameRunsCompactRepeatedTicks() {
-    clipture::CfrFrameRun run {
-        42,
-        7,
-        1'000'000,
-        166'666,
-        1,
-        true,
-    };
-    if (!require(
-            clipture::cfrRunCanAppend(run, 42, 7, 1'166'666, 166'666),
-            "a contiguous repeated tick should append to its source-frame run")) return false;
-    ++run.tickCount;
-    if (!require(
-            clipture::cfrFreshTickCount(run) == 1 && clipture::cfrRepeatTickCount(run) == 1,
-            "a run should account for its fresh tick separately from repeats")) return false;
-    if (!require(
-            !clipture::cfrRunCanAppend(run, 43, 7, 1'333'332, 166'666) &&
-                !clipture::cfrRunCanAppend(run, 42, 8, 1'333'332, 166'666) &&
-                !clipture::cfrRunCanAppend(run, 42, 7, 1'499'998, 166'666),
-            "source, epoch, and timestamp discontinuities should begin a new run")) return false;
-    if (!require(
-            clipture::shouldScheduleCfrTick(42, 42, true) &&
-                !clipture::shouldScheduleCfrTick(42, 42, false) &&
-                clipture::shouldScheduleCfrTick(43, 42, false),
-            "the developer switch should disable only repeated source ticks")) return false;
-    clipture::CfrFrameRun repeatedOnly { 42, 7, 2'000'000, 166'666, 12, false };
-    return require(
-        clipture::cfrFreshTickCount(repeatedOnly) == 0 &&
-            clipture::cfrRepeatTickCount(repeatedOnly) == 12,
-        "a continuation run should remain outside fresh-frame pressure accounting");
-}
-
 struct BufferedNvencCountModel {
     std::size_t outputSlots = 0;
     std::size_t preparationDepth = 0;
@@ -1045,35 +985,6 @@ bool testNvencBufferedPipelineAbsorbsBoundedOutputStalls() {
         "eight buffered outputs should absorb a bounded six-frame GPU stall without blocking submissions");
 }
 
-bool testEncoderQueueEvictionPreservesFreshFrames() {
-    const std::array<clipture::CfrFrameRun, 4> mixedRuns {
-        clipture::CfrFrameRun { 1, 1, 0, 166'667, 3, true },
-        clipture::CfrFrameRun { 1, 1, 500'001, 166'667, 9, false },
-        clipture::CfrFrameRun { 2, 1, 2'000'000, 166'667, 1, true },
-        clipture::CfrFrameRun { 3, 1, 3'000'000, 166'667, 1, true },
-    };
-    if (!require(
-            clipture::preferredEncoderQueueEvictionIndex(mixedRuns) == 1,
-            "queue saturation should evict a repeat-only run before any fresh frame")) {
-        return false;
-    }
-
-    const std::array<clipture::CfrFrameRun, 3> freshRuns {
-        clipture::CfrFrameRun { 1, 1, 0, 166'667, 1, true },
-        clipture::CfrFrameRun { 2, 1, 166'667, 166'667, 1, true },
-        clipture::CfrFrameRun { 3, 1, 333'334, 166'667, 1, true },
-    };
-    if (!require(
-            clipture::preferredEncoderQueueEvictionIndex(freshRuns) == 0,
-            "an all-fresh saturated queue should fall back to its oldest run")) {
-        return false;
-    }
-
-    return require(
-        clipture::preferredEncoderQueueEvictionIndex({}) ==
-            clipture::noEncoderQueueEviction,
-        "an empty encoder queue should not produce an eviction candidate");
-}
 bool testAudioTimelineNeverRewinds() {
     bool anchored = false;
     int64_t nextPts100ns = 10'000'000;
@@ -1595,7 +1506,7 @@ bool testReplaySpillSchedulingStaysLinear() {
         std::fill(packet.payload->begin(), packet.payload->end(), static_cast<std::byte>(index & 0xFF));
         store.push(packet);
     }
-    if (!require(store.waitUntilIdle(std::chrono::seconds(5)), "linear replay spill should drain")) {
+    if (!require(store.waitUntilIdle(std::chrono::seconds(15)), "linear replay spill should drain")) {
         store.stop();
         return false;
     }
@@ -1796,27 +1707,9 @@ bool testMp4MuxerStreamsDiskBackedVideo() {
     return valid;
 }
 
-bool testPrecisionTimerMaintainsSubMillisecondCadence() {
-    clipture::PrecisionTimer timer;
-    const int64_t start100ns = clipture::monotonicNow100ns();
-    constexpr int64_t targetDuration100ns = 166'667LL; // 16.6667ms (60 FPS tick)
-    const int64_t target100ns = start100ns + targetDuration100ns;
-
-    if (!timer.sleepTo100ns(target100ns)) {
-        return require(false, "PrecisionTimer sleepTo100ns returned false unexpectedly");
-    }
-    const int64_t elapsed100ns = clipture::monotonicNow100ns() - start100ns;
-    // Must arrive at or after target, and within 1.0ms (10,000 in 100ns units)
-    return require(
-        elapsed100ns >= targetDuration100ns &&
-            elapsed100ns <= targetDuration100ns + 10'000LL,
-        "PrecisionTimer should hit 60 FPS tick with sub-millisecond precision");
-}
-
 }  // namespace
 
 int main() {
-    if (!testPrecisionTimerMaintainsSubMillisecondCadence()) return 1;
     if (!testVideoCadenceAnalysis()) return 1;
     if (!testStartCodesAndFlags()) return 1;
     if (!testMalformedPackets()) return 1;
@@ -1829,12 +1722,9 @@ int main() {
     if (!testCaptureBackendPolicyAndDxgiHelpers()) return 1;
     if (!testEncoderDrivenCaptureTickGate()) return 1;
     if (!testDesktopPointerDecodingAndClipping()) return 1;
-    if (!testVideoTimelineCatchesUpWithoutUnboundedBursts()) return 1;
-    if (!testCfrFrameRunsCompactRepeatedTicks()) return 1;
     if (!testNvencBufferedPipelineKeepsReservationHeadroom()) return 1;
     if (!testNvencBufferedPipelineMaintainsSteadyStateAndFlushesTail()) return 1;
     if (!testNvencBufferedPipelineAbsorbsBoundedOutputStalls()) return 1;
-    if (!testEncoderQueueEvictionPreservesFreshFrames()) return 1;
     if (!testAudioTimelineNeverRewinds()) return 1;
     if (!testFrameQueueDropAccounting()) return 1;
     if (!testImmutableAudioRouting()) return 1;

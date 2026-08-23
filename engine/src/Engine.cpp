@@ -28,6 +28,7 @@
 #include <sstream>
 #include <regex>
 #include <cstdlib>
+#include <unordered_set>
 #include <vector>
 #include <thread>
 #include <atomic>
@@ -701,14 +702,21 @@ int actualClipDurationSeconds(const std::vector<EncodedPacket>& packets, int req
     return std::clamp(static_cast<int>((span + 5'000'000LL) / 10'000'000LL), 1, requestedDurationSeconds);
 }
 
-std::vector<EncodedPacket> selectVideoWindowForClip(std::vector<EncodedPacket> video, int durationSeconds) {
+std::vector<EncodedPacket> selectVideoWindowForClip(
+    std::vector<EncodedPacket> video,
+    int durationSeconds,
+    int64_t saveHorizon100ns) {
     std::erase_if(video, [](const EncodedPacket& packet) {
         return packet.kind != PacketKind::Video || payloadEmpty(packet);
     });
     if (video.empty()) return {};
 
     const int64_t newestPts = video.back().pts100ns;
-    const int64_t requestedStart = newestPts - (static_cast<int64_t>(durationSeconds) * 10'000'000LL);
+    const int64_t newestDuration = std::max<int64_t>(1, video.back().duration100ns);
+    const int64_t selectedEnd = std::max(saveHorizon100ns, newestPts + newestDuration);
+    const int64_t requestedStart = std::max<int64_t>(
+        0,
+        selectedEnd - static_cast<int64_t>(durationSeconds) * 10'000'000LL);
 
     std::size_t firstIndex = video.size();
     for (std::size_t i = 0; i < video.size(); ++i) {
@@ -717,7 +725,7 @@ std::vector<EncodedPacket> selectVideoWindowForClip(std::vector<EncodedPacket> v
             break;
         }
     }
-    if (firstIndex == video.size()) return {};
+    if (firstIndex == video.size()) firstIndex = video.size() - 1;
 
     for (std::size_t i = firstIndex + 1; i > 0; --i) {
         const std::size_t index = i - 1;
@@ -739,6 +747,9 @@ std::vector<EncodedPacket> selectVideoWindowForClip(std::vector<EncodedPacket> v
     if (!video[firstIndex].keyframe) firstIndex = 0;
 
     video.erase(video.begin(), video.begin() + static_cast<std::ptrdiff_t>(firstIndex));
+    video.back().duration100ns = std::max<int64_t>(
+        newestDuration,
+        selectedEnd - video.back().pts100ns);
     return video;
 }
 
@@ -746,7 +757,7 @@ std::vector<EncodedPacket> selectVideoWindowForClip(std::vector<EncodedPacket> v
 
 Engine::Engine()
     : diagnostics_(collectDiagnostics()),
-      frameQueue_(8),
+      frameQueue_(20),
       videoPackets_(5LL * 60LL * 10'000'000LL, 16u * 1024u * 1024u),
       audioPackets_(5LL * 60LL * 10'000'000LL, 4u * 1024u * 1024u),
       aacAudioPackets_(5LL * 60LL * 10'000'000LL, 4u * 1024u * 1024u),
@@ -760,7 +771,6 @@ Engine::Engine()
           pcmRecoveryStore_.get())),
       captureSession_(std::make_unique<CaptureSession>()),
       encoderWorker_(std::make_unique<EncoderWorker>(
-          captureTickGate_,
           frameQueue_,
           videoPackets_,
           videoReplayStore_.get())),
@@ -984,9 +994,19 @@ void Engine::gameDetectionLoop() {
             }
             
             if (settings_.captureGameAudio) {
+                static const std::unordered_set<std::string> kSystemExes = {
+                    "svchost.exe", "conhost.exe", "csrss.exe", "services.exe", "lsass.exe",
+                    "dwm.exe", "smss.exe", "taskhostw.exe", "runtimebroker.exe", "searchhost.exe",
+                    "audiodg.exe", "sihost.exe", "fontdrvhost.exe", "dllhost.exe", "ctfmon.exe",
+                    "shellexperiencehost.exe", "startmenuexperiencehost.exe", "textinputhost.exe",
+                    "systemsettings.exe", "securityhealthservice.exe", "smartscreen.exe",
+                    "explorer.exe", "searchindexer.exe", "wudfhost.exe"
+                };
+
                 for (const auto& entry : processSnapshot.entries()) {
                     const auto& exeName = entry.exeName;
-                    if (containsProcessName(settings_.appAudioProcesses, exeName) ||
+                    if (kSystemExes.contains(lowerAscii(exeName)) ||
+                        containsProcessName(settings_.appAudioProcesses, exeName) ||
                         containsProcessName(settings_.systemAudioProcesses, exeName) ||
                         std::any_of(gameCandidates.begin(), gameCandidates.end(), [&](const GameCaptureCandidate& candidate) {
                             return candidate.processId == entry.processId;
@@ -1186,7 +1206,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     const auto previousAppAudioProcesses = settings_.appAudioProcesses;
     const auto previousSystemAudioProcesses = settings_.systemAudioProcesses;
 
-    settings_.fps = std::clamp(settings.fps, 24, 60);
+    settings_.fps = std::clamp(settings.fps, 24, 240);
     settings_.bitrateMbps = std::clamp(settings.bitrateMbps, 4, 120);
     settings_.nvencPreset = std::clamp(settings.nvencPreset, 1, 5);
     settings_.clipLengthSeconds = std::clamp(settings.clipLengthSeconds, 5, 600);
@@ -1584,6 +1604,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
          saveStartCaptureGap100ns,
          saveStartCapturePublicationAge100ns,
          currentVideoDropCount,
+         previousDroppedFrames = saveStartDroppedFrames,
          previousPublishedFrames = saveStartCaptureStats.publishedFrames,
          previousDesktopPresents = saveStartCaptureStats.desktopPresents]() mutable {
             MuxPressureSample sample;
@@ -1603,37 +1624,25 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                 captureStats.desktopPresents > previousDesktopPresents;
             previousPublishedFrames = captureStats.publishedFrames;
             previousDesktopPresents = captureStats.desktopPresents;
-            sample.droppedFramesDelta = currentVideoDropCount() - saveStartDroppedFrames;
+            const int currentDroppedFrames = currentVideoDropCount();
+            const bool newFrameDrop = currentDroppedFrames > previousDroppedFrames;
+            previousDroppedFrames = currentDroppedFrames;
+            sample.droppedFramesDelta = currentDroppedFrames - saveStartDroppedFrames;
             const int64_t frameInterval100ns = 10'000'000LL / std::max(1, diagnostics_.fps);
-            const int frameQueueGrowth = std::max(
-                0,
-                static_cast<int>(sample.frameQueueDepth) - saveStartFrameQueueDepth);
-            const int encoderQueueGrowth = std::max(0, sample.encoderQueueDepth - saveStartEncoderQueueDepth);
-
-            const int64_t oldestAgeGrowth = std::max<int64_t>(
-                0,
-                sample.oldestFrameAge100ns - saveStartOldestFrameAge100ns);
-            const int64_t captureGapGrowth = std::max<int64_t>(
-                0,
-                sample.captureGap100ns - saveStartCaptureGap100ns);
-            const int64_t publicationAgeGrowth = std::max<int64_t>(
-                0,
-                sample.capturePublicationAge100ns - saveStartCapturePublicationAge100ns);
-            const bool captureCritical = captureWasActive && (
-                captureGapGrowth > frameInterval100ns * 4 ||
-                publicationAgeGrowth > frameInterval100ns * 4);
-            const bool captureElevated = captureWasActive && (
-                captureGapGrowth > frameInterval100ns * 2 ||
-                publicationAgeGrowth > frameInterval100ns * 2);
-            if (frameQueueGrowth >= 4 ||
-                oldestAgeGrowth > frameInterval100ns * 4 ||
-                encoderQueueGrowth >= 4 ||
-                captureCritical) {
+            const auto pressure = classifyCaptureWritePressure({
+                sample.frameQueueDepth,
+                sample.oldestFrameAge100ns,
+                sample.encoderQueueDepth,
+                sample.nvencInFlight,
+                sample.captureGap100ns,
+                sample.capturePublicationAge100ns,
+                frameInterval100ns,
+                captureWasActive,
+                newFrameDrop,
+            });
+            if (pressure == AdaptiveWritePressure::Critical) {
                 sample.level = MuxPressureLevel::Critical;
-            } else if (frameQueueGrowth >= 2 ||
-                       oldestAgeGrowth > frameInterval100ns * 2 ||
-                       encoderQueueGrowth >= 2 ||
-                       captureElevated) {
+            } else if (pressure == AdaptiveWritePressure::Elevated) {
                 sample.level = MuxPressureLevel::Elevated;
             }
             return sample;
@@ -1649,8 +1658,11 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             " encoderAccepted=" + std::to_string(saveStartEncoderAccepted) +
             " encoderEncoded=" + std::to_string(saveStartEncoderEncoded) +
             " frameQueueDepth=" + std::to_string(saveStartFrameQueueDepth) +
+            " oldestFrameAge100ns=" + std::to_string(saveStartOldestFrameAge100ns) +
             " encoderQueueDepth=" + std::to_string(saveStartEncoderQueueDepth) +
-            " nvencInFlight=" + std::to_string(saveStartNvencInFlight));
+            " nvencInFlight=" + std::to_string(saveStartNvencInFlight) +
+            " captureGap100ns=" + std::to_string(saveStartCaptureGap100ns) +
+            " capturePublicationAge100ns=" + std::to_string(saveStartCapturePublicationAge100ns));
 
     if (diagnostics_.activeEncoder != EncoderName::Nvenc) {
         result.message = "Cannot save clip: direct NVENC is not available, and this MVP requires NVENC first.";
@@ -1691,7 +1703,10 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             " ramFallbackBytes=" + std::to_string(videoArchiveStats.ramFallbackBytes));
 
     const auto videoSelectStartedAt = SaveTimingClock::now();
-    auto clipPackets = selectVideoWindowForClip(std::move(videoSnapshot), duration);
+    auto clipPackets = selectVideoWindowForClip(
+        std::move(videoSnapshot),
+        duration,
+        mediaNow100ns());
     logEngineSaveTiming("video_select", videoSelectStartedAt, "clipPackets=" + std::to_string(clipPackets.size()));
     if (clipPackets.empty()) {
         result.message = "No complete keyframe-starting H.264 window is buffered yet. Wait about one second and try again.";
@@ -1706,8 +1721,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         const auto videoTimelineStartedAt = SaveTimingClock::now();
         const int64_t targetFrameDuration100ns = 10'000'000LL / std::max(1, diagnostics_.fps);
         int64_t maxGap100ns = 0;
-        std::size_t gapEvents = 0;
-        uint64_t missingFrameSlots = 0;
+        std::size_t longVfrGaps = 0;
+        uint64_t unfilledTargetIntervals = 0;
         uint64_t uniqueSourceSequences = 0;
         uint64_t repeatedSourceTicks = 0;
         uint64_t previousSourceSequence = 0;
@@ -1727,8 +1742,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                 0,
                 (gap100ns + targetFrameDuration100ns / 2) / targetFrameDuration100ns - 1);
             if (missing > 0) {
-                ++gapEvents;
-                missingFrameSlots += static_cast<uint64_t>(missing);
+                ++longVfrGaps;
+                unfilledTargetIntervals += static_cast<uint64_t>(missing);
             }
         }
         const int64_t span100ns = std::max<int64_t>(
@@ -1756,8 +1771,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             "span100ns=" + std::to_string(span100ns) +
                 " targetFrame100ns=" + std::to_string(targetFrameDuration100ns) +
                 " maxGap100ns=" + std::to_string(maxGap100ns) +
-                " gapEvents=" + std::to_string(gapEvents) +
-                " missingFrameSlots=" + std::to_string(missingFrameSlots) +
+                " longVfrGaps=" + std::to_string(longVfrGaps) +
+                " unfilledTargetIntervals=" + std::to_string(unfilledTargetIntervals) +
                 " expectedOutputTicks=" + std::to_string(expectedOutputTicks) +
                 " encodedPackets=" + std::to_string(clipPackets.size()) +
                 " uniqueSourceSequences=" + std::to_string(uniqueSourceSequences) +
@@ -1852,16 +1867,25 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     savePacing.presentationStartPts100ns = requestedClipStart;
     savePacing.presentationEndPts100ns = clipEnd;
     const auto audioSelectStartedAt = SaveTimingClock::now();
-    const bool liveAudioCaughtUp = audioReplayCoordinator_ &&
-        audioReplayCoordinator_->waitUntil(clipEnd, std::chrono::milliseconds(25));
     constexpr int64_t kAudioFrameLookbehind100ns = 2'000'000LL;
     const int64_t audioSelectionStart = std::max<int64_t>(0, clipStart - kAudioFrameLookbehind100ns);
+    const int64_t liveAudioTarget100ns = std::max<int64_t>(
+        audioSelectionStart,
+        clipEnd - kAudioFrameLookbehind100ns);
+    const bool liveAudioCaughtUp = audioReplayCoordinator_ &&
+        audioReplayCoordinator_->waitUntil(liveAudioTarget100ns, std::chrono::milliseconds(25));
     auto encodedAudioPackets = aacReplayStore_
         ? aacReplayStore_->selectWindow(audioSelectionStart, clipEnd)
         : aacAudioPackets_.selectWindow(audioSelectionStart, clipEnd);
+    const auto replayStats = audioReplayCoordinator_ ? audioReplayCoordinator_->stats() : AudioReplayStats {};
+    const bool boundedPcmTail = liveAudioCaughtUp &&
+        !replayStats.pcmRecoveryActive && replayStats.committedPts100ns > 0;
+    const int64_t pcmSelectionStart = boundedPcmTail
+        ? std::max(audioSelectionStart, replayStats.committedPts100ns - kAudioFrameLookbehind100ns)
+        : audioSelectionStart;
     auto capturedAudioPackets = audioReplayCoordinator_
-        ? audioReplayCoordinator_->selectPcmWindow(audioSelectionStart, clipEnd)
-        : audioPackets_.selectWindow(audioSelectionStart, clipEnd);
+        ? audioReplayCoordinator_->selectPcmWindow(pcmSelectionStart, clipEnd)
+        : audioPackets_.selectWindow(pcmSelectionStart, clipEnd);
     const auto diskBackedAudioPackets = std::count_if(
         encodedAudioPackets.begin(),
         encodedAudioPackets.end(),
@@ -1870,7 +1894,6 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         capturedAudioPackets.begin(),
         capturedAudioPackets.end(),
         [](const EncodedPacket& packet) { return !packet.payload && packet.payloadReader; });
-    const auto replayStats = audioReplayCoordinator_ ? audioReplayCoordinator_->stats() : AudioReplayStats {};
     logEngineSaveTiming(
         "audio_select",
         audioSelectStartedAt,
@@ -1879,6 +1902,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             " pcmFallbackPackets=" + std::to_string(capturedAudioPackets.size()) +
             " diskBackedPcm=" + std::to_string(diskBackedPcmPackets) +
             " liveCaughtUp=" + std::string(liveAudioCaughtUp ? "true" : "false") +
+            " pcmTailOnly=" + std::string(boundedPcmTail ? "true" : "false") +
+            " pcmSelectionStart100ns=" + std::to_string(pcmSelectionStart) +
             " queue=" + std::to_string(replayStats.queuedPackets) +
             " queueHighWatermark=" + std::to_string(replayStats.queueHighWatermark) +
             " queueOverflows=" + std::to_string(replayStats.queueOverflows) +
@@ -2206,7 +2231,6 @@ void Engine::arm() {
             maxEncodeHeight,
             settings_.nvencPreset);
     }
-    captureSession_->setTargetFps(settings_.fps);
     const bool captureStarted = captureSession_->startMonitor(&frameQueue_, &captureTickGate_, settings_.monitorId);
     diagnostics_.captureReady = captureStarted;
     if (captureStarted) {
@@ -2232,7 +2256,6 @@ void Engine::refreshPacketCounts() {
         if (currentTime100ns >= nextCaptureRestart100ns_) {
             nextCaptureRestart100ns_ = currentTime100ns + 2LL * 10'000'000LL;
             if (encoderWorker_) encoderWorker_->requireFreshFrame();
-            captureSession_->setTargetFps(settings_.fps);
             const bool restarted = captureSession_->startMonitor(&frameQueue_, &captureTickGate_, settings_.monitorId);
             diagnostics_.captureReady = restarted;
             if (restarted) {
@@ -2361,6 +2384,14 @@ void Engine::refreshPacketCounts() {
     diagnostics_.captureClockTickCompletions = captureStats.clockTickCompletions;
     diagnostics_.captureClockTickCompletionWaits = captureStats.clockTickCompletionWaits;
     diagnostics_.captureClockTickCompletionTimeouts = captureStats.clockTickCompletionTimeouts;
+    diagnostics_.presentLatchWaits = encoderWorker_ ? encoderWorker_->presentLatchWaits() : 0;
+    diagnostics_.presentLatchHits = encoderWorker_ ? encoderWorker_->presentLatchHits() : 0;
+    diagnostics_.presentLatchTimeouts = encoderWorker_ ? encoderWorker_->presentLatchTimeouts() : 0;
+    diagnostics_.catchUpEvents = encoderWorker_ ? encoderWorker_->catchUpEvents() : 0;
+    diagnostics_.historicalFramesRecovered = encoderWorker_
+        ? encoderWorker_->historicalFramesRecovered()
+        : 0;
+    diagnostics_.catchUpRepeatedTicks = encoderWorker_ ? encoderWorker_->catchUpRepeatedTicks() : 0;
     diagnostics_.desktopPresentFps = captureStats.desktopPresentFps;
     diagnostics_.publishedFreshFps = captureStats.publishedFreshFps;
     diagnostics_.recentPublishedFreshFps = captureStats.recentPublishedFreshFps;
@@ -2388,6 +2419,7 @@ void Engine::refreshPacketCounts() {
     };
     diagnostics_.captureOverflowDrops = boundedCounter(queueStats.overflowDrops);
     diagnostics_.captureCoalescedDrops = boundedCounter(queueStats.coalescedDrops);
+    diagnostics_.frameQueueMaxDepth = queueStats.maximumDepth;
     diagnostics_.sourceFramesSuperseded = captureSession_
         ? boundedCounter(captureSession_->sourceFramesSuperseded())
         : 0;
@@ -2409,12 +2441,25 @@ void Engine::refreshPacketCounts() {
     diagnostics_.encoderUnknownSourceFrames = encoderWorker_
         ? encoderWorker_->unknownSourceOutputFrames()
         : 0;
+    diagnostics_.motionFramesTotal = encoderWorker_
+        ? encoderWorker_->motionFramesTotal()
+        : 0;
+    diagnostics_.motionFramesRepeated = encoderWorker_
+        ? encoderWorker_->motionFramesRepeated()
+        : 0;
     diagnostics_.encodedRepeatRatio = diagnostics_.encoderOutputPackets > 0
         ? static_cast<double>(diagnostics_.encoderRepeatedSourceFrames) /
             static_cast<double>(diagnostics_.encoderOutputPackets)
         : 0.0;
+    diagnostics_.encodedMotionRepeatRatioPercent = diagnostics_.motionFramesTotal > 0
+        ? (static_cast<double>(diagnostics_.motionFramesRepeated) * 100.0) /
+            static_cast<double>(diagnostics_.motionFramesTotal)
+        : 0.0;
     diagnostics_.encoderQueueDrops = encoderWorker_ ? encoderWorker_->encoderQueueDrops() : 0;
     diagnostics_.encoderRepeatCoalesced = encoderWorker_ ? encoderWorker_->encoderRepeatCoalesced() : 0;
+    diagnostics_.encoderAdmissionRejections = encoderWorker_
+        ? encoderWorker_->encoderAdmissionRejections()
+        : 0;
     diagnostics_.encoderQueuedFreshFrames = encoderWorker_ ? encoderWorker_->queuedFreshEncodeFrames() : 0;
     diagnostics_.encoderQueuedRepeatFrames = encoderWorker_ ? encoderWorker_->queuedRepeatEncodeFrames() : 0;
     diagnostics_.nvencSurfaceDrops = encoderWorker_ ? encoderWorker_->nvencSurfaceDrops() : 0;
@@ -2438,6 +2483,12 @@ void Engine::refreshPacketCounts() {
     diagnostics_.recentEncoderDistinctSourceFps = encoderRecent.distinctSourceOutputFps;
     diagnostics_.recentEncoderRepeatedSourceFrames = encoderRecent.repeatedSourceOutputFrames;
     diagnostics_.recentEncoderUnknownSourceFrames = encoderRecent.unknownSourceOutputFrames;
+    diagnostics_.recentMotionFramesTotal = encoderRecent.motionFramesTotal;
+    diagnostics_.recentMotionFramesRepeated = encoderRecent.motionFramesRepeated;
+    diagnostics_.recentMotionRepeatRatioPercent = encoderRecent.motionFramesTotal > 0
+        ? (static_cast<double>(encoderRecent.motionFramesRepeated) * 100.0) /
+            static_cast<double>(encoderRecent.motionFramesTotal)
+        : 0.0;
     diagnostics_.recentSchedulerWakeLatenessP50_100ns = encoderRecent.schedulerWakeLateness.p50_100ns;
     diagnostics_.recentSchedulerWakeLatenessP95_100ns = encoderRecent.schedulerWakeLateness.p95_100ns;
     diagnostics_.recentSchedulerWakeLatenessMaximum100ns = encoderRecent.schedulerWakeLateness.maximum100ns;

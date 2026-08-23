@@ -326,6 +326,7 @@ struct ReplaySegmentStore::Impl {
             queuedBytes = 0;
             queuedResidentBytes = 0;
             nextSpillCandidate = 0;
+            newestPts100ns = std::numeric_limits<int64_t>::min();
         }
         wake.notify_all();
         idle.notify_all();
@@ -369,6 +370,7 @@ struct ReplaySegmentStore::Impl {
         {
             std::lock_guard lock(mutex);
             entries.push_back(entry);
+            newestPts100ns = std::max(newestPts100ns, packet.pts100ns);
             if (packet.payload) {
                 residentPayloadBytes += bytes;
                 ++residentPackets;
@@ -415,6 +417,7 @@ struct ReplaySegmentStore::Impl {
         residentPackets = 0;
         diskBackedPackets = 0;
         nextSpillCandidate = 0;
+        newestPts100ns = std::numeric_limits<int64_t>::min();
         rotationRequested.store(true, std::memory_order_relaxed);
         wake.notify_one();
         idle.notify_all();
@@ -462,13 +465,10 @@ struct ReplaySegmentStore::Impl {
 
     void trimLocked() {
         if (entries.empty()) return;
-        const int64_t newestPts100ns = entries.back()->packet.pts100ns;
         const int64_t oldestAllowed100ns = newestPts100ns - options.retention100ns;
-        while (!entries.empty() && entries.front()->packet.pts100ns < oldestAllowed100ns) {
-            auto entry = std::move(entries.front());
-            entries.pop_front();
-            if (nextSpillCandidate > 0) --nextSpillCandidate;
-            entry->retired = true;
+
+        auto retireEntry = [&](const std::shared_ptr<Entry>& entry) {
+            if (entry->retired.exchange(true, std::memory_order_relaxed)) return;
             if (entry->packet.payload) {
                 residentPayloadBytes -= std::min<uint64_t>(
                     residentPayloadBytes,
@@ -489,10 +489,46 @@ struct ReplaySegmentStore::Impl {
                 if (queuedPackets > 0) --queuedPackets;
                 entry->persistenceQueued = false;
             }
+        };
+
+        if (!options.alignSegmentsToKeyframes) {
+            // Audio tracks can arrive slightly out of timestamp order. Remove
+            // every expired packet instead of assuming a globally sorted deque.
+            const std::size_t previousSpillCandidate = nextSpillCandidate;
+            std::size_t originalIndex = 0;
+            std::size_t removedBeforeSpillCandidate = 0;
+            for (auto entry = entries.begin(); entry != entries.end();) {
+                if ((*entry)->packet.pts100ns < oldestAllowed100ns) {
+                    if (originalIndex < previousSpillCandidate) ++removedBeforeSpillCandidate;
+                    retireEntry(*entry);
+                    entry = entries.erase(entry);
+                } else {
+                    ++entry;
+                }
+                ++originalIndex;
+            }
+            nextSpillCandidate -= std::min(nextSpillCandidate, removedBeforeSpillCandidate);
+            if (pending.empty()) idle.notify_all();
+            return;
+        }
+
+        // Keep the latest decoder keyframe at or before the boundary. The mux
+        // edit list hides this bounded preroll from the visible clip.
+        std::size_t removeCount = 0;
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const auto& packet = entries[index]->packet;
+            if (packet.pts100ns > oldestAllowed100ns) break;
+            if (packet.kind == PacketKind::Video && packet.keyframe) removeCount = index;
+        }
+        while (removeCount > 0 && !entries.empty()) {
+            --removeCount;
+            auto entry = std::move(entries.front());
+            entries.pop_front();
+            if (nextSpillCandidate > 0) --nextSpillCandidate;
+            retireEntry(entry);
         }
         if (pending.empty()) idle.notify_all();
     }
-
     void scheduleSpillsLocked() {
         uint64_t projectedResidentBytes = residentPayloadBytes -
             std::min(residentPayloadBytes, queuedResidentBytes);
@@ -748,6 +784,7 @@ struct ReplaySegmentStore::Impl {
     std::size_t residentPackets = 0;
     std::size_t diskBackedPackets = 0;
     std::size_t nextSpillCandidate = 0;
+    int64_t newestPts100ns = std::numeric_limits<int64_t>::min();
     uint64_t persistedPackets = 0;
     uint64_t spillCandidateInspections = 0;
     uint64_t writeFailures = 0;

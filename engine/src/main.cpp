@@ -146,12 +146,12 @@ public:
     SavePriorityGuard()
         : thread_(GetCurrentThread()),
           previousPriority_(GetThreadPriority(thread_)) {
-        belowNormalSet_ = SetThreadPriority(thread_, THREAD_PRIORITY_BELOW_NORMAL) != 0;
+        belowNormalPrioritySet_ = SetThreadPriority(thread_, THREAD_PRIORITY_BELOW_NORMAL) != 0;
         std::cerr << "[save-timing] source=engine stage=save_priority"
                   << " previousPriority=" << previousPriority_
                   << " backgroundBegin=false"
                   << " adaptiveBackground=true"
-                  << " belowNormal=" << (belowNormalSet_ ? "true" : "false")
+                  << " belowNormal=" << (belowNormalPrioritySet_ ? "true" : "false")
                   << std::endl;
     }
 
@@ -172,7 +172,7 @@ public:
 private:
     HANDLE thread_ = nullptr;
     int previousPriority_ = THREAD_PRIORITY_ERROR_RETURN;
-    bool belowNormalSet_ = false;
+    bool belowNormalPrioritySet_ = false;
 };
 
 }  // namespace

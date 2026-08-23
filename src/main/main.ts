@@ -1,4 +1,8 @@
 import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, dialog, screen } from "electron";
+
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
+app.commandLine.appendSwitch("enable-gpu-rasterization");
+app.commandLine.appendSwitch("enable-zero-copy");
 import type { OpenDialogOptions } from "electron";
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
@@ -316,6 +320,8 @@ class EngineClient {
     status: "Native hotkey listener has not started."
   };
   private frameDropRecorder = new FrameDropDiagnosticsRecorder();
+  private motionTraceStream: ReturnType<typeof createWriteStream> | undefined;
+  private motionTraceBackpressured = false;
   private lastDiagnostics: EngineDiagnostics = {
     captureApi: "Windows.Graphics.Capture",
     requestedCaptureBackend: "auto",
@@ -349,6 +355,12 @@ class EngineClient {
     captureClockTickCompletions: 0,
     captureClockTickCompletionWaits: 0,
     captureClockTickCompletionTimeouts: 0,
+    presentLatchWaits: 0,
+    presentLatchHits: 0,
+    presentLatchTimeouts: 0,
+    catchUpEvents: 0,
+    historicalFramesRecovered: 0,
+    catchUpRepeatedTicks: 0,
     desktopPresentFps: 0,
     publishedFreshFps: 0,
     recentPublishedFreshFps: 0,
@@ -356,6 +368,12 @@ class EngineClient {
     recentEncoderOutputFps: 0,
     recentEncoderDistinctSourceFps: 0,
     encodedRepeatRatio: 0,
+    encodedMotionRepeatRatioPercent: 0,
+    recentMotionRepeatRatioPercent: 0,
+    motionFramesTotal: 0,
+    motionFramesRepeated: 0,
+    recentMotionFramesTotal: 0,
+    recentMotionFramesRepeated: 0,
     stillFrameDuplicationEnabled: false,
     encoderDistinctSourceFrames: 0,
     encoderRepeatedSourceFrames: 0,
@@ -380,6 +398,7 @@ class EngineClient {
     droppedFrames: 0,
     captureOverflowDrops: 0,
     captureCoalescedDrops: 0,
+    frameQueueMaxDepth: 0,
     sourceFramesSuperseded: 0,
     captureSlotDrops: 0,
     captureCallbackErrors: 0,
@@ -387,6 +406,7 @@ class EngineClient {
     schedulerRepeatedFrames: 0,
     encoderQueueDrops: 0,
     encoderRepeatCoalesced: 0,
+    encoderAdmissionRejections: 0,
     encoderQueuedFreshFrames: 0,
     encoderQueuedRepeatFrames: 0,
     nvencSurfaceDrops: 0,
@@ -411,6 +431,10 @@ class EngineClient {
     recentSchedulerRepeatedFrames: 0,
     recentEncoderQueueDrops: 0,
     recentEncoderRepeatCoalesced: 0,
+    recentCatchUpEvents: 0,
+    recentHistoricalFramesRecovered: 0,
+    recentCatchUpRepeatedTicks: 0,
+    recentEncoderAdmissionRejections: 0,
     recentNvencSurfaceDrops: 0,
     recentNvencInputDrops: 0,
     recentDropDominantReason: "none",
@@ -565,6 +589,9 @@ class EngineClient {
   stop(): void {
     this.child?.kill();
     this.child = undefined;
+    this.motionTraceStream?.end();
+    this.motionTraceStream = undefined;
+    this.motionTraceBackpressured = false;
   }
 
   async diagnostics(): Promise<EngineDiagnostics> {
@@ -585,10 +612,83 @@ class EngineClient {
       const diagnostics = this.frameDropRecorder.observe(await this.request<EngineDiagnostics>("getDiagnostics", {}));
       this.lastDiagnostics = diagnostics;
       updateCapturePressure(diagnostics.capturePressure);
+      if (diagnostics.recentMotionFramesRepeated > 0 ||
+          diagnostics.recentMotionRepeatRatioPercent > 0 ||
+          diagnostics.recentCatchUpEvents > 0 ||
+          diagnostics.recentEncoderAdmissionRejections > 0) {
+        this.logMotionRepeatEvent(diagnostics);
+      }
       return diagnostics;
     } catch (error) {
       // The engine might be blocked (e.g. saving a clip), so just return the last known state instead of throwing.
       return this.lastDiagnostics;
+    }
+  }
+
+  private logMotionRepeatEvent(diagnostics: EngineDiagnostics): void {
+    try {
+      const logLine = JSON.stringify({
+        timestamp: new Date().toISOString(),
+        recentMotionRepeatRatioPercent: diagnostics.recentMotionRepeatRatioPercent,
+        recentMotionFramesRepeated: diagnostics.recentMotionFramesRepeated,
+        recentMotionFramesTotal: diagnostics.recentMotionFramesTotal,
+        fpsRates: {
+          freshPublishedFps: diagnostics.recentPublishedFreshFps,
+          encoderInputFps: diagnostics.recentEncoderInputFps,
+          encoderOutputFps: diagnostics.recentEncoderOutputFps,
+          distinctSourceFps: diagnostics.recentEncoderDistinctSourceFps,
+        },
+        sourceIntervalMs: {
+          p50: ((diagnostics.recentCaptureSourceIntervalP50_100ns ?? 0) / 10_000).toFixed(2),
+          p95: ((diagnostics.recentCaptureSourceIntervalP95_100ns ?? 0) / 10_000).toFixed(2),
+          max: ((diagnostics.recentCaptureSourceIntervalMaximum100ns ?? 0) / 10_000).toFixed(2),
+        },
+        schedulerWakeLatenessMs: {
+          p50: ((diagnostics.recentSchedulerWakeLatenessP50_100ns ?? 0) / 10_000).toFixed(2),
+          p95: ((diagnostics.recentSchedulerWakeLatenessP95_100ns ?? 0) / 10_000).toFixed(2),
+          max: ((diagnostics.recentSchedulerWakeLatenessMaximum100ns ?? 0) / 10_000).toFixed(2),
+        },
+        catchUp: {
+          recentEvents: diagnostics.recentCatchUpEvents,
+          recentHistoricalFramesRecovered: diagnostics.recentHistoricalFramesRecovered,
+          recentRepeatedTicks: diagnostics.recentCatchUpRepeatedTicks,
+          cumulativeEvents: diagnostics.catchUpEvents,
+          cumulativeHistoricalFramesRecovered: diagnostics.historicalFramesRecovered,
+          cumulativeRepeatedTicks: diagnostics.catchUpRepeatedTicks,
+          frameQueueMaxDepth: diagnostics.frameQueueMaxDepth,
+        },
+        encoderAdmissionRejections: {
+          recent: diagnostics.recentEncoderAdmissionRejections,
+          cumulative: diagnostics.encoderAdmissionRejections,
+        },
+        nvencCallLatencyMs: {
+          avg: ((diagnostics.averageNvencCallLatency100ns ?? 0) / 10_000).toFixed(2),
+          max: ((diagnostics.maximumNvencCallLatency100ns ?? 0) / 10_000).toFixed(2),
+        },
+        bottleneck: diagnostics.recentVisualFreshnessBottleneck,
+        dominantDropReason: diagnostics.recentDropDominantReason,
+        captureBackend: diagnostics.activeCaptureBackend,
+        clockMode: diagnostics.captureClockMode
+      });
+      if (!this.motionTraceStream || this.motionTraceStream.destroyed) {
+        const stream = createWriteStream(appDataPath("motion-trace.log"), { flags: "a", encoding: "utf8" });
+        stream.on("error", () => {
+          if (this.motionTraceStream === stream) {
+            this.motionTraceStream = undefined;
+            this.motionTraceBackpressured = false;
+          }
+        });
+        stream.on("drain", () => {
+          if (this.motionTraceStream === stream) this.motionTraceBackpressured = false;
+        });
+        this.motionTraceStream = stream;
+      }
+      if (!this.motionTraceBackpressured) {
+        this.motionTraceBackpressured = !this.motionTraceStream.write(
+          logLine + String.fromCharCode(10)
+        );
+      }    } catch {
+      // Ignore logging errors
     }
   }
 
@@ -3372,7 +3472,8 @@ async function createWindow(): Promise<void> {
     webPreferences: {
       preload: join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false
     }
   });
 
