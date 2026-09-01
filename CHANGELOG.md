@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.2] - 2026-09-01
+
+### Black Screen Capture Fix & Audio Buzz Elimination
+
+- **WGC HDR Tonemapping & Safe Subresource Region Copying:** Restored safe `CopySubresourceRegion` texture bounds handling and tonemapper processing for Windows Graphics Capture (WGC), eliminating black screen captures when recording HDR displays or window surfaces with dimensional padding and borders.
+- **DXGI Output Format Hardening:** Updated DXGI Desktop Duplication format validation to support SDR `DXGI_FORMAT_B8G8R8A8_UNORM` even on HDR-enabled displays, and dynamically detected capture formats to avoid false capture failures.
+- **Capture Frame Lifecycle & COM Pointer Isolation:** Scoped captured frame handles and presentation timestamps strictly to the execution lifecycle of `EncoderWorker::run()`, preventing stale texture pointers from previous capture sessions from leaking into new recordings.
+- **Continuous Audio Loopback Silence Filling:** Restored continuous silent packet generation during periods of silence in WASAPI loopback capture (both system and game process loopback). This preserves a strictly continuous, monotonic audio PTS timeline, completely eliminating the timestamp stalls that previously forced the live AAC encoder to restart with audible buzzing, clicking, and crackling artifacts.
+
 ## [1.4.1] - 2026-08-23
 
 ### Asymmetric Cadence Smoothing & Rock-Solid 60 FPS Pacing

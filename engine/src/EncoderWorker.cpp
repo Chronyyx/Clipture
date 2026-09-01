@@ -2807,6 +2807,8 @@ void EncoderWorker::run() {
     int64_t frameSpacing100ns = 10'000'000LL / activeFps;
     auto interval = std::chrono::nanoseconds(frameSpacing100ns * 100);
     auto nextWake = std::chrono::steady_clock::now() + interval;
+    std::optional<CapturedFrame> heldFrame;
+    int64_t nextFramePts100ns = 0;
 
     while (running_.load(std::memory_order_relaxed)) {
         const auto now = std::chrono::steady_clock::now();
@@ -2832,8 +2834,6 @@ void EncoderWorker::run() {
         }
 
         if constexpr (kEnableFrameDuplication) {
-            static std::optional<CapturedFrame> heldFrame;
-            static int64_t nextFramePts100ns = 0;
             if (auto newest = frames_.consumeAllAndGetLatest()) {
                 heldFrame = std::move(newest);
             }

@@ -21,9 +21,9 @@ inline bool captureTimestampIsStrictlyNew(int64_t previousTimestamp100ns, int64_
 }
 
 inline bool dxgiCaptureFormatSupported(DXGI_FORMAT format, bool hdrEnabled) {
-    return hdrEnabled
-        ? format == DXGI_FORMAT_R16G16B16A16_FLOAT
-        : format == DXGI_FORMAT_B8G8R8A8_UNORM;
+    if (format == DXGI_FORMAT_B8G8R8A8_UNORM) return true;
+    if (hdrEnabled && format == DXGI_FORMAT_R16G16B16A16_FLOAT) return true;
+    return false;
 }
 
 }  // namespace clipture

@@ -497,6 +497,12 @@ int16_t processingSampleToS16(float value) {
         32767));
 }
 
+void fillSilentS16(UINT32 frames, int channels, PacketPayload& output) {
+    const std::size_t outputSamples = static_cast<std::size_t>(frames) * static_cast<std::size_t>(std::max(1, channels));
+    output.resize(outputSamples * sizeof(int16_t));
+    std::fill(output.begin(), output.end(), std::byte { 0 });
+}
+
 
 WAVEFORMATEX* getDefaultRenderMixFormat() {
     Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
@@ -1158,6 +1164,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
     status_ = "WASAPI system and microphone capture are running.";
     int64_t nextPts100ns = now100ns();
     bool audioClockAnchored = false;
+    const int outputChannelsForSilence = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
 
     float currentGateGain = 1.0f;
     int gateHoldFrames = 0;
@@ -1166,6 +1173,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
         if (!waitForWasapiCapture(captureEvent.get(), loopback ? 10 : 50)) break;
         UINT32 packetFrames = 0;
         if (FAILED(captureClient->GetNextPacketSize(&packetFrames))) break;
+        bool capturedPacket = false;
         while (packetFrames > 0) {
             BYTE* data = nullptr;
             UINT32 frames = 0;
@@ -1288,6 +1296,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
                     
                     nextPts100ns += packet.duration100ns;
                     ++packetsCaptured_;
+                    capturedPacket = true;
                 }
                 maybeLogRnnoiseQueueDepth(sourceId, rnnoiseQueue, rnnoiseFrameSize, lastRnnoiseQueueLog);
                 
@@ -1315,13 +1324,36 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
             publishPacket(std::move(packet));
             nextPts100ns += packet.duration100ns;
             ++packetsCaptured_;
+            capturedPacket = true;
 
             captureClient->ReleaseBuffer(frames);
             if (FAILED(captureClient->GetNextPacketSize(&packetFrames))) {
                 packetFrames = 0;
             }
         }
-
+        if (!capturedPacket) {
+            const int64_t wallNow = now100ns();
+            int fills = 0;
+            while (running_ && nextPts100ns <= wallNow && fills < 5) {
+                const UINT32 frames = std::max<UINT32>(1, mixFormat->nSamplesPerSec / 100);
+                EncodedPacket packet;
+                packet.kind = PacketKind::Audio;
+                packet.pts100ns = nextPts100ns;
+                packet.dts100ns = packet.pts100ns;
+                packet.duration100ns = static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
+                packet.sourceId = sourceId;
+                packet.encoderId = "PCM_S16";
+                packet.sampleRate = static_cast<int>(mixFormat->nSamplesPerSec);
+                packet.channelCount = outputChannelsForSilence;
+                packet.bitsPerSample = 16;
+                packet.payload = packets_.acquirePayload(static_cast<std::size_t>(frames) * outputChannelsForSilence * sizeof(int16_t));
+                fillSilentS16(frames, outputChannelsForSilence, mutablePayload(packet));
+                publishPacket(std::move(packet));
+                nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
+                ++packetsCaptured_;
+                ++fills;
+            }
+        }
     }
 
     audioClient->Stop();
@@ -1506,6 +1538,8 @@ void AudioCaptureWorker::runProcessLoopbackCaptureSession(
     int64_t nextPts100ns = now100ns();
     bool audioClockAnchored = false;
 
+    const int outputChannelsForSilence = std::min<int>(2, std::max<int>(1, mixFormat->nChannels));
+
     std::cerr << "[audio] Process loopback capture RUNNING for " << captureName
               << " (PID " << processId << ", " << mixFormat->nSamplesPerSec << " Hz, "
               << mixFormat->nChannels << " ch)" << std::endl;
@@ -1525,6 +1559,7 @@ void AudioCaptureWorker::runProcessLoopbackCaptureSession(
 
         UINT32 packetFrames = 0;
         if (FAILED(captureClient->GetNextPacketSize(&packetFrames))) break;
+        bool capturedPacket = false;
         while (packetFrames > 0) {
             BYTE* data = nullptr;
             UINT32 frames = 0;
@@ -1561,11 +1596,34 @@ void AudioCaptureWorker::runProcessLoopbackCaptureSession(
             publishPacket(std::move(packet));
             nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
             ++packetsCaptured_;
+            capturedPacket = true;
 
             captureClient->ReleaseBuffer(frames);
             if (FAILED(captureClient->GetNextPacketSize(&packetFrames))) packetFrames = 0;
         }
-
+        if (!capturedPacket) {
+            const int64_t wallNow = now100ns();
+            int fills = 0;
+            while (running_ && !stopRequested->load() && nextPts100ns <= wallNow && fills < 5) {
+                const UINT32 frames = std::max<UINT32>(1, mixFormat->nSamplesPerSec / 100);
+                EncodedPacket packet;
+                packet.kind = PacketKind::Audio;
+                packet.pts100ns = nextPts100ns;
+                packet.dts100ns = packet.pts100ns;
+                packet.duration100ns = static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
+                packet.sourceId = sourceId;
+                packet.encoderId = "PCM_S16";
+                packet.sampleRate = static_cast<int>(mixFormat->nSamplesPerSec);
+                packet.channelCount = outputChannelsForSilence;
+                packet.bitsPerSample = 16;
+                packet.payload = packets_.acquirePayload(static_cast<std::size_t>(frames) * outputChannelsForSilence * sizeof(int16_t));
+                fillSilentS16(frames, outputChannelsForSilence, mutablePayload(packet));
+                publishPacket(std::move(packet));
+                nextPts100ns += static_cast<int64_t>((10'000'000.0 * frames) / mixFormat->nSamplesPerSec);
+                ++packetsCaptured_;
+                ++fills;
+            }
+        }
     }
 
     audioClient->Stop();

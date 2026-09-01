@@ -204,6 +204,7 @@ BackendStartResult DesktopDuplicationBackend::Impl::initialize() {
                 " format " + std::to_string(static_cast<unsigned>(captureFormat)) + ".",
         };
     }
+    hdrCapture = (captureFormat == DXGI_FORMAT_R16G16B16A16_FLOAT);
     width = duplicationDesc.ModeDesc.Width;
     height = duplicationDesc.ModeDesc.Height;
     if (width == 0 || height == 0) {

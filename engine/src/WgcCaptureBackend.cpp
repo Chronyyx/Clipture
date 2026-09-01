@@ -152,6 +152,17 @@ BackendStartResult WgcCaptureBackend::start() {
 
         DirectXPixelFormat pixelFormat = DirectXPixelFormat::B8G8R8A8UIntNormalized;
         state.shared->hdrTonemappingActive.store(false, std::memory_order_relaxed);
+        if (state.output.hdrEnabled) {
+            float sdrWhiteLevel = monitorSdrWhiteLevel(state.output.desc.Monitor);
+            state.tonemapper = std::make_unique<Tonemapper>(state.d3dDevice);
+            std::string tonemapperError;
+            if (state.tonemapper->Initialize(tonemapperError, sdrWhiteLevel)) {
+                pixelFormat = DirectXPixelFormat::R16G16B16A16Float;
+                state.shared->hdrTonemappingActive.store(true, std::memory_order_relaxed);
+            } else {
+                state.tonemapper.reset();
+            }
+        }
 
         state.framePoolPixelFormat = pixelFormat;
         state.framePoolSize = state.item.Size();
@@ -238,7 +249,34 @@ BackendStartResult WgcCaptureBackend::start() {
                     }
 
                     const int64_t framePreparationStarted100ns = monotonicNow100ns();
-                    callbackState.d3dContext->CopyResource(owned.texture.Get(), sourceTexture.Get());
+                    D3D11_BOX sourceBox {
+                        0,
+                        0,
+                        0,
+                        static_cast<UINT>(std::min<int>(size.Width, static_cast<int>(sourceDesc.Width))),
+                        static_cast<UINT>(std::min<int>(size.Height, static_cast<int>(sourceDesc.Height))),
+                        1,
+                    };
+                    if (needsTonemapping) {
+                        if (owned.hdrInputTexture) {
+                            callbackState.d3dContext->CopySubresourceRegion(
+                                owned.hdrInputTexture.Get(), 0, 0, 0, 0, sourceTexture.Get(), 0, &sourceBox);
+                            std::string error;
+                            if (!callbackState.tonemapper->Process(owned.hdrInputTexture, owned.texture, error)) {
+                                ++callbackState.shared->callbackErrors;
+                                callbackState.fail("WGC HDR tonemapping failed: " + error);
+                                try { frame.Close(); } catch (...) {}
+                                continue;
+                            }
+                        }
+                    } else if (sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
+                               sourceDesc.Width == static_cast<UINT>(size.Width) &&
+                               sourceDesc.Height == static_cast<UINT>(size.Height)) {
+                        callbackState.d3dContext->CopyResource(owned.texture.Get(), sourceTexture.Get());
+                    } else if (sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM) {
+                        callbackState.d3dContext->CopySubresourceRegion(
+                            owned.texture.Get(), 0, 0, 0, 0, sourceTexture.Get(), 0, &sourceBox);
+                    }
                     sourceTexture.Reset();
                     try { frame.Close(); } catch (...) {}
                     frame = nullptr;

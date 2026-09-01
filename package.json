@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "private": true,
   "description": "NVENC-first Windows clipping app with Electron UI and native C++ capture engine.",
-  "releaseTitle": "Clipture 1.4.1: Asymmetric Cadence Smoothing & Rock-Solid 60 FPS Pacing",
+  "releaseTitle": "Clipture 1.4.2: Black Screen Capture Fix & Audio Buzz Elimination",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

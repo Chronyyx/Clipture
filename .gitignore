@@ -16,3 +16,7 @@ engine/third_party/rnnoise/model.tar.gz
 engine/third_party/rnnoise/models/*.pth
 engine/third_party/rnnoise/src/rnnoise_data_little.c
 engine/third_party/rnnoise/src/rnnoise_data_little.h
+.clangd
+.vscode/
+.claude-flow/
+release-notes-*.md
