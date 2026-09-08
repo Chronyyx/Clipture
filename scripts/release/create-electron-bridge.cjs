@@ -143,7 +143,11 @@ function validateLatestJson(latestJsonPath, version, assetName, expectedSignatur
     if (expectedSignature && platform.signature.trim() !== expectedSignature) return false;
     if (typeof platform.url !== "string") return false;
     try {
-      return decodeURIComponent(new URL(platform.url).pathname.split("/").at(-1)) === assetName;
+      const parsedUrl = new URL(platform.url);
+      const lastSegment = decodeURIComponent(parsedUrl.pathname.split("/").at(-1) || "");
+      if (lastSegment === assetName) return true;
+      if (/^\/repos\/[^/]+\/[^/]+\/releases\/assets\/\d+$/.test(parsedUrl.pathname)) return true;
+      return false;
     } catch {
       return false;
     }

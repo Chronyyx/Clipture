@@ -83,6 +83,18 @@ try {
     /signed Windows x64 NSIS/,
   );
 
+  const apiAssetJson = join(sandbox, "api-asset.json");
+  writeFileSync(apiAssetJson, JSON.stringify({
+    version: "9.8.7",
+    platforms: {
+      "windows-x86_64-nsis": {
+        signature: "trusted updater signature",
+        url: "https://api.github.com/repos/Chronyyx/Clipture/releases/assets/550345014",
+      },
+    },
+  }));
+  validateLatestJson(apiAssetJson, "9.8.7", assetName, "trusted updater signature");
+
   console.log("Electron cross-grade metadata tests passed.");
 } finally {
   rmSync(sandbox, { recursive: true, force: true });
