@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.5.0] - 2026-09-08
+
+### Native Tauri 2 Architecture & Ultra-Low Footprint
+
+- **Migration from Electron to Tauri 2:** Complete transition of the desktop host to Tauri 2 with native Windows integration, slashing idle resident memory from ~150 MB down to ~4.2 MB.
+- **Disposable UI Process (ADR 0004):** The user interface window runs in an isolated worker process that completely exits when closed, eliminating WebView2 process and handle accumulation while background capture continues uninterrupted.
+- **Native Background Capture Continuity:** High-performance C++ NVENC capture engine, WASAPI audio loopback, global hotkeys, and clip saving run entirely in the resident background controller without requiring any open web interface.
+- **Native Windows Notification Overlay:** Pixel-perfect notification overlay rebuilt with Win32 GDI, layered window opacity, sharp border-flush geometry, and click-through support without web runtime overhead.
+- **Seamless Electron Crossgrade & Signed Updates:** NSIS installer seamlessly upgrades existing Electron installations while preserving 100% of user data, clips, and settings in `%APPDATA%\Clipture\data`.
+
 ## [1.4.2] - 2026-09-01
 
 ### Black Screen Capture Fix & Audio Buzz Elimination

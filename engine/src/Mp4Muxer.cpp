@@ -2772,6 +2772,7 @@ MuxResult muxH264ToMp4(
 
     result.ok = true;
     result.filePath = narrow(path);
+    for (const auto& track : audioTracks) result.audioTracks.push_back(track.sourceId);
     result.message = "Saved MP4 clip.";
     logMuxSaveTiming(
         "total",

@@ -1673,8 +1673,23 @@ bool testMp4MuxerStreamsDiskBackedVideo() {
     pacing.presentationStartPts100ns = packet.pts100ns;
     pacing.presentationEndPts100ns = packet.pts100ns + packet.duration100ns;
     pacing.analyzeIo = true;
+    auto muxPackets = archived;
+    for (const auto& identity : { "microphone-pcm", "app:fixture.exe" }) {
+        auto audio = packetFromBytes({ 0x21, 0x10, 0x04, 0x60 });
+        audio.kind = clipture::PacketKind::Audio;
+        audio.codec = clipture::PacketCodec::AacLc;
+        audio.sampleRate = 48000;
+        audio.channelCount = 2;
+        audio.audioFrameCount = 1024;
+        audio.pts100ns = packet.pts100ns;
+        audio.dts100ns = packet.pts100ns;
+        audio.duration100ns = 213333;
+        audio.sourceId = "original-process-name";
+        audio.logicalTrackId = identity;
+        muxPackets.push_back(std::move(audio));
+    }
     const auto mux = clipture::muxH264ToMp4(
-        archived,
+        muxPackets,
         (root / "output").string(),
         1920,
         1080,
@@ -1694,7 +1709,9 @@ bool testMp4MuxerStreamsDiskBackedVideo() {
     const std::array<char, 4> editType { 'e', 'l', 's', 't' };
     const bool hasEditList = std::search(bytes.begin(), bytes.end(), editType.begin(), editType.end()) != bytes.end();
     const auto ioJson = clipture::saveIoAnalysisToJson(mux.ioAnalysis);
-    const bool valid = require(bytes.size() > 100 && hasEditList,
+    const bool valid = require(mux.audioTracks == std::vector<std::string> { "microphone-pcm", "app:fixture.exe" },
+                               "mux result must report actual stream order and logical identities") &&
+        require(bytes.size() > 100 && hasEditList,
                                "disk-backed mux output should contain MP4 metadata and an exact-range edit list") &&
         require(
             mux.ioAnalysis.enabled && !mux.ioAnalysis.timeline.empty() &&

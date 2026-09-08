@@ -1,0 +1,302 @@
+.clip-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 16px;
+}
+
+.clip-card {
+  min-width: 0;
+  border: 1px solid #2a2d33;
+  border-radius: 8px;
+  padding: 10px;
+  background: #10151b;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.clip-card:hover {
+  border-color: #3b4350;
+  background: #121923;
+}
+
+.clip-card.active,
+.clip-card.selected {
+  border-color: #5b8def;
+  box-shadow: 0 0 0 1px rgba(91, 141, 239, 0.65);
+}
+
+.thumbnail-button {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid rgba(207, 214, 226, 0.18);
+  border-radius: 5px;
+  padding: 0;
+  color: #f4f4f5;
+  background: #050609;
+  cursor: pointer;
+}
+
+.thumbnail-button img,
+.thumbnail-skeleton {
+  width: 100%;
+  height: 100%;
+}
+
+.thumbnail-button img {
+  display: block;
+  object-fit: contain;
+  background: #050609;
+}
+
+.thumbnail-skeleton {
+  background: #1a1e26;
+}
+
+.thumbnail-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0);
+  transition: background 140ms ease;
+}
+
+.thumbnail-button:hover::after {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.duration-badge,
+.play-badge {
+  position: absolute;
+  z-index: 1;
+}
+
+.duration-badge {
+  right: 8px;
+  bottom: 8px;
+  border-radius: 6px;
+  padding: 4px 7px;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.82);
+  font-size: 15px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.play-badge {
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #171717;
+  background: rgba(226, 232, 240, 0.94);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.92);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.thumbnail-button:hover .play-badge,
+.clip-card.active .play-badge {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.clip-info {
+  display: grid;
+  gap: 7px;
+  padding: 12px 8px 4px;
+  min-width: 0;
+}
+
+.clip-info span {
+  color: #a5adba;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clip-timestamp {
+  display: flex;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.clip-name {
+  border: 0;
+  padding: 0;
+  color: #f4f4f5;
+  background: transparent;
+  font-weight: 800;
+  font-size: 17px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.clip-name:hover {
+  color: #e2e8f0;
+}
+
+.clip-card-footer {
+  display: grid;
+  grid-template-columns: auto auto 48px;
+  gap: 9px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.clip-card-footer span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.clip-card-footer .icon-button {
+  justify-self: end;
+  width: 38px;
+  height: 38px;
+  border: 1px solid #333944;
+  border-radius: 8px;
+  color: #f4f4f5;
+  background: #111318;
+}
+
+.clip-card-footer .icon-button:hover {
+  background: #242832;
+}
+
+.clip-select-box {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  left: 8px;
+  width: 25px;
+  height: 25px;
+  border: 2px solid #cfd6e2;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  background: rgba(17, 19, 24, 0.72);
+}
+
+.clip-select-box.checked {
+  border-color: #4f8cff;
+  background: #4f8cff;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: 1fr 190px;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid #2a2d33;
+}
+
+input:not([type="range"]),
+select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #333944;
+  border-radius: 6px;
+  color: #f4f4f5;
+  background: #0f1115;
+  padding: 0 10px;
+}
+
+.library-search input:not([type="range"]) {
+  min-height: 40px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  color: #f4f4f5;
+  background: transparent;
+  font-size: 14px;
+}
+
+input[type="range"] {
+  border: none;
+  background: transparent;
+  padding: 0;
+  min-height: auto;
+}
+
+.keybind-button {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #333944;
+  border-radius: 6px;
+  color: #f4f4f5;
+  background: #0f1115;
+  padding: 0 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.keybind-button:hover,
+.keybind-button:focus,
+.keybind-button.recording {
+  border-color: #e2e8f0;
+  outline: 0;
+}
+
+.table {
+  display: grid;
+}
+
+.table-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 90px 1.4fr 44px;
+  gap: 12px;
+  min-height: 48px;
+  align-items: center;
+  padding: 0 14px;
+  border-bottom: 1px solid #24272f;
+}
+
+.table-row.active {
+  background: #1d2430;
+}
+
+.table-row.header {
+  color: #a5adba;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.clip-title {
+  border: 0;
+  padding: 0;
+  color: #f4f4f5;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.clip-title:hover {
+  color: #e2e8f0;
+}
+
+.empty {
+  padding: 28px 14px;
+  color: #a5adba;
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  color: #d8dee9;
+  background: #242832;
+}
+

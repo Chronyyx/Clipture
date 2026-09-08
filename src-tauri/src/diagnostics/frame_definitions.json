@@ -1,0 +1,23 @@
+{
+  "reportedDroppedFrames": "The dashboard headline: a sum of capture queue evictions, capture-slot failures, legacy scheduler losses, and encoder-backpressure losses. Target-capped VFR intentionally produces fewer than the target FPS when the source is slower; that is not a drop.",
+  "countedReasons": [
+    "captureQueueOverflow: the bounded capture queue evicted its oldest captured frame",
+    "captureSlotExhaustion: no owned capture texture slot was available",
+    "schedulerDeadlineMisses: legacy CFR scheduler losses; the event-driven VFR encoder does not generate these",
+    "encoderBackpressure: umbrella count for encoder queue eviction, NVENC output-surface starvation, NVENC input still in flight, or another encoder-side pressure loss"
+  ],
+  "supportingIndicators": [
+    "captureQueueCoalesced, sourceFramesSuperseded, and sampler rejections describe replaced or intentionally rejected source work and are not added to reportedDroppedFrames",
+    "encoderQueueDrops, nvencSurfaceDrops, nvencInputDrops, and encoderBackpressureOther subdivide encoderBackpressure and are not added twice",
+    "NVENC surface/input drops isolate failures after encoder admission",
+    "schedulerRepeats are legacy CFR telemetry and remain zero in target-capped VFR mode",
+    "acquire timeouts on a static desktop can be normal when DXGI has no new frame; correlate them with desktop presents and output FPS",
+    "desktopUpdateSupply combines acquired desktop-present events with DXGI AccumulatedFrames so capture backlog is not mislabeled as a slow source",
+    "captureClockTickRequests and captureClockTickWakeups identify scheduler-side request loss or coalescing before DXGI acquisition",
+    "captureClockTickCompletions and completion timeouts identify capture-thread work that did not publish inside the scheduler tick budget",
+    "schedulerWakeLateness is legacy fixed-clock telemetry and remains empty in target-capped VFR mode",
+    "captureAcquireImmediateMisses, captureAcquireGraceHits, and captureAcquireGraceTimeouts show whether the bounded DXGI grace recovered a zero-timeout OBS-style poll miss",
+    "visualFreshnessBottleneck compares each stage with the source-capped expected rate, so healthy below-target gameplay is reported as healthy-vfr-source-limited",
+    "distinctSourceFramesEncoded follows sourceFrameSequence and therefore measures only fresh source delivery"
+  ]
+}

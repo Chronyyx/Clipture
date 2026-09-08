@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
 project(clipture_engine LANGUAGES C CXX)
 
+# Sidecars must run on a clean Windows installation without a separate VC++
+# redistributable. Apply to both the engine and its native test executable.
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 include(CTest)
 
 add_compile_definitions(_CRT_SECURE_NO_WARNINGS)

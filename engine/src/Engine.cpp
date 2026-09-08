@@ -1989,6 +1989,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     auto videoSegments = splitVideoSegmentRangesByEncodedResolution(clipPackets);
     std::vector<std::string> segmentFiles;
     std::vector<std::string> segmentResolutions;
+    std::vector<std::vector<std::string>> segmentAudioTracks;
+    std::vector<std::string> savedAudioTracks;
     std::string outputFilePath;
     std::string muxMessage;
     const std::size_t selectedVideoPacketCount = clipPackets.size();
@@ -2051,6 +2053,12 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
                 return result;
             }
             segmentFiles.push_back(segmentMux.filePath);
+            segmentAudioTracks.push_back(segmentMux.audioTracks);
+            for (const auto& track : segmentMux.audioTracks) {
+                if (std::find(savedAudioTracks.begin(), savedAudioTracks.end(), track) == savedAudioTracks.end()) {
+                    savedAudioTracks.push_back(track);
+                }
+            }
             segmentResolutions.push_back(formatResolution(segmentWidth, segmentHeight));
             muxMessage = segmentMux.message;
         }
@@ -2087,6 +2095,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             return result;
         }
         outputFilePath = mux.filePath;
+        savedAudioTracks = mux.audioTracks;
         muxMessage = mux.message;
     }
 
@@ -2149,17 +2158,24 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
          << "\"encoder\":\"" << encoderName(diagnostics_.activeEncoder) << "\","
          << "\"audioTracks\":[";
     bool wroteTrack = false;
-    for (const auto& packet : audioPackets) {
-        if (packet.sourceId.empty()) continue;
-        const auto trackName = packet.sourceId;
-        const bool alreadyWritten = clip.str().find("\"" + trackName + "\"") != std::string::npos;
-        if (alreadyWritten) continue;
+    for (const auto& trackName : savedAudioTracks) {
         if (wroteTrack) clip << ",";
         clip << "\"" << jsonEscape(trackName) << "\"";
         wroteTrack = true;
     }
     clip << "]";
     if (!segmentFiles.empty()) {
+        clip << R"(,"segmentAudioTracks":[)";
+        for (std::size_t segment = 0; segment < segmentAudioTracks.size(); ++segment) {
+            if (segment > 0) clip << ",";
+            clip << "[";
+            for (std::size_t track = 0; track < segmentAudioTracks[segment].size(); ++track) {
+                if (track > 0) clip << ",";
+                clip << R"(")" << jsonEscape(segmentAudioTracks[segment][track]) << R"(")";
+            }
+            clip << "]";
+        }
+        clip << "]";
         clip << ",\"segmentFiles\":[";
         for (std::size_t i = 0; i < segmentFiles.size(); ++i) {
             if (i > 0) clip << ",";

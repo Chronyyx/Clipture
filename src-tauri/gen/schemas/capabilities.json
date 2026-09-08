@@ -1,0 +1,1 @@
+{"main-ui":{"identifier":"main-ui","description":"Minimal core permissions for Clipture's lazily-created local UI.","local":true,"windows":["main"],"permissions":["core:default"]}}

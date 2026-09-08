@@ -29,6 +29,13 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 
 ## Architecture
 
+The default desktop host is Tauri 2, not Electron. A small resident Rust
+controller owns recording, saves, settings, hotkeys, updates and native feedback.
+Opening the interface creates a disposable UI-worker process with React and
+WebView2; closing it removes the worker and browser tree without stopping capture.
+Node and Electron are not part of the installed runtime. Feature-owned React
+modules and Rust domain services are mapped in [architecture.md](docs/architecture.md).
+
 ```text
 Video
 DXGI Desktop Duplication (WGC fallback)
@@ -79,15 +86,19 @@ Save output is paced according to storage type, observed write service, and capt
 - 64-bit Windows 10 or Windows 11.
 - An NVIDIA GPU with NVENC H.264 support.
 - An NVIDIA driver compatible with the NVENC API used by the build.
-- CMake and Visual Studio C++ build tools when compiling the native engine.
-- Node.js and npm when building the Electron application.
+- Microsoft Edge WebView2 Runtime (the Windows installer handles a missing runtime).
+- For development: Node.js/npm, Rust stable with the `x86_64-pc-windows-msvc`
+  toolchain, CMake, and Visual Studio C++ build tools with a Windows SDK.
+
+The controller and engine statically link the Visual C++ runtime; a separate
+VC++ redistributable is not required by these executables.
 
 ## Build
 
-Install dependencies and build the native engine and UI:
+Install dependencies and build the optimized Tauri application and native engine:
 
 ```powershell
-npm.cmd install
+npm.cmd ci
 npm.cmd run build
 ```
 
@@ -95,7 +106,7 @@ Build only one side:
 
 ```powershell
 npm.cmd run build:engine
-npm.cmd run build:ui
+npm.cmd run build:renderer
 ```
 
 Build the Windows installer:
@@ -114,10 +125,16 @@ Outputs are written to:
 
 ```text
 build/engine/Release/clipture_engine.exe
-dist/
-release/Clipture-Setup-<version>.exe
-release/win-unpacked/
+dist/renderer/
+release/tauri-unpacked/clipture.exe
+src-tauri/target/release/bundle/nsis/Clipture_<version>_x64-setup.exe
 ```
+
+`build` and `pack:win` stage only five runtime files, excluding Cargo artifacts,
+debug symbols and Electron. `dist:win` additionally creates the NSIS installer.
+Local builds have updates disabled. Public releases require a production updater
+key and signing configuration; the checked-in development key is deliberately
+rejected by the release guard. No local test signature is a production signature.
 
 ## Run
 
@@ -127,19 +144,41 @@ Run the development server with hot reload:
 npm.cmd run dev
 ```
 
-Run an already-built Electron application directly:
+Run the already-built optimized Tauri application:
 
 ```powershell
-npm.cmd run start:dev
+npm.cmd run start:built
 ```
 
-Build the engine and UI, then run Electron directly:
+Build the engine, renderer and Tauri controller, then launch:
 
 ```powershell
 npm.cmd start
 ```
 
-`npm.cmd start` does not rewrite `release/win-unpacked`, so a running packaged or tray instance cannot lock development startup. Use `npm.cmd run start:packaged` only when testing the unpacked packaged application itself; exit any copy running from `release/win-unpacked` before rebuilding that directory.
+`start:dev` aliases `dev`, including Vite hot reload. `start:built` exits its Node
+launcher immediately; the native tray application remains. Exit a copy running
+from `release/tauri-unpacked` before rebuilding that directory. Installed copies
+use their own directory, but share the normal profile and single-instance identity.
+
+For isolated UI testing without recording or touching the daily profile, first
+exit any running Tauri instance (the profile override does not change its
+single-instance key):
+
+```powershell
+$env:CLIPTURE_DATA_DIR = Join-Path (Get-Location) '.cache/manual-ui-profile'
+$env:CLIPTURE_TEST_MODE = '1'
+npm.cmd run start:built
+```
+
+The explicit profile disables changes to daily OS startup integration. Remove these environment overrides
+before a normal launch. Automated checks and their limitations are recorded in
+[the migration checkpoint](docs/migration/checkpoint.md).
+
+Electron remains an explicitly named behavior reference: `dev:legacy`,
+`build:legacy`, `start:legacy`, `pack:legacy`, and `dist:legacy`. Its source and
+build dependencies are retained pending native keyboard/picker UX verification;
+none are copied into the Tauri payload.
 
 Development builds can temporarily use substantial CPU, disk, and memory and should not be used to judge installed-app startup performance.
 
@@ -164,7 +203,9 @@ Application data and logs are stored under:
 %APPDATA%\Clipture\data
 ```
 
-Useful files include `settings.json`, `clips.json`, `save-timing.log`, and `updates.log`.
+Useful files include `settings.json`, `clips.json`, and diagnostic exports.
+Existing `save-timing.log` and Electron `updates.log` files may remain from the
+legacy host; the Tauri diagnostics view/export is the current reporting surface.
 
 Run a native engine smoke test with:
 

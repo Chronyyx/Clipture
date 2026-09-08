@@ -8,41 +8,195 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  release:
+  release-windows-x64:
     runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> src-tauri/target
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Prepare release notes
+      - name: Validate version and prepare release notes
         id: release_notes
         run: node scripts/extract-release-notes.cjs "${{ github.ref_name }}" release-notes.md
 
-      - name: Build Windows release
-        run: npm run dist:win -- --publish never
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - name: Export release notes for Tauri action
+        id: release_body
+        shell: pwsh
+        run: |
+          $delimiter = "CLIPTURE_$([Guid]::NewGuid().ToString('N'))"
+          "body<<$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Get-Content -Raw -LiteralPath release-notes.md | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $delimiter | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3
+      - name: Validate all release versions
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}".Substring(1)
+          $packageVersion = (Get-Content -Raw -LiteralPath package.json | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content -Raw -LiteralPath src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $cargoText = Get-Content -Raw -LiteralPath src-tauri/Cargo.toml
+          $cargoVersion = [regex]::Match($cargoText, '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          if (@($packageVersion, $tauriVersion, $cargoVersion) | Where-Object { $_ -ne $tagVersion }) {
+            throw "Tag, package.json, tauri.conf.json, and Cargo.toml versions must all equal $tagVersion."
+          }
+
+      - name: Test migration contracts
+        run: |
+          node scripts/migration/test-host-contract.cjs
+          node scripts/migration/test-renderer-boundaries.cjs
+          node scripts/migration/test-ui-process-boundaries.cjs
+          node scripts/migration/test-save-result-contract.cjs
+          node scripts/testing/test-tauri-workflow.cjs
+          node scripts/migration/test-frame-diagnostics-parity.cjs
+          node scripts/testing/test-library-snapshot.cjs
+          node scripts/release/test-electron-bridge.cjs
+          node scripts/release/test-production-key.cjs
+          node scripts/release/test-installer-template.cjs
+          node scripts/release/test-windows-runtime-imports.cjs
+
+      - name: Reject development updater key
+        run: node scripts/release/validate-production-key.cjs
+
+      - name: Build native capture engine
+        run: npm run build:engine
+
+      - name: Test native capture engine
+        run: ctest --test-dir build/engine -C Release --output-on-failure
+
+      - name: Build renderer
+        run: npm run build:renderer
+
+      - name: Stage Tauri sidecars
+        run: npm run stage:tauri
+
+      - name: Test Rust host
+        run: cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+
+      - name: Require updater signing secrets
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw "TAURI_SIGNING_PRIVATE_KEY is required."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            throw "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is required."
+          }
+
+      - name: Build signed Tauri NSIS release
+        id: tauri_release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          name: ${{ steps.release_notes.outputs.release_title }}
-          files: |
-            release/*.exe
-            release/*.exe.blockmap
-            release/latest.yml
-          body_path: release-notes.md
-          generate_release_notes: false
-          fail_on_unmatched_files: true
-          make_latest: true
+          projectPath: .
+          tauriScript: npm run tauri
+          args: --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.release.conf.json
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ steps.release_notes.outputs.release_title }}
+          releaseBody: ${{ steps.release_body.outputs.body }}
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          uploadUpdaterSignatures: true
+          retryAttempts: 2
+
+      - name: Verify standalone Windows runtime dependencies
+        run: node scripts/release/windows-runtime-imports.cjs src-tauri/target/x86_64-pc-windows-msvc/release/clipture.exe src-tauri/binaries/clipture_engine-x86_64-pc-windows-msvc.exe src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
+
+      - name: Locate exact NSIS updater artifact
+        id: nsis
+        shell: pwsh
+        run: |
+          $bundleRoot = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
+          $installers = @(Get-ChildItem -LiteralPath $bundleRoot -File -Filter "*.exe")
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows x64 NSIS installer in $bundleRoot; found $($installers.Count)."
+          }
+          $installer = $installers[0]
+          $signature = "$($installer.FullName).sig"
+          if (-not (Test-Path -LiteralPath $signature -PathType Leaf)) {
+            throw "Missing updater signature: $signature"
+          }
+          "installer=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "signature=$signature" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "asset_name=$($installer.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Download and validate Tauri updater metadata
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          New-Item -ItemType Directory -Path release-bridge -Force | Out-Null
+          gh release download "${{ github.ref_name }}" --pattern latest.json --dir release-bridge --clobber
+          $releaseDate = (git show -s --format=%cI $env:GITHUB_SHA).Trim()
+          node scripts/release/create-electron-bridge.cjs `
+            --version "${{ github.ref_name }}" `
+            --installer "${{ steps.nsis.outputs.installer }}" `
+            --asset-name "${{ steps.nsis.outputs.asset_name }}" `
+            --signature "${{ steps.nsis.outputs.signature }}" `
+            --latest-json release-bridge/latest.json `
+            --release-date $releaseDate `
+            --output release-bridge/latest.yml
+
+      - name: Upload Electron cross-grade metadata
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" release-bridge/latest.yml --clobber
+
+      - name: Verify release assets and publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $release = gh release view "${{ github.ref_name }}" --json assets | ConvertFrom-Json
+          $names = @($release.assets | ForEach-Object { $_.name })
+          $required = @(
+            "${{ steps.nsis.outputs.asset_name }}",
+            "${{ steps.nsis.outputs.asset_name }}.sig",
+            "latest.json",
+            "latest.yml"
+          )
+          foreach ($name in $required) {
+            if ($name -notin $names) { throw "Release asset is missing: $name" }
+          }
+          gh release edit "${{ github.ref_name }}" `
+            --draft=false `
+            --latest `
+            --title "${{ steps.release_notes.outputs.release_title }}" `
+            --notes-file release-notes.md

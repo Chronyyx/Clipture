@@ -1,0 +1,65 @@
+[package]
+name = "clipture"
+version = "1.5.0"
+description = "Low-footprint native host for Clipture"
+authors = ["Clipture"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "clipture_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[target.'cfg(windows)'.dev-dependencies]
+webview2-com = "0.38.2"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+base64 = "0.22"
+minisign-verify = "0.2"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls-no-provider", "system-proxy"] }
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "=2.11.5", features = ["tray-icon", "protocol-asset", "unstable"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "time", "fs", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2.11.0"
+
+[target.'cfg(windows)'.dependencies]
+png = "0.17"
+windows = { version = "0.61", features = [
+  "Wdk_System_SystemServices",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_System_JobObjects",
+  "Win32_Security",
+  "Win32_System_Com",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Dwm",
+  "Win32_Storage_FileSystem",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+panic = "abort"
+strip = "symbols"

@@ -2443,6 +2443,10 @@ async function stitchSegmentedClip(
 ): Promise<{ ok: boolean; message: string }> {
   const totalStartedAt = saveTimingNowMs();
   const segmentFiles = clip.segmentFiles?.filter((file) => existsSync(file)) ?? [];
+  if (clip.segmentAudioTracks?.some(tracks => tracks.length !== clip.audioTracks.length ||
+      tracks.some((track, index) => track !== clip.audioTracks[index]))) {
+    return { ok: false, message: "This segmented clip has changing audio tracks. Original segments were preserved; use the Tauri host to normalize them." };
+  }
   if (segmentFiles.length <= 1) {
     if (saveTimingId) logSaveTiming(saveTimingId, "stitch.skipped", totalStartedAt, { segmentCount: segmentFiles.length });
     return { ok: true, message: "No segment stitching needed." };
@@ -2514,6 +2518,7 @@ async function stitchSegmentedClip(
         }
         clip.segmentFiles = undefined;
         clip.segmentResolutions = undefined;
+        clip.segmentAudioTracks = undefined;
         clip.resolution = `${targetWidth}x${targetHeight}`;
         if (saveTimingId) logSaveTiming(saveTimingId, "stitch.total", totalStartedAt, { ok: true, mode: "copy" });
         return { ok: true, message: "Stitched segmented video with stream copy." };
@@ -2631,6 +2636,7 @@ async function stitchSegmentedClip(
   }
   clip.segmentFiles = undefined;
   clip.segmentResolutions = undefined;
+  clip.segmentAudioTracks = undefined;
   clip.resolution = `${targetWidth}x${targetHeight}`;
   if (saveTimingId) logSaveTiming(saveTimingId, "stitch.total", totalStartedAt, { ok: true, mode: usedMode });
   return { ok: true, message: usedMode === "cpu" ? "Stitched segmented video." : `Stitched segmented video with GPU ${usedMode} scaling.` };

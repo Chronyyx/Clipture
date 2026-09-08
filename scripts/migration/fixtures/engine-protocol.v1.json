@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "framing": "utf8-json-lines",
+  "envelopes": {
+    "request": ["id", "type"],
+    "success": ["id", "payload"],
+    "error": ["id", "error"]
+  },
+  "commands": [
+    { "type": "getDiagnostics", "fields": [] },
+    { "type": "configureHotkey", "fields": ["hotkey"] },
+    { "type": "listAudioInputDevices", "fields": [] },
+    { "type": "listDisplayDevices", "fields": [] },
+    { "type": "listRunningProcesses", "fields": ["includeExecutablePaths"] },
+    { "type": "getProcessExecutablePath", "fields": ["processId"] },
+    { "type": "configure", "fields": ["fps", "bitrateMbps", "nvencPreset", "clipLengthSeconds", "monitorId", "targetWidth", "targetHeight", "includeMixedAudio", "includeSystemAudio", "includeMicrophoneAudio", "captureGameAudio", "captureForegroundSystemAudio", "appAudioProcesses", "systemAudioProcesses", "micVolume", "micIsolation", "micIsolationWeight", "noiseGateEnabled", "autoNoiseGate", "noiseGateThreshold", "noiseGateDebounceMs", "micDeviceId", "micDeviceMatchKey", "micDeviceName"] },
+    { "type": "saveClip", "fields": ["durationSeconds", "saveFolder", "analyzeIo"] }
+  ],
+  "events": [
+    { "event": "hotkey", "fields": ["source"] }
+  ],
+  "examples": {
+    "segmentedSave": { "id": 3, "payload": { "ok": true, "message": "Synthetic segmented save", "clip": {
+      "id": "fixture", "title": "Fixture", "gameOrApp": "Desktop", "createdAt": "2026-09-07T00:00:00Z",
+      "durationSeconds": 2, "filePath": "C:/Fixture/complete.mp4", "resolution": "320x180", "fps": 30, "encoder": "NVENC",
+      "audioTracks": ["microphone-pcm", "app:chat.exe"],
+      "segmentFiles": ["C:/Fixture/one.mp4", "C:/Fixture/two.mp4"],
+      "segmentResolutions": ["320x180", "160x90"],
+      "segmentAudioTracks": [["microphone-pcm"], ["app:chat.exe", "microphone-pcm"]]
+    } } },
+    "request": { "id": 1, "type": "getDiagnostics" },
+    "success": { "id": 1, "payload": { "engineRunning": true } },
+    "error": { "id": 2, "error": "Synthetic fixture error." },
+    "event": { "event": "hotkey", "source": "fixture" }
+  }
+}

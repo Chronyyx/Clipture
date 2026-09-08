@@ -1,0 +1,20 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname, '../..');
+const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+const entry = read('src-tauri/src/lib.rs');
+const handlers = entry.match(/generate_handler!\[([\s\S]*?)\]/)[1];
+const registered = [...handlers.matchAll(/commands::([a-z_]+)/g)].map(match => match[1]).sort();
+const dispatch = read('src-tauri/src/app/ui_process/dispatch.rs');
+const forwarded = [...dispatch.matchAll(/^\s*"([a-z_]+)"\s*=>/gm)].map(match => match[1]).sort();
+assert.deepEqual(forwarded, registered, 'Disposable UI dispatcher must preserve exactly the existing command surface');
+const worker = read('src-tauri/src/app/ui_process/worker.rs');
+assert.doesNotMatch(worker, /EngineClient::new|SettingsStore::load|AppState::new|tray::create|updates::runtime_service|single_instance::init/,
+  'UI worker must not acquire durable controller responsibilities');
+assert.ok(entry.indexOf('run_if_worker()') < entry.indexOf('single_instance::init'), 'Worker role must branch before single-instance initialization');
+assert.match(read('src-tauri/src/app/ui_process/controller.rs'), /stdin\(Stdio::piped\(\)\)/);
+assert.match(read('src-tauri/src/app/ui_process/controller.rs'), /stdout\(Stdio::piped\(\)\)/);
+assert.doesNotMatch(dispatch, /args[^\n]*["']owner["']/, 'Playback ownership must come from the connection, not renderer arguments');
+console.log(`UI process boundary passed: ${registered.length} explicit commands; private pipes; no duplicate recorder state.`);

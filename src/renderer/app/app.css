@@ -1,0 +1,165 @@
+.sidebar {
+  border-right: 1px solid #2a2d33;
+  background: #16181d;
+  padding: 20px 14px 20px 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  scrollbar-gutter: stable;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+  -webkit-app-region: drag;
+}
+
+.brand span,
+.topbar p,
+.encoder small,
+.metric span,
+.source span,
+.source small {
+  color: #a5adba;
+}
+
+.mark {
+  display: block;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.nav {
+  width: 100%;
+  height: 42px;
+  border: 0;
+  border-radius: 6px;
+  color: #d8dee9;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.nav.active,
+.nav:hover {
+  background: #242832;
+  color: #ffffff;
+}
+
+.encoder {
+  margin-top: 28px;
+  padding: 14px;
+  border: 1px solid #384151;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.encoder.degraded {
+  border-color: #a85d5d;
+}
+
+.workspace {
+  min-width: 0;
+  min-height: 0;
+  padding: 0 24px 24px 24px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 40px 0 0;
+  margin-bottom: 18px;
+  -webkit-app-region: drag;
+}
+
+.topbar button {
+  -webkit-app-region: no-drag;
+}
+
+.topbar-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex: 0 0 auto;
+  gap: 10px;
+  -webkit-app-region: no-drag;
+}
+
+.topbar-actions button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.topbar-actions .secondary-button {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.topbar-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 24px;
+}
+
+h2 {
+  font-size: 16px;
+}
+
+.primary,
+.icon-button {
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.primary {
+  height: 40px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #e2e8f0;
+  color: #171717;
+  font-weight: 700;
+}
+
+.notice {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid #41566f;
+  border-radius: 6px;
+  color: #dceaff;
+  background: #172232;
+}
+
+.panel {
+  border: 1px solid #2a2d33;
+  border-radius: 8px;
+  background: #15171c;
+}
+

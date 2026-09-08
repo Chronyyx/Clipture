@@ -474,6 +474,8 @@ export interface ClipRecord {
   recommendedResolution?: string;
   segmentFiles?: string[];
   segmentResolutions?: string[];
+  /** Per-segment stream order; audioTracks is the union for the finished clip. */
+  segmentAudioTracks?: string[][];
   fps: number;
   encoder: string;
   audioTracks: string[];

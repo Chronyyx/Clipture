@@ -1,7 +1,9 @@
 node_modules/
+.cache/
 build/
 dist/
-release/
+/release/
+src-tauri/target/
 *.user
 *.suo
 .vs/
@@ -20,3 +22,5 @@ engine/third_party/rnnoise/src/rnnoise_data_little.h
 .vscode/
 .claude-flow/
 release-notes-*.md
+*.key
+*.sig

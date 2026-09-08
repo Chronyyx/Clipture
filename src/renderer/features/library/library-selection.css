@@ -1,0 +1,79 @@
+.library-empty-state {
+  min-height: 420px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 58px 16px 72px;
+  text-align: center;
+  color: #a5adba;
+}
+
+.library-empty-art {
+  width: 174px;
+  height: 118px;
+  border: 2px dashed #687083;
+  border-radius: 28px;
+  display: grid;
+  place-items: center;
+  color: #7b8190;
+  margin-bottom: 18px;
+}
+
+.library-empty-state h2 {
+  color: #f4f4f5;
+  font-size: 24px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.library-empty-state p {
+  color: #a5adba;
+  font-size: 15px;
+}
+
+.library-empty-action {
+  margin-top: 16px;
+  min-height: 48px;
+  padding: 0 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+}
+
+.selection-bar strong {
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.selection-divider {
+  width: 1px;
+  height: 30px;
+  background: #4b5563;
+}
+
+.danger-button {
+  min-height: 38px;
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #ffffff;
+  background: #b91c1c;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #dc2626;
+}
+
+.danger-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+

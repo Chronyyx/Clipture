@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Film } from "lucide-react";
+import { clipture } from "./platform/cliptureClient";
 
 export function NotificationOverlay() {
   const [activeNotification, setActiveNotification] = useState<{ position: string; id: number; message: string } | null>(null);
@@ -12,7 +13,7 @@ export function NotificationOverlay() {
     if (root) root.style.background = 'transparent';
     let timeoutId: number;
 
-    const unsubscribe = window.clipture.onShowNotification((_filePath, position, message = "Clip saved!") => {
+    const unsubscribe = clipture.onShowNotification((_filePath, position, message = "Clip saved!") => {
       setActiveNotification({ position, id: Date.now(), message });
       setAnimatingOut(false);
       
@@ -25,7 +26,7 @@ export function NotificationOverlay() {
         window.setTimeout(() => {
           setActiveNotification(null);
           setAnimatingOut(false);
-          window.clipture.hideNotification();
+          clipture.hideNotification();
         }, 500);
       }, 4000);
     });

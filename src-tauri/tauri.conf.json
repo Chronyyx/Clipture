@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Clipture",
+  "version": "1.5.0",
+  "identifier": "app.clipture.desktop",
+  "plugins": {
+    "updater": { "pubkey": "", "endpoints": [] }
+  },
+  "build": {
+    "beforeDevCommand": "npm run dev:web",
+    "devUrl": "http://127.0.0.1:5173",
+    "frontendDist": "../dist/renderer"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "assetProtocol": { "enable": true, "scope": [] },
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* clipture-media: http://clipture-media.localhost https://clipture-media.localhost; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob: http://127.0.0.1:* clipture-media: http://clipture-media.localhost https://clipture-media.localhost; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["../assets/icon.ico"],
+    "externalBin": [
+      "binaries/clipture_engine",
+      "binaries/ffmpeg"
+    ],
+    "resources": {
+      "../assets/default.mp3": "assets/default.mp3",
+      "../assets/option2.wav": "assets/option2.wav"
+    },
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false,
+        "installMode": "both",
+        "installerHooks": "installer/hooks.nsh",
+        "template": "installer/tauri-2.11.4.nsi"
+      }
+    }
+  }
+}

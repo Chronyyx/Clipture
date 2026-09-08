@@ -66,6 +66,9 @@ struct MuxResult {
     std::string message;
     std::string filePath;
     SaveIoAnalysis ioAnalysis;
+    // Exact order of the audio streams actually written, after empty tracks
+    // and failed PCM recovery have been removed.
+    std::vector<std::string> audioTracks;
 };
 
 enum class MuxPressureLevel {
