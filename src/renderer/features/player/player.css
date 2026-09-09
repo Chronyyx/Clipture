@@ -35,6 +35,8 @@
 
 .custom-video-shell {
   position: relative;
+  border-radius: 14px;
+  overflow: hidden;
   background: #050609;
   user-select: none;
   container-type: inline-size;
@@ -49,9 +51,15 @@
 }
 
 .custom-video-shell:fullscreen {
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* The embedded video and rail share the outer player's rounded frame. */
+.library-player-main .custom-video-shell {
+  border-radius: 0;
 }
 
 .custom-video-shell:fullscreen video {
@@ -242,4 +250,3 @@
   padding: 10px 14px;
   border-top: 1px solid #2a2d33;
 }
-

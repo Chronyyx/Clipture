@@ -21,6 +21,13 @@ mod updates;
 use tauri::{Manager, RunEvent};
 use tauri_plugin_autostart::MacosLauncher;
 
+pub fn installer_startup_command() -> Option<i32> {
+    #[cfg(windows)]
+    return app::installer_startup::command();
+    #[cfg(not(windows))]
+    None
+}
+
 pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)

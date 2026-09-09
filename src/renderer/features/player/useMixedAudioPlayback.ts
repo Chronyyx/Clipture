@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { MutableRefObject, RefObject } from 'react';
+import { watchPlaybackActivity } from './playbackActivity';
 
 interface MixedAudioChunk {
   start: number;
@@ -25,7 +26,6 @@ interface MixedAudioOptions {
 }
 
 const scheduleLookaheadSeconds = 0.5;
-const schedulerIntervalMs = 100;
 
 export function useMixedAudioPlayback({
   videoRef,
@@ -44,7 +44,6 @@ export function useMixedAudioPlayback({
   const chunkCacheRef = useRef(new Map<number, MixedAudioChunk>());
   const chunkRequestsRef = useRef(new Map<number, MixedAudioChunkRequest>());
   const scheduledChunksRef = useRef(new Map<number, AudioBufferSourceNode[]>());
-  const timerRef = useRef<number | null>(null);
   const generationRef = useRef(0);
   const playRequestRef = useRef(0);
   const primingPlayRef = useRef(false);
@@ -107,6 +106,8 @@ export function useMixedAudioPlayback({
   }
 
   function loadChunk(index: number, generation: number) {
+    // A canceled prefetch chain may still have queued promise callbacks.
+    if (generation !== generationRef.current) return Promise.resolve();
     if (!enabled || !chunkUrl || chunkCacheRef.current.has(index)) return Promise.resolve();
     const pending = chunkRequestsRef.current.get(index);
     if (pending) return pending.promise;
@@ -120,7 +121,7 @@ export function useMixedAudioPlayback({
       if (!response.ok) throw new Error('audio chunk ' + response.status);
       const encoded = await response.arrayBuffer();
       if (generation !== generationRef.current || encoded.byteLength === 0) return;
-      const buffer = await ensureAudioContext().decodeAudioData(encoded.slice(0));
+      const buffer = await ensureAudioContext().decodeAudioData(encoded);
       if (generation === generationRef.current) chunkCacheRef.current.set(index, { start, buffer, lastUsedAt: performance.now() });
     }).catch((error) => {
       if (!(error instanceof DOMException && error.name === 'AbortError')) console.warn('Mixed audio chunk failed:', error);
@@ -178,7 +179,8 @@ export function useMixedAudioPlayback({
 
   function ensureBuffered() {
     const video = videoRef.current;
-    if (!enabled || !chunkUrl || !video || video.seeking) return;
+    if (!enabled || !chunkUrl || !video || video.seeking || document.hidden) return;
+    if (video.paused && !playbackRequestedRef.current) return;
     const size = Math.max(1, chunkSeconds || 8);
     const time = Math.max(0, video.currentTime);
     const generation = generationRef.current;
@@ -195,9 +197,10 @@ export function useMixedAudioPlayback({
 
   async function restart() {
     if (!enabled || !chunkUrl) return;
+    const generation = generationRef.current;
     stop();
     try { await ensureAudioContext().resume(); } catch (error) { console.warn('Mixed audio resume failed:', error); }
-    ensureBuffered();
+    if (generation === generationRef.current) ensureBuffered();
   }
 
   async function playWhenReady() {
@@ -223,7 +226,10 @@ export function useMixedAudioPlayback({
     try { await ensureAudioContext().resume(); } catch (error) { console.warn('Mixed audio resume failed:', error); }
     if (requestId !== playRequestRef.current || generation !== generationRef.current || !playbackRequestedRef.current) return;
     primingPlayRef.current = true;
-    try { await video.play(); ensureBuffered(); } catch (error) { console.warn('Video play failed:', error); }
+    try {
+      await video.play();
+      if (requestId === playRequestRef.current && generation === generationRef.current) ensureBuffered();
+    } catch (error) { console.warn('Video play failed:', error); }
     finally { if (requestId === playRequestRef.current) primingPlayRef.current = false; }
   }
 
@@ -240,7 +246,8 @@ export function useMixedAudioPlayback({
       video.volume = 0;
       if (gainNodeRef.current) gainNodeRef.current.gain.value = volume;
     } else {
-      if (video !== connectedVideoRef.current) {
+      // Native media volume handles 0..100%. Web Audio is needed only for boost.
+      if (volume > 1 && video !== connectedVideoRef.current) {
         try {
           const source = ensureAudioContext().createMediaElementSource(video);
           source.connect(gainNodeRef.current!);
@@ -258,20 +265,34 @@ export function useMixedAudioPlayback({
   }, [enabled, volume]);
 
   useEffect(() => {
-    if (!enabled || !chunkUrl || !sourceUrl) return;
-    const tick = () => ensureBuffered();
-    tick();
-    timerRef.current = window.setInterval(tick, schedulerIntervalMs);
+    const video = videoRef.current;
+    if (!video || !sourceUrl) return;
+    const dispose = watchPlaybackActivity(video, {
+      mixed: enabled && Boolean(chunkUrl),
+      context: () => audioContextRef.current,
+      buffer: ensureBuffered,
+      idle: () => {
+        // Temporary pauses used to prime mixed playback must not abort the
+        // very chunk that playWhenReady is waiting for.
+        if (primingPlayRef.current) stop();
+        else resetTimeline();
+      }
+    });
     return () => {
-      if (timerRef.current) window.clearInterval(timerRef.current);
-      timerRef.current = null;
+      dispose();
       clear();
     };
   }, [enabled, chunkUrl, chunkSeconds, sourceUrl]);
 
   useEffect(() => () => {
+    cancelPlayRequest();
     clear();
-    if (audioContextRef.current?.state !== 'closed') void audioContextRef.current?.close();
+    const context = audioContextRef.current;
+    audioContextRef.current = null;
+    gainNodeRef.current?.disconnect();
+    gainNodeRef.current = null;
+    connectedVideoRef.current = null;
+    if (context && context.state !== 'closed') void context.close().catch(() => {});
   }, []);
 
   return { cancelPlayRequest, clear, ensureBuffered, hasChunk: (index: number) => chunkCacheRef.current.has(index), indexForTime, playWhenReady, primingPlayRef, resetTimeline, restart, stop };

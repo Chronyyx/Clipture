@@ -1,4 +1,6 @@
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from 'react';
+import { useLayoutEffect } from 'react';
+import { unloadVideo } from './videoLifetime';
 import type { MixedAudioPlayback } from './useMixedAudioPlayback';
 import type { PlayerInteractions } from './usePlayerInteractions';
 import { PlayerControls } from './PlayerControls';
@@ -43,6 +45,26 @@ export function PlayerVideoSurface({
   setDuration,
   setVolume
 }: PlayerVideoSurfaceProps) {
+  useLayoutEffect(() => {
+    // Capture the element: React clears object refs before passive cleanup.
+    const video = videoRef.current;
+    if (!video) return;
+    playbackRequestedRef.current = true;
+    const stopPlayback = () => {
+      playbackRequestedRef.current = false;
+      mixed.cancelPlayRequest();
+      mixed.clear();
+      video.pause();
+    };
+    const onVisibility = () => { if (document.hidden) stopPlayback(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      stopPlayback();
+      unloadVideo(video);
+    };
+  }, [sourceUrl]);
+
   return (
     <div
       className={'custom-video-shell ' + (interactions.controlsVisible ? '' : 'controls-hidden')}

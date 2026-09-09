@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.5.1] - 2026-09-09
+
+### Themed Installer, Player Lifetime & Visual Identity
+
+- **Themed NSIS Installer & Setup Customization:** Replaced generic installer chrome with a customized silver and graphite field-recorder visual theme, featuring high-resolution 4x bitmap artwork, GDI halftone scaling, custom typography, and an interactive startup registration page.
+- **Clean Electron Startup Migration:** Automatically cleans up legacy Electron Run registry entries (`electron.app.Clipture` and `app.clipture.desktop`) upon installation or launch while synchronizing the canonical `startOnLogin` startup preference.
+- **Player Resource Lifetime & Memory Optimization:** Implemented strict unmount disposal for HTML5 video elements, resetting decoders and releasing buffer memory when navigating away from the player. Web Audio graphs are now allocated lazily only for volume boost or mixed audio tracks, and audio polling timers suspend during pause or backgrounding.
+- **Instant Window Presentation:** The main UI window initializes hidden with a native dark background and empty caption, revealing only after authoritative settings, appearance styles, and themes have fully loaded—eliminating startup flash.
+- **New Brand Identity & High-Resolution Icon:** Introduced a transparent master render for the hardware recorder body and updated high-resolution application icons (`icon.ico`, `clipture-logo-ui.png`), along with targeted Windows shortcut notifications on installation (`icon-refresh.nsh`).
+- **Diagnostics Refresh Resilience:** Hardened diagnostics snapshot recovery, avoiding stale telemetry while handling background save timeouts gracefully.
+
 ## [1.5.0] - 2026-09-08
 
 ### Native Tauri 2 Architecture & Ultra-Low Footprint

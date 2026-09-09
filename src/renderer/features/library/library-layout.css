@@ -171,7 +171,7 @@
 
 .player.panel:not(.library-player) {
   border: 0;
-  border-radius: 0;
+  border-radius: 14px;
   background: transparent;
 }
 
@@ -191,7 +191,7 @@
   min-height: 0;
   overflow: hidden;
   border: 0;
-  border-radius: 0;
+  border-radius: 14px;
   background: transparent;
 }
 
@@ -544,7 +544,6 @@
 }
 
 :root[data-theme="glitten"] .library-player {
-  border-radius: 1px;
   background: transparent;
 }
 
@@ -603,4 +602,3 @@
     padding-left: 10px;
   }
 }
-

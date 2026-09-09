@@ -12,6 +12,10 @@ The test reads source and fixtures only. It does not import Electron, start the 
 
 ## Semantics
 
+Diagnostics adapter refresh failures reject instead of synthesizing an offline
+engine. The UI retains the last received snapshot with an explicit delayed/stale
+label until polling recovers. Actual degraded/offline snapshots still replace it.
+
 - `invoke` operations return a promise and exactly one result or rejection.
 - `send` operations are deliberately fire-and-forget.
 - `event` registrations synchronously return an idempotent unsubscribe function.

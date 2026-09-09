@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- cooler silver / stone taupe, less beige -->
+    <linearGradient id="bodyGrad" x1="0" y1="0" x2="0.12" y2="1">
+      <stop offset="0%" stop-color="#d6d5d1"/>
+      <stop offset="48%" stop-color="#cccac5"/>
+      <stop offset="100%" stop-color="#bebcb7"/>
+    </linearGradient>
+
+    <linearGradient id="dialGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#343434"/>
+      <stop offset="100%" stop-color="#181818"/>
+    </linearGradient>
+
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="9" stdDeviation="11"
+                    flood-color="#000" flood-opacity="0.13"/>
+    </filter>
+
+    <clipPath id="dialClip">
+      <circle cx="612" cy="514" r="211"/>
+    </clipPath>
+  </defs>
+
+  <!-- transparent canvas -->
+
+  <!-- slightly squarer body to match the reference proportions -->
+  <g filter="url(#softShadow)">
+    <rect x="97" y="108" width="830" height="808" rx="84"
+          fill="url(#bodyGrad)"
+          stroke="#8c8a85" stroke-width="2.2"/>
+  </g>
+
+  <!-- left/right panel seam -->
+  <line x1="340" y1="108" x2="340" y2="916"
+        stroke="#908e89" stroke-width="2"/>
+
+  <!-- CLIPTURE: slightly larger, right-aligned toward the seam -->
+  <text x="319" y="201"
+        text-anchor="end"
+        font-family="Helvetica Neue, Arial, sans-serif"
+        font-size="33"
+        font-weight="300"
+        letter-spacing="0.55"
+        fill="#1b1b1b">CLIPTURE</text>
+
+  <!-- slot closer to the outer edge -->
+  <line x1="139" y1="374" x2="161" y2="374" stroke="#55534f" stroke-width="2"/>
+  <rect x="142.5" y="404" width="15" height="150" rx="7.5" fill="#111"/>
+  <line x1="139" y1="584" x2="161" y2="584" stroke="#55534f" stroke-width="2"/>
+
+  <!-- orange status light -->
+  <circle cx="866" cy="202" r="23" fill="#ff6a00"/>
+
+  <!-- larger shutter, shifted slightly left within the right panel -->
+  <circle cx="612" cy="514" r="226" fill="#dfddd8"/>
+  <circle cx="612" cy="514" r="211"
+          fill="url(#dialGrad)"
+          stroke="#101010" stroke-width="3"/>
+
+  <!-- exactly two shutter divider lines, fully clipped inside dial -->
+  <g clip-path="url(#dialClip)">
+    <line x1="475" y1="322" x2="579" y2="468"
+          stroke="#0c0c0c" stroke-width="4"
+          stroke-linecap="round"/>
+    <line x1="645" y1="556" x2="775" y2="738"
+          stroke="#0c0c0c" stroke-width="4"
+          stroke-linecap="round"/>
+  </g>
+
+  <!-- hub -->
+  <circle cx="612" cy="514" r="57"
+          fill="#252525" stroke="#0a0a0a" stroke-width="2"/>
+  <circle cx="612" cy="514" r="9" fill="#090909"/>
+
+  <!-- vent grid -->
+  <g fill="#101010">
+    <circle cx="828" cy="817" r="8"/>
+    <circle cx="854" cy="817" r="8"/>
+    <circle cx="880" cy="817" r="8"/>
+    <circle cx="828" cy="843" r="8"/>
+    <circle cx="854" cy="843" r="8"/>
+    <circle cx="880" cy="843" r="8"/>
+    <circle cx="828" cy="869" r="8"/>
+    <circle cx="854" cy="869" r="8"/>
+    <circle cx="880" cy="869" r="8"/>
+  </g>
+</svg>

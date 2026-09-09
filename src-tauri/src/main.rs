@@ -4,5 +4,8 @@ fn main() {
     if let Some(code) = clipture_lib::migration::installer_command() {
         std::process::exit(code);
     }
+    if let Some(code) = clipture_lib::installer_startup_command() {
+        std::process::exit(code);
+    }
     clipture_lib::run();
 }

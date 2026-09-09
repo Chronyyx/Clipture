@@ -21,6 +21,23 @@ On demand only:
 
 The controller, not the renderer, owns durable application state. Opening a UI window requests a fresh snapshot and subscribes to events. Destroying that window cannot cancel a capture or save.
 
+## Visible UI versus playback resources
+
+Settings, library and player share one UI WebView; a WebView process remaining
+while Settings is visible is expected, not evidence of a second player window.
+Navigation unmounts the player. Its video element is explicitly paused, detached
+from its source and reset with `load()` so decoder/network buffers can be released.
+Mixed-audio requests, queued prefetches, timers and audio-context references are
+cleared on disposal. Normal-volume playback uses native media audio; Web Audio is
+allocated only for mixed tracks or volume boost. The mixed scheduler runs only
+during playback, and hidden-document playback pauses without automatic resume.
+
+The performance-analysis pass verified the one-UI-process ownership and added
+`node scripts/migration/test-player-lifetime.cjs` for resource lifetime regressions.
+These tests establish behavior, not a measured RAM saving on the installed app.
+Do not suspend the visible Settings WebView or lower the capture engine's priority
+to address UI memory. Closing the application window still destroys the UI worker.
+
 ## Migration state
 
 Tauri is the default development, launch and package path. Both hosts implement
@@ -57,6 +74,11 @@ The native engine boundary is already host-neutral: one JSON object per line on 
 5. When the user opens Clipture, the controller starts one disposable UI worker
    and supplies snapshots through private, versioned, bounded pipes. The worker
    creates the WebView but never acquires durable service ownership.
+   The main window starts hidden, with a dark fallback background and an empty
+   native caption. Renderer bootstrap loads the authoritative settings and
+   applies appearance before mounting React, then reveals the committed UI via
+   the platform presentation adapter. Repeated Open requests cannot reveal a
+   still-loading window. Settings failure shows a themed retry screen.
 6. Playback uses an opaque, short-lived media session. Renderer-provided arbitrary paths never become open loopback URLs.
 
 ## Source boundaries

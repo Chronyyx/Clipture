@@ -1,4 +1,6 @@
 pub mod autostart;
+#[cfg(windows)]
+pub(crate) mod installer_startup;
 mod background;
 #[cfg(all(debug_assertions, windows))]
 mod capture_smoke;
@@ -7,6 +9,7 @@ mod hotkeys;
 mod smoke;
 mod tray;
 pub(crate) mod ui_process;
+pub(crate) mod window_appearance;
 pub mod windows;
 
 use std::sync::Arc;

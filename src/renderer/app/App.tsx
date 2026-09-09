@@ -1,8 +1,8 @@
 import { Activity, Download, Library, Save, SlidersHorizontal } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 // @ts-ignore
-import logoUrl from "../../../assets/svgviewer-output.svg";
-import type { ClipRecord } from "../../shared/types";
+import logoUrl from "../../../assets/clipture-logo-ui.png";
+import type { ClipRecord, ClipSettings } from "../../shared/types";
 import { useCaptureActions } from "../features/capture";
 import { DiagnosticsView, useDiagnostics } from "../features/diagnostics";
 import { LibraryView, useClipLibrary } from "../features/library";
@@ -12,7 +12,7 @@ import { TitlebarUpdateControls, useUpdates } from "../features/updates";
 type Tab = "library" | "settings" | "diagnostics";
 type AppNotice = { message: string; tab?: Tab; durationMs: number };
 
-export function App() {
+export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
   const [activeTab, setActiveTab] = useState<Tab>("library");
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState<AppNotice>();
@@ -29,11 +29,17 @@ export function App() {
     setNotice({ message, durationMs }), []);
   const { clips, addClip, importVideos: importFolders } = useClipLibrary(libraryNotice);
   const { settings, clipSounds, updateSettings, previewClipSound, importClipSound,
-    revealSounds, refreshPreferences } = useClipPreferences(settingsNotice);
-  const { diagnostics, exportDiagnostics, isExportingDiagnostics } = useDiagnostics(diagnosticsNotice);
+    revealSounds, refreshPreferences } = useClipPreferences(settingsNotice, initialSettings);
+  const { diagnostics, diagnosticsError, hasDiagnostics, exportDiagnostics, isExportingDiagnostics } = useDiagnostics(diagnosticsNotice);
   const { saveClip, isSavingClip, saveIoAnalyzer, toggleSaveIoAnalyzer } =
     useCaptureActions(settings, addClip, saveNotice, diagnosticsNotice);
   const { updateState, checkForUpdatesNow, downloadUpdate, installUpdate } = useUpdates(globalNotice);
+  const updateControls = <TitlebarUpdateControls
+    updateState={updateState}
+    onCheck={() => void checkForUpdatesNow()}
+    onDownload={() => void downloadUpdate()}
+    onInstall={installUpdate}
+  />;
 
   useEffect(() => {
     if (!notice) return;
@@ -51,12 +57,6 @@ export function App() {
   return (
     <div className="app-shell">
       <div className="titlebar-drag-region" aria-hidden="true" />
-      <TitlebarUpdateControls 
-            updateState={updateState} 
-            onCheck={() => void checkForUpdatesNow()} 
-            onDownload={() => void downloadUpdate()}
-            onInstall={installUpdate} 
-          />
       <aside className="sidebar">
         <div className="brand">
           <img src={logoUrl} alt="Clipture" className="mark" />
@@ -73,11 +73,11 @@ export function App() {
         <button className={activeTab === "diagnostics" ? "nav active" : "nav"} onClick={() => setActiveTab("diagnostics")}>
           <Activity size={18} /> Diagnostics
         </button>
-        <div className={diagnostics.degraded ? "encoder degraded" : "encoder"}>
+        <div className={`encoder${hasDiagnostics && diagnostics.degraded ? " degraded" : ""}${diagnosticsError ? " delayed" : ""}`} title={diagnosticsError}>
           <span>Encoder</span>
-          <strong>{diagnostics.activeEncoder}</strong>
-          <small>{diagnostics.encoderMode}</small>
-          <small>{diagnostics.gpu}</small>
+          <strong>{hasDiagnostics ? diagnostics.activeEncoder : diagnosticsError ? "Waiting for engine" : "Connecting…"}</strong>
+          {hasDiagnostics && <><small>{diagnostics.encoderMode}</small><small>{diagnostics.gpu}</small></>}
+          {diagnosticsError && <small className="encoder-refresh-status">{hasDiagnostics ? "Status delayed · last known details" : "Waiting for diagnostics"}</small>}
         </div>
       </aside>
 
@@ -89,9 +89,12 @@ export function App() {
               {activeTab === "diagnostics" && <p>{diagnostics.status}</p>}
             </div>
             <div className="topbar-actions">
-              <button className="primary" onClick={saveClip} disabled={isSavingClip}>
-                <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${settings?.clipLengthSeconds ?? 30}s`}
-              </button>
+              <div className="save-actions">
+                {updateControls}
+                <button className="primary" onClick={saveClip} disabled={isSavingClip}>
+                  <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${settings?.clipLengthSeconds ?? 30}s`}
+                </button>
+              </div>
               {activeTab === "diagnostics" && (
                 <button
                   className="secondary-button"
@@ -119,6 +122,7 @@ export function App() {
         )}
         {activeTab === "library" && (
           <LibraryView
+            headerControls={updateControls}
             clips={clips}
             query={query}
             setQuery={setQuery}
@@ -141,7 +145,10 @@ export function App() {
             onRevealSounds={revealSounds}
           />
         )}
-        {activeTab === "diagnostics" && <DiagnosticsView diagnostics={diagnostics} />}
+        {activeTab === "diagnostics" && <>
+          {diagnosticsError && <div className="notice" role="status">Diagnostics refresh delayed. {hasDiagnostics ? "Values below are the last received snapshot, not live readings." : "No snapshot received yet."} {diagnosticsError}</div>}
+          <DiagnosticsView diagnostics={diagnostics} />
+        </>}
       </main>
     </div>
   );

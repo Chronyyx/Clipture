@@ -1,5 +1,5 @@
 import type { CliptureApi } from '../../shared/types';
-import { diagnosticsUnavailable, mergeDiagnostics } from './diagnostics';
+import { mergeDiagnostics } from './diagnostics';
 import { HostCapabilityError } from './hostError';
 import { preserveSaveResult } from './save-result';
 
@@ -15,12 +15,6 @@ export function createElectronAdapter(bridge: CliptureApi = window.clipture): Cl
   return {
     ...bridge,
     saveClip: async durationSeconds => preserveSaveResult(await bridge.saveClip(durationSeconds)),
-    getDiagnostics: async () => {
-      try {
-        return mergeDiagnostics(await bridge.getDiagnostics());
-      } catch (error) {
-        return diagnosticsUnavailable(error);
-      }
-    }
+    getDiagnostics: async () => mergeDiagnostics(await bridge.getDiagnostics())
   };
 }

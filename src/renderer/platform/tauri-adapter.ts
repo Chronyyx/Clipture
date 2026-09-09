@@ -13,7 +13,7 @@ import type {
   ThemeFontId,
   UpdateState
 } from '../../shared/types';
-import { diagnosticsUnavailable, mergeDiagnostics } from './diagnostics';
+import { mergeDiagnostics } from './diagnostics';
 import { HostCapabilityError } from './hostError';
 import { preserveSaveResult } from './save-result';
 import { subscribeToTauriEvent } from './tauri-events';
@@ -79,13 +79,7 @@ export function hasTauriRuntime(): boolean {
 
 export function createTauriAdapter(): CliptureApi {
   return {
-    getDiagnostics: async () => {
-      try {
-        return mergeDiagnostics(await call<Partial<EngineDiagnostics>>('getDiagnostics'));
-      } catch (error) {
-        return diagnosticsUnavailable(error);
-      }
-    },
+    getDiagnostics: async () => mergeDiagnostics(await call<Partial<EngineDiagnostics>>('getDiagnostics')),
     exportDiagnostics: () => call<string | undefined>('exportDiagnostics'),
     getSaveIoAnalyzerState: () => call<SaveIoAnalyzerState>('getSaveIoAnalyzerState'),
     setSaveIoAnalyzerArmed: (armed) => call<SaveIoAnalyzerState>('setSaveIoAnalyzerArmed', { armed }),

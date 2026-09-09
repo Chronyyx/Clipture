@@ -19,7 +19,17 @@ function stage() {
   for (const file of files) {
     const destination = path.join(output, file);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.copyFileSync(path.join(source, file), destination);
+    try {
+      fs.copyFileSync(path.join(source, file), destination);
+    } catch (err) {
+      if (err.code === 'EBUSY' || err.code === 'EPERM') {
+        throw new Error(
+          `Unable to copy "${file}" to "${destination}" (${err.code}: resource busy or locked).\n` +
+          `Clipture is likely running in the background. Please close Clipture from the system tray or Task Manager and retry.`
+        );
+      }
+      throw err;
+    }
   }
   console.log(`Tauri runtime staged at ${output} (${files.length} files; no Node or Electron).`);
 }

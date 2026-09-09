@@ -1,0 +1,29 @@
+/* Static radial washes: no animation, filters, extra elements or render loop.
+   Keep light/custom palettes untouched and sticky headers opaque. */
+:root:is([data-theme="graphite"], :not([data-theme])) {
+  --ambient-top: rgb(178 129 79 / 13%);
+  --ambient-side: rgb(127 106 85 / 6%);
+}
+
+:root[data-theme="milate"] {
+  --ambient-top: rgb(240 211 135 / 13%);
+  --ambient-side: rgb(206 162 91 / 8%);
+}
+
+:root:is([data-theme="graphite"], [data-theme="milate"], :not([data-theme])) .workspace {
+  background:
+    radial-gradient(ellipse 75% 480px at 65% 0, var(--ambient-top), transparent 80%),
+    radial-gradient(ellipse 55% 600px at 100% 60%, var(--ambient-side), transparent 85%);
+}
+
+:root:is([data-theme="graphite"], [data-theme="milate"], :not([data-theme])) .library-top {
+  background:
+    radial-gradient(ellipse 75% 480px at 65% 0, var(--ambient-top), transparent 80%),
+    var(--app-bg);
+  box-shadow: none;
+}
+
+.theme-preview.graphite .theme-preview-sidebar { background: #0d0d0c; }
+.theme-preview.graphite .theme-preview-content { background: radial-gradient(ellipse at top right, #342a20, #111110); }
+.theme-preview.graphite .theme-preview-line { background: #3c3c37; }
+.theme-preview.graphite .theme-preview-button { background: #e8e6df; }

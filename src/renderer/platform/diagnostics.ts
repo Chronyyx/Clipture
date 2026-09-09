@@ -1,12 +1,6 @@
 import type { EngineDiagnostics } from "../../shared/types";
 import { defaultDiagnostics } from "../shared/diagnostics/defaultDiagnostics";
 
-function messageFrom(error: unknown) {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return "The native capture engine is unavailable.";
-}
-
 /**
  * Older engines and the Tauri migration host can legitimately report only the
  * diagnostics fields they know. Keep rendering deterministic while that
@@ -24,14 +18,4 @@ export function mergeDiagnostics(value: unknown): EngineDiagnostics {
       buckets: partial.lastClipCadence?.buckets ?? defaultDiagnostics.lastClipCadence.buckets
     }
   };
-}
-
-export function diagnosticsUnavailable(error: unknown): EngineDiagnostics {
-  return mergeDiagnostics({
-    degraded: true,
-    engineRunning: false,
-    activeEncoder: "Unavailable",
-    encoderMode: "Unavailable",
-    status: messageFrom(error)
-  });
 }

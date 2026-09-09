@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 import { clipture } from '../../platform';
-import { defaultDiagnostics } from '../../shared/diagnostics/defaultDiagnostics';
+import { diagnosticsSnapshot, initialDiagnosticsSnapshot } from './diagnosticsSnapshot';
 
 export function useDiagnostics(onNotice: (message: string, durationMs?: number) => void) {
-  const [diagnostics, setDiagnostics] = useState(defaultDiagnostics);
+  const [snapshot, dispatch] = useReducer(diagnosticsSnapshot, initialDiagnosticsSnapshot);
   const [isExportingDiagnostics, setIsExportingDiagnostics] = useState(false);
   useEffect(() => {
     let active = true;
@@ -13,8 +13,10 @@ export function useDiagnostics(onNotice: (message: string, durationMs?: number) 
       pending = true;
       try {
         const next = await clipture.getDiagnostics();
-        if (active) setDiagnostics(next);
-      } catch (error) { console.warn('Could not refresh diagnostics:', error); }
+        if (active) dispatch({ type: 'received', diagnostics: next });
+      } catch (error) {
+        if (active) dispatch({ type: 'delayed', error });
+      }
       finally { pending = false; }
     };
     void refresh();
@@ -32,5 +34,6 @@ export function useDiagnostics(onNotice: (message: string, durationMs?: number) 
       onNotice(error instanceof Error ? error.message : 'Could not export diagnostics.', 6000);
     } finally { setIsExportingDiagnostics(false); }
   }
-  return { diagnostics, exportDiagnostics, isExportingDiagnostics };
+  return { diagnostics: snapshot.diagnostics, diagnosticsError: snapshot.error,
+    hasDiagnostics: snapshot.received, exportDiagnostics, isExportingDiagnostics };
 }

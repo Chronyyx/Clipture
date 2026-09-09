@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "source": "src/shared/types.ts#CliptureApi",
   "operations": [
-    { "method": "getDiagnostics", "transport": "invoke", "channel": "engine:getDiagnostics" },
+    { "method": "getDiagnostics", "transport": "invoke", "channel": "engine:getDiagnostics", "adapterFailure": "reject-without-fabricating-engine-state" },
     { "method": "exportDiagnostics", "transport": "invoke", "channel": "engine:exportDiagnostics" },
     { "method": "getSaveIoAnalyzerState", "transport": "invoke", "channel": "engine:getSaveIoAnalyzerState" },
     { "method": "setSaveIoAnalyzerArmed", "transport": "invoke", "channel": "engine:setSaveIoAnalyzerArmed" },

@@ -9,6 +9,10 @@ pub fn open_main(app: &AppHandle) -> AppResult<()> {
         return super::ui_process::open(app);
     }
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        // The renderer reveals the window after its initial theme/DOM commit.
+        if !window.is_visible()? {
+            return Ok(());
+        }
         if window.is_minimized()? {
             window.unminimize()?;
         }
@@ -19,10 +23,11 @@ pub fn open_main(app: &AppHandle) -> AppResult<()> {
 
     let builder =
         WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
-            .title("Clipture")
+            .title("")
+            .background_color(tauri::webview::Color(17, 17, 16, 255))
             .inner_size(1240.0, 780.0)
             .min_inner_size(980.0, 640.0)
-            .visible(true)
+            .visible(false)
             .on_page_load(|window, payload| {
                 #[cfg(debug_assertions)]
                 if payload.event() == tauri::webview::PageLoadEvent::Finished {
@@ -34,7 +39,8 @@ pub fn open_main(app: &AppHandle) -> AppResult<()> {
     #[cfg(debug_assertions)]
     let builder = super::smoke::prepare_window(builder, app);
     let window = builder.build()?;
-    window.set_focus()?;
+    super::window_appearance::watch(&window);
+    super::window_appearance::apply(&window, &app.state::<AppState>().settings.get());
     let _ = window.emit("host://ready", ());
     Ok(())
 }

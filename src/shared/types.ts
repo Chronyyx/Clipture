@@ -561,6 +561,8 @@ export interface ActiveProcess {
 }
 
 export interface CliptureApi {
+  /** Refresh failures reject; adapters must not fabricate an offline engine
+   * snapshot. A received degraded snapshot remains authoritative. */
   getDiagnostics(): Promise<EngineDiagnostics>;
   exportDiagnostics(): Promise<string | undefined>;
   getSaveIoAnalyzerState(): Promise<SaveIoAnalyzerState>;

@@ -3,10 +3,10 @@ import type { ClipSettings, ClipSoundOption } from '../../../shared/types';
 import { clipture } from '../../platform';
 import { cacheAndApplyUiTheme } from '../../theme';
 
-export function useClipPreferences(onNotice: (message: string, durationMs?: number) => void) {
-  const [settings, setSettings] = useState<ClipSettings>();
+export function useClipPreferences(onNotice: (message: string, durationMs?: number) => void, initialSettings?: ClipSettings) {
+  const [settings, setSettings] = useState<ClipSettings | undefined>(initialSettings);
   const [clipSounds, setClipSounds] = useState<ClipSoundOption[]>([]);
-  const current = useRef<ClipSettings>();
+  const current = useRef<ClipSettings | undefined>(initialSettings);
   const soundUrls = useRef<Record<string, string>>({});
   const writes = useRef<Promise<void>>(Promise.resolve());
   const reportError = useCallback((error: unknown) => {

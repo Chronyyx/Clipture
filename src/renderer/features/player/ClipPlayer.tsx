@@ -87,7 +87,7 @@ export function ClipPlayer({
 
     return () => {
       active = false;
-      void clipture.releasePlaybackCache();
+      void clipture.releasePlaybackCache().catch(error => console.warn('Playback release failed:', error));
     };
   }, [clip.audioTracks, clip.filePath]);
 

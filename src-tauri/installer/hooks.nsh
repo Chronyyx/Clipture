@@ -1,7 +1,76 @@
 ; Keep compatibility glue separate from the pinned upstream installer template.
+!include "${__FILEDIR__}\theme.nsh"
+!include "${__FILEDIR__}\icon-refresh.nsh"
 Var CliptureRequestedDirectory
 Var CliptureLegacyDirectory
 Var CliptureLegacyScope
+Var CliptureStartupCheckbox
+Var CliptureStartupChoice
+
+!macro CLIPTURE_STARTUP_PAGE
+  Page custom CliptureStartupPage CliptureStartupLeave
+
+  Function CliptureStartupPage
+    ${If} ${Silent}
+    ${OrIf} $PassiveMode = 1
+    ${OrIf} $UpdateMode = 1
+      Abort
+    ${EndIf}
+    !insertmacro MUI_HEADER_TEXT "Startup options" "Choose how Clipture starts with Windows."
+    nsDialogs::Create 1018
+    Pop $0
+    ${If} $0 == error
+      Abort
+    ${EndIf}
+    SetCtlColors $0 "272824" "F0F0EB"
+    ${If} $CliptureStartupChoice == ""
+      StrCpy $CliptureStartupChoice ${BST_CHECKED}
+    ${EndIf}
+    ${NSD_CreateCheckbox} 0 12u 100% 18u "Start Clipture with Windows"
+    Pop $CliptureStartupCheckbox
+    SetCtlColors $CliptureStartupCheckbox "272824" "F0F0EB"
+    ${NSD_SetState} $CliptureStartupCheckbox $CliptureStartupChoice
+    ${NSD_CreateLabel} 0 38u 100% 36u "Start quietly in the system tray when you sign in. You can change this later in Clipture settings."
+    Pop $0
+    SetCtlColors $0 "65675E" "F0F0EB"
+    nsDialogs::Show
+  FunctionEnd
+
+  Function CliptureStartupLeave
+    ${NSD_GetState} $CliptureStartupCheckbox $CliptureStartupChoice
+  FunctionEnd
+!macroend
+
+!macro CLIPTURE_FINISH_SETUP
+  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE CliptureFinishLeave
+!macroend
+
+!macro CLIPTURE_FINISH_ACTION
+  Function CliptureFinishLeave
+    ; No choice was shown during silent/passive updates: keep user preferences.
+    ${If} $CliptureStartupChoice == ""
+      Return
+    ${EndIf}
+    StrCpy $0 "false"
+    ${If} $CliptureStartupChoice == ${BST_CHECKED}
+      StrCpy $0 "true"
+    ${EndIf}
+    StrCpy $1 "--installer-startup $0"
+    ${NSD_GetState} $mui.FinishPage.Run $2
+    ${If} $2 == ${BST_CHECKED}
+      StrCpy $1 "$1 --launch"
+    ${EndIf}
+    ; One unelevated process saves the choice, registers startup, then optionally
+    ; launches. This avoids racing a separate helper against the first app run.
+    nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$1"
+    Pop $0
+    ${If} $0 != 0
+      MessageBox MB_ICONSTOP|MB_OK "Could not apply the startup option. Please try Finish again."
+      Abort
+    ${EndIf}
+    ${NSD_Uncheck} $mui.FinishPage.Run
+  FunctionEnd
+!macroend
 
 !macro CLIPTURE_INIT_BEGIN
   StrCpy $CliptureRequestedDirectory ""
@@ -85,6 +154,7 @@ Var CliptureLegacyScope
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  !insertmacro CLIPTURE_REFRESH_ICONS
   ; Electron's updater uses --force-run; Tauri's installer normally uses /R.
   ${If} ${Silent}
     ClearErrors

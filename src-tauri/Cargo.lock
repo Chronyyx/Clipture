@@ -487,8 +487,9 @@ dependencies = [
 
 [[package]]
 name = "clipture"
-version = "1.4.2"
+version = "1.5.1"
 dependencies = [
+ "auto-launch",
  "base64 0.22.1",
  "dirs 6.0.0",
  "minisign-verify",
@@ -511,6 +512,7 @@ dependencies = [
  "tracing-subscriber",
  "webview2-com",
  "windows",
+ "winreg 0.55.0",
 ]
 
 [[package]]

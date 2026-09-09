@@ -6,10 +6,6 @@ body,
   background: var(--app-bg);
 }
 
-.app-shell::before {
-  background: var(--app-bg);
-}
-
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar);
   background-clip: padding-box;
@@ -318,4 +314,3 @@ input[type="checkbox"].toggle-switch:checked {
 input[type="checkbox"].toggle-switch:focus-visible {
   box-shadow: 0 0 0 2px var(--selection-ring);
 }
-

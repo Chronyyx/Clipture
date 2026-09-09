@@ -3592,8 +3592,8 @@ function showMainWindow(): void {
 
 function createTray(): void {
   const icoPath = resolveAssetPath("icon.ico");
-  const svgPath = resolveAssetPath("svgviewer-output.svg");
-  const iconSource = icoPath || svgPath;
+  const pngPath = resolveAssetPath("clipture-logo-ui.png");
+  const iconSource = icoPath || pngPath;
   const loadedIcon = iconSource ? nativeImage.createFromPath(iconSource) : nativeImage.createEmpty();
   const icon = loadedIcon.isEmpty() ? loadedIcon : loadedIcon.resize({ width: 16, height: 16 });
   icon.setTemplateImage(false);

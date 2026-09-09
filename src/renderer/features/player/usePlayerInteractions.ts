@@ -237,6 +237,7 @@ export function usePlayerInteractions({
       document.removeEventListener('visibilitychange', stopFastHold);
       if (controlsTimeoutRef.current) window.clearTimeout(controlsTimeoutRef.current);
       if (clickTimeoutRef.current) window.clearTimeout(clickTimeoutRef.current);
+      if (holdTimeoutRef.current) window.clearTimeout(holdTimeoutRef.current);
     };
   }, []);
 

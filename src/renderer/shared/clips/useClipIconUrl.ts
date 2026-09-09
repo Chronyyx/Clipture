@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 // @ts-ignore
-import logoUrl from "../../../../assets/svgviewer-output.svg";
+import logoUrl from "../../../../assets/clipture-logo-ui.png";
 import type { ClipRecord } from "../../../shared/types";
 import { clipture } from "../../platform/cliptureClient";
 

@@ -1,0 +1,115 @@
+/* Default theme: warm, restrained desktop surfaces inspired by the references.
+   Scoped so Light, Glitten, Milate and custom themes retain their own design. */
+:root:is([data-theme="graphite"], :not([data-theme])) {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", sans-serif;
+  --app-bg: #111110;
+  --sidebar-bg: #0d0d0c;
+  --surface: #191918;
+  --surface-deep: #121211;
+  --surface-row: #171716;
+  --surface-control: #20201e;
+  --surface-hover: #2a2a27;
+  --surface-active: #30302c;
+  --surface-video: #080808;
+  --border: #292926;
+  --border-strong: #3c3c37;
+  --text: #e9e8e3;
+  --text-strong: #f7f6f2;
+  --text-muted: #aaa79e;
+  --text-subtle: #858278;
+  --icon: #c6c3b9;
+  --accent: #c3a27c;
+  --accent-hover: #d4b792;
+  --accent-soft: #29251f;
+  --accent-border: #61513f;
+  --accent-text: #dfc6a7;
+  --on-accent: #171511;
+  --primary-bg: #e8e6df;
+  --primary-text: #181816;
+  --selection: #c3a27c;
+  --selection-ring: rgb(195 162 124 / 35%);
+  --toggle-on: #34c759;
+  --scrollbar: #3a3a36;
+  --scrollbar-hover: #52524b;
+  --scrollbar-active: #727268;
+  --shadow: rgb(0 0 0 / 22%);
+  -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme="graphite"] .sidebar {
+  padding: 28px 16px 20px;
+}
+
+:root[data-theme="graphite"] .brand {
+  gap: 10px;
+  margin-bottom: 30px;
+  padding: 0 8px;
+  font-size: 16px;
+  letter-spacing: -0.4px;
+}
+
+:root[data-theme="graphite"] .mark { width: 30px; height: 30px; }
+:root[data-theme="graphite"] .nav { height: 42px; margin-bottom: 4px; border-radius: 9px; font-weight: 500; }
+:root[data-theme="graphite"] .nav.active { background: #292925; }
+:root[data-theme="graphite"] .encoder { border-color: var(--border); border-radius: 12px; gap: 7px; font-size: 12px; }
+:root[data-theme="graphite"] .encoder.degraded { border-color: #a85d5d; }
+
+:root[data-theme="graphite"] :is(h1, .library-title h1) {
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.9px;
+  line-height: 1.2;
+}
+
+:root[data-theme="graphite"] .library-title-icon { display: none; }
+:root[data-theme="graphite"] .library-top { box-shadow: none; gap: 20px; border-color: var(--border); }
+:root[data-theme="graphite"] .library-hero { padding-bottom: 6px; }
+:root[data-theme="graphite"] .primary { height: 40px; padding: 0 20px; border-radius: 999px; font-weight: 600; }
+:root[data-theme="graphite"] .primary:hover:not(:disabled) { background: #fffdf6; }
+:root[data-theme="graphite"] .titlebar-update-button { border-radius: 50%; }
+
+:root[data-theme="graphite"] :is(.library-tabs, .settings-tabs) {
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: #191918;
+}
+
+:root[data-theme="graphite"] :is(.library-tab, .settings-tab) {
+  min-width: 0;
+  min-height: 32px;
+  padding: 7px 18px;
+  border: 0;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+:root[data-theme="graphite"] :is(.library-tab.active, .settings-tab.active) {
+  color: var(--text-strong);
+  background: #343430;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 15%);
+}
+
+:root[data-theme="graphite"] .library-search { min-height: 40px; border-radius: 10px; background: #191918; border-color: var(--border); }
+:root[data-theme="graphite"] .library-search input { min-height: 38px; }
+:root[data-theme="graphite"] .chip { min-height: 30px; padding: 0 13px; border-color: transparent; background: transparent; }
+:root[data-theme="graphite"] .chip:hover { background: var(--surface-hover); color: var(--text); }
+:root[data-theme="graphite"] .chip.active { background: var(--surface-active); color: var(--text-strong); }
+:root[data-theme="graphite"] .clip-grid { gap: 20px; }
+:root[data-theme="graphite"] .clip-card { padding: 10px; border-radius: 14px; background: var(--surface); box-shadow: none; }
+:root[data-theme="graphite"] .clip-card:hover { background: #20201d; border-color: var(--border-strong); }
+:root[data-theme="graphite"] :is(.clip-card.active, .clip-card.selected) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--selection-ring); }
+:root[data-theme="graphite"] .thumbnail-button { border-radius: 9px; border-color: rgb(255 255 255 / 6%); }
+:root[data-theme="graphite"] .duration-badge { font-size: 12px; font-weight: 500; background: rgb(0 0 0 / 70%); }
+:root[data-theme="graphite"] :is(.clip-name, .clip-title) { font-weight: 550; letter-spacing: -0.2px; }
+:root[data-theme="graphite"] :is(.panel, .settings-group) { border-radius: 14px; }
+:root[data-theme="graphite"] .settings-group { gap: 24px; padding: 26px; }
+:root[data-theme="graphite"] :is(input:not([type="range"]):not([type="checkbox"]), select, textarea, .secondary-button, .keybind-button) { border-radius: 8px; }
+:root[data-theme="graphite"] .notice { border-radius: 10px; }
+:root[data-theme="graphite"] :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

@@ -1,5 +1,5 @@
 import { Check, Clapperboard, Save, Search, Trash2, Upload } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ClipRecord, ClipSettings } from "../../../shared/types";
 import { ClipPlayer } from "../player";
 import { clipSourceLabels } from "../../shared/clips/clipMetadata";
@@ -9,6 +9,7 @@ import { LibraryEmptyState } from "./LibraryEmptyState";
 import { clipture } from "../../platform/cliptureClient";
 
 export function LibraryView({
+  headerControls,
   clips,
   query,
   setQuery,
@@ -20,6 +21,7 @@ export function LibraryView({
   isSavingClip,
   clipLengthSeconds
 }: {
+  headerControls?: ReactNode;
   clips: ClipRecord[];
   query: string;
   setQuery: (value: string) => void;
@@ -161,9 +163,12 @@ export function LibraryView({
                 <span className="library-heading-glitten">Clips</span>
               </h1>
             </div>
-            <button className="primary library-save-button" onClick={onSaveClip} disabled={isSavingClip}>
-              <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${clipLengthSeconds}s`}
-            </button>
+            <div className="save-actions">
+              {headerControls}
+              <button className="primary library-save-button" onClick={onSaveClip} disabled={isSavingClip}>
+                <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${clipLengthSeconds}s`}
+              </button>
+            </div>
           </div>
 
           <div className="library-tabs" role="tablist" aria-label="Library sections">

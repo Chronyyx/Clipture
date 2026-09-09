@@ -3,6 +3,5 @@
   "identifier": "main-ui",
   "description": "Minimal core permissions for Clipture's lazily-created local UI.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-show", "core:window:allow-set-focus"]
 }
-

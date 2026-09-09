@@ -44,9 +44,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             let args = args.clone();
             let client = invoke_client.clone();
+            let settings_window = invoke.message.webview().window();
+            let is_settings = command == "get_settings" || command == "save_settings";
             tauri::async_runtime::spawn(async move {
                 match client.invoke(command, args).await {
-                    Ok(value) => invoke.resolver.resolve(value),
+                    Ok(value) => {
+                        if is_settings {
+                            if let Ok(settings) = serde_json::from_value(value.clone()) {
+                                if let Some(window) =
+                                    settings_window.app_handle().get_webview_window("main")
+                                {
+                                    crate::app::window_appearance::apply(&window, &settings);
+                                }
+                            }
+                        }
+                        invoke.resolver.resolve(value)
+                    }
                     Err(error) => invoke.resolver.reject(error),
                 }
             });
@@ -74,20 +87,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 .into(),
             )?;
-            WebviewWindowBuilder::new(application, "main", WebviewUrl::App("index.html".into()))
-                .title("Clipture")
-                .inner_size(1240.0, 780.0)
-                .min_inner_size(980.0, 640.0)
-                .data_directory(webview_directory.clone())
-                .on_page_load(move |window, payload| {
-                    #[cfg(debug_assertions)]
-                    if smoke && payload.event() == tauri::webview::PageLoadEvent::Finished {
-                        let _ = window.eval(include_str!("../smoke.js"));
-                    }
-                    #[cfg(not(debug_assertions))]
-                    let _ = (window, payload, smoke);
-                })
-                .build()?;
+            let window = WebviewWindowBuilder::new(
+                application,
+                "main",
+                WebviewUrl::App("index.html".into()),
+            )
+            .title("")
+            .visible(false)
+            .background_color(tauri::webview::Color(17, 17, 16, 255))
+            .inner_size(1240.0, 780.0)
+            .min_inner_size(980.0, 640.0)
+            .data_directory(webview_directory.clone())
+            .on_page_load(move |window, payload| {
+                #[cfg(debug_assertions)]
+                if smoke && payload.event() == tauri::webview::PageLoadEvent::Finished {
+                    let _ = window.eval(include_str!("../smoke.js"));
+                }
+                #[cfg(not(debug_assertions))]
+                let _ = (window, payload, smoke);
+            })
+            .build()?;
+            crate::app::window_appearance::watch(&window);
             Ok(())
         })
         .on_window_event(move |window, event| {

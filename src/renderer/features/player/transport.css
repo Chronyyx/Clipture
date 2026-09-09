@@ -1,0 +1,174 @@
+/* Field-recorder transport: etched scale, inset display, physical key shapes.
+   Native range inputs retain keyboard, pointer and assistive-tech behavior. */
+.field-transport {
+  --transport-face: #20201f;
+  --transport-key: #292928;
+  --transport-edge: #444441;
+  --transport-ink: #eeeee8;
+  --transport-muted: #aaa9a2;
+  --transport-track: #4c4c47;
+  --transport-fill: #d3d1c7;
+  --transport-marker: #f07836;
+  --transport-highlight: rgb(255 255 255 / 7%);
+  --transport-display: #10120f;
+  --transport-display-ink: #e8ece2;
+  margin: 10px;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 6px 8px;
+  gap: 12px;
+  border: 1px solid var(--transport-edge);
+  border-radius: 8px;
+  color: var(--transport-ink);
+  background: var(--transport-face);
+  box-shadow: inset 0 1px 0 var(--transport-highlight), 0 3px 12px rgb(0 0 0 / 18%);
+}
+
+:root[data-theme="light"] .field-transport {
+  --transport-face: #e5e5e3;
+  --transport-key: #efefed;
+  --transport-edge: #b7b7b2;
+  --transport-ink: #252623;
+  --transport-muted: #62645e;
+  --transport-track: #b7b9b1;
+  --transport-fill: #555951;
+  --transport-marker: #d94d12;
+  --transport-highlight: rgb(255 255 255 / 85%);
+  --transport-display: #c9cbc4;
+  --transport-display-ink: #30332c;
+}
+
+.transport-timeline { display: flex; align-items: center; min-width: 0; gap: 10px; }
+.transport-time {
+  flex: 0 0 auto;
+  min-width: 4ch;
+  color: var(--transport-muted);
+  font: 11px/1.2 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.transport-time:last-child { text-align: right; }
+.transport-scale { position: relative; flex: 1; min-width: 0; height: 28px; }
+.transport-scale::before {
+  content: "";
+  position: absolute;
+  inset: 0 4px 0;
+  pointer-events: none;
+  opacity: 0.65;
+  background:
+    repeating-linear-gradient(to right, var(--transport-muted) 0 1px, transparent 1px 10%) left top / 100% 6px no-repeat,
+    repeating-linear-gradient(to right, var(--transport-track) 0 1px, transparent 1px 2%) left top / 100% 3px no-repeat;
+}
+
+.field-transport .player-scrubber {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.field-transport .player-scrubber::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 0;
+  background: linear-gradient(to right, var(--transport-fill) var(--playback-progress), var(--transport-track) var(--playback-progress));
+}
+
+.field-transport .player-scrubber::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 7px;
+  height: 17px;
+  margin-top: -7px;
+  border: 1px solid var(--transport-face);
+  border-radius: 1px;
+  background: var(--transport-marker);
+}
+
+.field-transport .player-scrubber::-moz-range-track { height: 3px; background: var(--transport-track); }
+.field-transport .player-scrubber::-moz-range-progress { height: 3px; background: var(--transport-fill); }
+.field-transport .player-scrubber::-moz-range-thumb { width: 5px; height: 15px; border: 1px solid var(--transport-face); border-radius: 1px; background: var(--transport-marker); }
+.field-transport .yt-pill {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--transport-edge);
+  border-radius: 4px;
+  color: var(--transport-ink);
+  background: var(--transport-key);
+  backdrop-filter: none;
+  box-shadow: inset 0 1px 0 var(--transport-highlight);
+}
+
+.field-transport .yt-pill.icon-button { width: 38px; height: 34px; padding: 0; }
+.field-transport .yt-pill.icon-button:hover { background: var(--transport-track); }
+.field-transport .yt-pill.icon-button:active { box-shadow: inset 0 1px 3px rgb(0 0 0 / 25%); }
+.field-transport .yt-pill svg { width: 16px; height: 16px; stroke-width: 1.7; }
+.field-transport .yt-pill.transport-playback { padding: 0; gap: 0; }
+.field-transport .transport-play {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 48px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  color: var(--transport-ink);
+  background: transparent;
+}
+.field-transport .transport-play:hover { background: var(--transport-track); }
+.field-transport .transport-play:active { box-shadow: inset 0 1px 3px rgb(0 0 0 / 25%); }
+.field-transport .transport-play svg { fill: currentColor; stroke-width: 1; }
+.field-transport .time-readout {
+  min-width: 0;
+  align-items: center;
+  margin: 4px 6px 4px 0;
+  padding: 6px 11px;
+  border: 1px solid var(--transport-edge);
+  border-radius: 2px;
+  color: var(--transport-display-ink);
+  background: var(--transport-display);
+  font: 11px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  letter-spacing: 0.06em;
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 35%);
+}
+
+.transport-led { width: 5px; height: 5px; border-radius: 50%; background: #64685f; }
+.transport-led.active { background: #f07836; }
+.field-transport .volume-slider { accent-color: var(--transport-fill); }
+.field-transport .transport-mute {
+  display: grid;
+  place-items: center;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  color: var(--transport-ink);
+  background: transparent;
+  cursor: pointer;
+}
+.field-transport .transport-mute:hover { background: var(--transport-key); }
+.field-transport .transport-mute[aria-pressed="true"] { color: var(--transport-marker); }
+.field-transport .transport-mute svg { width: 14px; height: 14px; }
+.field-transport :is(button, input):focus-visible { outline: 2px solid var(--transport-marker); outline-offset: 3px; }
+.custom-video-shell:focus-within .field-transport { opacity: 1; pointer-events: auto; }
+
+@container (max-width: 480px) {
+  .field-transport { margin: 6px; padding: 5px; gap: 7px; }
+  .field-transport .transport-total { display: none; }
+  .field-transport .volume-container { gap: 5px; }
+  .field-transport .volume-container .volume-slider { width: 42px; }
+  .field-transport .transport-timeline { gap: 6px; }
+  .field-transport .transport-play { width: 38px; gap: 6px; }
+  .field-transport .yt-pill.icon-button { width: 32px; }
+}

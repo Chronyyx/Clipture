@@ -1,0 +1,85 @@
+/* Light: white content, silver sidebar and restrained blue desktop controls. */
+:root[data-theme="light"] { -webkit-font-smoothing: antialiased; }
+
+:root[data-theme="light"] .sidebar { padding: 28px 16px 20px; }
+:root[data-theme="light"] .brand { gap: 10px; padding: 0 8px; font-size: 16px; }
+:root[data-theme="light"] .mark { width: 30px; height: 30px; }
+:root[data-theme="light"] .nav { margin-bottom: 4px; border-radius: 5px; font-weight: 500; }
+:root[data-theme="light"] .nav.active { background: #e3e3e7; color: var(--text-strong); }
+:root[data-theme="light"] .encoder { background: transparent; font-size: 12px; }
+
+:root[data-theme="light"] :is(h1, .library-title h1) {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  line-height: 1.2;
+}
+
+:root[data-theme="light"] .library-title-icon { display: none; }
+:root[data-theme="light"] .library-top { box-shadow: none; gap: 20px; }
+:root[data-theme="light"] :is(.primary, .secondary-button, .keybind-button, .titlebar-update-button) {
+  border-radius: 5px;
+  font-weight: 500;
+}
+
+:root[data-theme="light"] .primary {
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: #fff;
+}
+
+:root[data-theme="light"] .primary:hover:not(:disabled) { background: var(--accent-soft); }
+:root[data-theme="light"] .titlebar-update-button { border: 1px solid var(--border-strong); }
+
+:root[data-theme="light"] :is(.library-tabs, .settings-tabs) {
+  width: fit-content;
+  max-width: 100%;
+  gap: 2px;
+  margin: 0;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f0f0f3;
+}
+
+:root[data-theme="light"] :is(.library-tab, .settings-tab) {
+  min-width: 0;
+  min-height: 30px;
+  padding: 6px 18px;
+  border: 0;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+:root[data-theme="light"] :is(.library-tab.active, .settings-tab.active) {
+  color: var(--text-strong);
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+}
+
+:root[data-theme="light"] .library-search { min-height: 36px; border-radius: 5px; }
+:root[data-theme="light"] .library-search input { min-height: 34px; }
+:root[data-theme="light"] .chip { min-height: 30px; border-radius: 5px; padding: 0 12px; }
+:root[data-theme="light"] .chip.active { border-color: var(--border-strong); color: var(--text); background: var(--surface-active); }
+:root[data-theme="light"] .chip:hover:not(.active) { border-color: var(--border-strong); color: var(--text); background: var(--surface-hover); }
+:root[data-theme="light"] .clip-card { border-radius: 8px; background: #fff; box-shadow: none; }
+:root[data-theme="light"] .clip-card:hover { background: #f7f7f9; }
+:root[data-theme="light"] :is(.clip-name, .clip-title) { font-weight: 500; }
+:root[data-theme="light"] .thumbnail-button { border-radius: 5px; }
+:root[data-theme="light"] :is(.settings-group, .panel:not(.player)) { border-radius: 8px; box-shadow: none; }
+:root[data-theme="light"] .settings-group { gap: 26px 24px; padding: 26px; }
+:root[data-theme="light"] :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]), select, textarea) { border-radius: 5px; }
+:root[data-theme="light"] .library-player-sidebar { background: var(--sidebar-bg); }
+:root[data-theme="light"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, var(--sidebar-bg) 88%); }
+:root[data-theme="light"] .library-player-side-title { font-size: 22px; font-weight: 600; line-height: 1.2; }
+:root[data-theme="light"] .clip-rail-item.active { background: var(--surface-active); box-shadow: none; }
+:root[data-theme="light"] .clip-rail-item.active.selected { box-shadow: inset 0 0 0 2px var(--selection-ring); }
+
+/* Preview swatches describe the updated palette even from another theme. */
+.theme-preview.light .theme-preview-sidebar { background: #f3f3f5; }
+.theme-preview.light .theme-preview-content { background: #fff; }
+.theme-preview.light .theme-preview-line { background: #ceced5; }
+.theme-preview.light .theme-preview-button { background: #007aff; }

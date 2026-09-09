@@ -1,6 +1,6 @@
 ; Vendored Tauri CLI 2.11.4 template (MIT OR Apache-2.0).
 ; Source: https://github.com/tauri-apps/tauri/tree/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis
-; Local changes: CLIPTURE_INIT_BEGIN/END calls only; see README.md.
+; Local changes: init, startup, finish and progress-style hooks; see README.md.
 Unicode true
 ManifestDPIAware true
 ; Add in `dpiAwareness` `PerMonitorV2` to manifest for Windows 10 1607+ (note this should not affect lower versions since they should be able to ignore this and pick up `dpiAware` `true` set by `ManifestDPIAware true`)
@@ -402,6 +402,8 @@ Var AppStartMenuFolder
 !insertmacro MUI_PAGE_STARTMENU Application $AppStartMenuFolder
 
 ; 7. Installation page
+!insertmacro CLIPTURE_STARTUP_PAGE
+!insertmacro CLIPTURE_PROGRESS_STYLE ""
 !insertmacro MUI_PAGE_INSTFILES
 
 ; 8. Finish page
@@ -417,7 +419,9 @@ Var AppStartMenuFolder
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_FUNCTION RunMainBinary
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+!insertmacro CLIPTURE_FINISH_SETUP
 !insertmacro MUI_PAGE_FINISH
+!insertmacro CLIPTURE_FINISH_ACTION
 
 Function RunMainBinary
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
@@ -466,6 +470,7 @@ FunctionEnd
 !insertmacro MUI_UNPAGE_CONFIRM
 
 ; 2. Uninstalling Page
+!insertmacro CLIPTURE_PROGRESS_STYLE "un."
 !insertmacro MUI_UNPAGE_INSTFILES
 
 ;Languages

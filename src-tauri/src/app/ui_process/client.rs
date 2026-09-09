@@ -56,6 +56,10 @@ pub fn read(app: AppHandle, client: Arc<Client>) {
             }
             Message::Focus {} => {
                 if let Some(window) = app.get_webview_window("main") {
+                    // Repeated tray clicks must not reveal a half-loaded UI.
+                    if !window.is_visible().unwrap_or(false) {
+                        continue;
+                    }
                     let _ = window.unminimize();
                     let _ = window.show();
                     let _ = window.set_focus();
