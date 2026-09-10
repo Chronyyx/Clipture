@@ -1,6 +1,6 @@
 [package]
 name = "clipture"
-version = "1.5.2"
+version = "1.5.3"
 description = "Low-footprint native host for Clipture"
 authors = ["Clipture"]
 edition = "2021"

@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.3] - 2026-09-10
+
+### WASAPI Loopback Pacing & Audio Sync Stabilization
+
+- **Loopback Silence Scheduling & Grace Period:** Refactored system and process-level WASAPI loopback capture fallback (`LoopbackSilencePolicy.hpp`). An empty poll (`GetNextPacketSize() == 0`) is no longer prematurely treated as silence; synthetic silence packets are only fabricated after a bounded 200 ms delivery grace period (two 100 ms WASAPI client periods).
+- **Audio Timestamp Alignment & Drift Prevention:** Prevents premature silence frames from shifting incoming real audio packets forward in the forward-only timestamp aligner, eliminating cumulative audio desync, artificial gaps, stutter, and intermittent buzzing artifacts on resume.
+- **Dedicated Loopback Silence Test Suite:** Integrated `clipture_loopback_silence` regression suite into CTest covering continuous streams with empty polls, 5–100 ms variable packets, jittered/batched delivery, idle-source advancement, and audio resumption.
+
 ## [1.5.2] - 2026-09-10
 
 ### In-Place Replay Saving & Zero-Copy MP4 Persistence

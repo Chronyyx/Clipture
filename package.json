@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.5.2: In-Place Replay Saving & Zero-Copy MP4 Persistence",
+  "releaseTitle": "Clipture 1.5.3: WASAPI Loopback Pacing & Audio Sync Stabilization",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

@@ -1,6 +1,7 @@
 #include "clipture/AudioCaptureWorker.hpp"
 #include "clipture/AudioProcessSpec.hpp"
 #include "clipture/AudioTimeline.hpp"
+#include "clipture/LoopbackSilencePolicy.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/PcmSampleConverter.hpp"
 #include "clipture/AudioReplayCoordinator.hpp"
@@ -1333,9 +1334,11 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
         }
         if (!capturedPacket) {
             const int64_t wallNow = now100ns();
+            const UINT32 silenceFrames = std::max<UINT32>(1, mixFormat->nSamplesPerSec / 100);
+            const int64_t silenceDuration = static_cast<int64_t>(silenceFrames) * 10'000'000 / mixFormat->nSamplesPerSec;
             int fills = 0;
-            while (running_ && nextPts100ns <= wallNow && fills < 5) {
-                const UINT32 frames = std::max<UINT32>(1, mixFormat->nSamplesPerSec / 100);
+            while (running_ && loopbackSilenceDue(nextPts100ns, wallNow, silenceDuration) && fills < 5) {
+                const UINT32 frames = silenceFrames;
                 EncodedPacket packet;
                 packet.kind = PacketKind::Audio;
                 packet.pts100ns = nextPts100ns;
@@ -1603,9 +1606,11 @@ void AudioCaptureWorker::runProcessLoopbackCaptureSession(
         }
         if (!capturedPacket) {
             const int64_t wallNow = now100ns();
+            const UINT32 silenceFrames = std::max<UINT32>(1, mixFormat->nSamplesPerSec / 100);
+            const int64_t silenceDuration = static_cast<int64_t>(silenceFrames) * 10'000'000 / mixFormat->nSamplesPerSec;
             int fills = 0;
-            while (running_ && !stopRequested->load() && nextPts100ns <= wallNow && fills < 5) {
-                const UINT32 frames = std::max<UINT32>(1, mixFormat->nSamplesPerSec / 100);
+            while (running_ && !stopRequested->load() && loopbackSilenceDue(nextPts100ns, wallNow, silenceDuration) && fills < 5) {
+                const UINT32 frames = silenceFrames;
                 EncodedPacket packet;
                 packet.kind = PacketKind::Audio;
                 packet.pts100ns = nextPts100ns;
