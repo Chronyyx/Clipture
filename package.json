@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.5.1: Themed Installer, Player Lifetime & Visual Identity",
+  "releaseTitle": "Clipture 1.5.2: In-Place Replay Saving & Zero-Copy MP4 Persistence",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

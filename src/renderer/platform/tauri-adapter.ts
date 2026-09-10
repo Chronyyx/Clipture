@@ -16,6 +16,7 @@ import type {
 import { mergeDiagnostics } from './diagnostics';
 import { HostCapabilityError } from './hostError';
 import { preserveSaveResult } from './save-result';
+import { normalizeSaveSettings } from './save-settings';
 import { subscribeToTauriEvent } from './tauri-events';
 
 const commands = {
@@ -83,8 +84,8 @@ export function createTauriAdapter(): CliptureApi {
     exportDiagnostics: () => call<string | undefined>('exportDiagnostics'),
     getSaveIoAnalyzerState: () => call<SaveIoAnalyzerState>('getSaveIoAnalyzerState'),
     setSaveIoAnalyzerArmed: (armed) => call<SaveIoAnalyzerState>('setSaveIoAnalyzerArmed', { armed }),
-    getSettings: () => call<ClipSettings>('getSettings'),
-    saveSettings: (settings) => call<ClipSettings>('saveSettings', { settings }),
+    getSettings: async () => normalizeSaveSettings(await call<ClipSettings>('getSettings')),
+    saveSettings: async settings => normalizeSaveSettings(await call<ClipSettings>('saveSettings', { settings: normalizeSaveSettings(settings) })),
     saveClip: async (durationSeconds) => preserveSaveResult(await call<SaveClipResult>('saveClip', { durationSeconds })),
     listClips: () => call<ClipRecord[]>('listClips'),
     deleteClips: (ids) => call<boolean>('deleteClips', { ids }),

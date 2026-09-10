@@ -115,11 +115,6 @@ void respond(int id, const std::string& payload) {
     std::cout << "{\"id\":" << id << ",\"payload\":" << payload << "}" << std::endl;
 }
 
-void respondError(int id, const std::string& error) {
-    std::lock_guard lock(outputMutex);
-    std::cout << "{\"id\":" << id << ",\"error\":\"" << error << "\"}" << std::endl;
-}
-
 std::string jsonEscape(const std::string& value) {
     std::string escaped;
     escaped.reserve(value.size());
@@ -130,10 +125,24 @@ std::string jsonEscape(const std::string& value) {
             case '\n': escaped += "\\n"; break;
             case '\r': escaped += "\\r"; break;
             case '\t': escaped += "\\t"; break;
-            default: escaped.push_back(ch); break;
+            default:
+                if (static_cast<unsigned char>(ch) < 0x20) {
+                    constexpr char hex[] = "0123456789abcdef";
+                    escaped += "\\u00";
+                    escaped.push_back(hex[(static_cast<unsigned char>(ch) >> 4) & 15]);
+                    escaped.push_back(hex[static_cast<unsigned char>(ch) & 15]);
+                } else {
+                    escaped.push_back(ch);
+                }
+                break;
         }
     }
     return escaped;
+}
+
+void respondError(int id, const std::string& error) {
+    std::lock_guard lock(outputMutex);
+    std::cout << "{\"id\":" << id << ",\"error\":\"" << jsonEscape(error) << "\"}" << std::endl;
 }
 
 void emitHotkeyEvent() {
@@ -252,7 +261,9 @@ int main() {
                     extractString(line, "micDeviceMatchKey"),
                     extractString(line, "micDeviceName"),
                     splitList(extractString(line, "appAudioProcesses")),
-                    splitList(extractString(line, "systemAudioProcesses"))
+                    splitList(extractString(line, "systemAudioProcesses")),
+                    extractBool(line, "saveInPlace", true),
+                    extractString(line, "saveFolder")
                 };
                 respond(id, clipture::toJson(engine.configure(settings)));
                 continue;

@@ -1,4 +1,6 @@
 #include "clipture/ReplaySegmentStore.hpp"
+#include "clipture/replay/InPlacePacketArchive.hpp"
+#include "clipture/replay/Mp4SamplePacker.hpp"
 
 #include "clipture/BoundedWrite.hpp"
 
@@ -149,7 +151,7 @@ struct SegmentReadCache {
     std::vector<std::byte> readAhead;
 };
 
-struct SegmentBacking {
+struct SegmentBacking final : replay::PayloadExtentSource {
     std::shared_ptr<ReplaySessionDirectory> session;
     std::shared_ptr<SegmentReadCache> readCache;
     std::filesystem::path path;
@@ -166,7 +168,9 @@ struct SegmentBacking {
         DeleteFileW(path.c_str());
     }
 
-    bool read(uint64_t offset, std::span<std::byte> destination) const {
+    uint64_t size() const noexcept override { return writtenBytes.load(std::memory_order_acquire); }
+
+    bool read(uint64_t offset, std::span<std::byte> destination) const override {
         if (destination.empty()) return true;
         if (offset > static_cast<uint64_t>(std::numeric_limits<LONGLONG>::max())) return false;
         const uint64_t availableBytes = writtenBytes.load(std::memory_order_acquire);
@@ -253,6 +257,10 @@ public:
         : backing_(std::move(backing)), offset_(offset), size_(size) {}
 
     std::size_t size() const noexcept override { return size_; }
+
+    std::optional<replay::PayloadExtent> extent() const override {
+        return replay::PayloadExtent{backing_, offset_, size_};
+    }
 
     bool read(std::size_t offset, std::span<std::byte> destination) const override {
         if (offset > size_ || destination.size() > size_ - offset || !backing_) return false;
@@ -631,14 +639,36 @@ struct ReplaySegmentStore::Impl {
         const auto memory = entry->packet.payload;
         if (!memory || memory->empty()) return entry->packet.payloadReader != nullptr;
 
+        // Format off the capture thread. Snapshots keep the original immutable
+        // packet until the replacement bytes have been written successfully.
+        const auto prepared = options.prepareMp4Samples
+            ? replay::packMp4VideoSample(entry->packet) : std::nullopt;
+        const auto& storedMemory = prepared ? prepared->payload : memory;
+
         {
             std::lock_guard lock(segmentMutex);
+            if (inPlaceArchive) {
+                if (auto archived = inPlaceArchive->persist(entry->packet)) {
+                    std::lock_guard entryLock(mutex);
+                    if (!entry->retired.load(std::memory_order_relaxed)) {
+                        entry->packet = std::move(*archived);
+                        residentPayloadBytes -= std::min<uint64_t>(residentPayloadBytes, memory->size());
+                        queuedResidentBytes -= std::min<uint64_t>(queuedResidentBytes, memory->size());
+                        if (residentPackets > 0) --residentPackets;
+                        ++diskBackedPackets;
+                        ++persistedPackets;
+                        scheduleSpillsLocked();
+                    }
+                    healthy = true;
+                    return true;
+                }
+            }
             if (rotationRequested.exchange(false, std::memory_order_relaxed) || shouldRotate(entry->packet)) {
                 closeActive();
             }
             if (!active.valid() && !openSegment(entry->packet.pts100ns)) return false;
             const uint64_t payloadOffset = active.offset;
-            std::span<const std::byte> remaining(memory->data(), memory->size());
+            std::span<const std::byte> remaining(storedMemory->data(), storedMemory->size());
             while (!remaining.empty()) {
                 const DWORD request = static_cast<DWORD>(boundedWriteSize(
                     remaining.size(),
@@ -656,9 +686,14 @@ struct ReplaySegmentStore::Impl {
             auto reader = std::make_shared<SegmentPayloadReader>(
                 active.backing,
                 payloadOffset,
-                memory->size());
+                storedMemory->size());
             std::lock_guard entryLock(mutex);
             if (!entry->retired.load(std::memory_order_relaxed)) {
+                if (prepared) {
+                    entry->packet.codec = prepared->codec;
+                    entry->packet.h264 = prepared->h264;
+                    entry->packet.h264Config = prepared->h264Config;
+                }
                 entry->packet.payloadReader = std::move(reader);
                 entry->packet.payload.reset();
                 residentPayloadBytes -= std::min<uint64_t>(residentPayloadBytes, memory->size());
@@ -761,6 +796,7 @@ struct ReplaySegmentStore::Impl {
     }
 
     ReplaySegmentStoreOptions options;
+    std::shared_ptr<replay::InPlacePacketArchive> inPlaceArchive;
     std::atomic<bool> running { false };
     mutable std::mutex mutex;
     mutable std::mutex segmentMutex;
@@ -801,6 +837,10 @@ void ReplaySegmentStore::stop() { impl_->stop(); }
 void ReplaySegmentStore::setRetention(int64_t retention100ns) { impl_->setRetention(retention100ns); }
 void ReplaySegmentStore::setResidentPayloadBudget(std::size_t bytes) {
     impl_->setResidentPayloadBudget(bytes);
+}
+void ReplaySegmentStore::setInPlaceArchive(std::shared_ptr<replay::InPlacePacketArchive> archive) {
+    std::lock_guard lock(impl_->segmentMutex);
+    impl_->inPlaceArchive = std::move(archive);
 }
 void ReplaySegmentStore::push(const EncodedPacket& packet) { impl_->push(packet); }
 

@@ -392,6 +392,7 @@ export interface ClipSettings {
   customMainColor: string;
   customAccentColor: string;
   clipLengthSeconds: number;
+  saveInPlace: boolean;
   fps: 24 | 30 | 60;
   bitrateMbps: number;
   autoBitrate: boolean;

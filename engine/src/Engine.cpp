@@ -26,6 +26,7 @@
 #include <memory>
 #include <limits>
 #include <sstream>
+#include <string_view>
 #include <regex>
 #include <cstdlib>
 #include <unordered_set>
@@ -106,6 +107,8 @@ ReplaySegmentStoreOptions replayStoreOptions(const std::string& streamName, bool
     options.targetSegmentBytes = video ? 64u * 1024u * 1024u : 8u * 1024u * 1024u;
     options.maximumWriteBytes = 512u * 1024u;
     options.alignSegmentsToKeyframes = video;
+    const char* mp4Ready = std::getenv("CLIPTURE_REPLAY_MP4_READY");
+    options.prepareMp4Samples = video && mp4Ready && std::string_view(mp4Ready) == "1";
     return options;
 }
 
@@ -1210,6 +1213,9 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     settings_.bitrateMbps = std::clamp(settings.bitrateMbps, 4, 120);
     settings_.nvencPreset = std::clamp(settings.nvencPreset, 1, 5);
     settings_.clipLengthSeconds = std::clamp(settings.clipLengthSeconds, 5, 600);
+    settings_.saveInPlace = settings.saveInPlace;
+    settings_.saveFolder = settings.saveFolder;
+    consumedWindow_.enable(settings_.saveInPlace);
     settings_.monitorId = settings.monitorId.empty() ? "primary" : settings.monitorId;
     settings_.targetWidth = std::max(0, settings.targetWidth);
     settings_.targetHeight = std::max(0, settings.targetHeight);
@@ -1331,14 +1337,23 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
 
     const auto retention100ns = static_cast<int64_t>(settings_.clipLengthSeconds + 5) * 10'000'000LL;
     const auto replayBudgets = replayMemoryBudgets(settings_);
+    // The cap bounds arena growth even if snapshots pin old regions or variable
+    // packet sizes fragment free space. Full/failed arenas use the legacy spill.
+    const auto arenaLimit = static_cast<uint64_t>(settings_.bitrateMbps + 16) * 125000ULL *
+        static_cast<uint64_t>(settings_.clipLengthSeconds + 10) * 2;
+    const std::u8string archiveFolder(settings_.saveFolder.begin(), settings_.saveFolder.end());
+    inPlaceArchive_->configure(std::filesystem::path(archiveFolder), settings_.saveInPlace, arenaLimit);
+    const auto archive = settings_.saveInPlace ? inPlaceArchive_ : nullptr;
     videoPackets_.setRetention(kHotReplayRetention100ns);
     if (videoReplayStore_) {
         videoReplayStore_->setRetention(retention100ns);
-        videoReplayStore_->setResidentPayloadBudget(replayBudgets.videoBytes);
+        videoReplayStore_->setInPlaceArchive(archive);
+        videoReplayStore_->setResidentPayloadBudget(settings_.saveInPlace ? 0 : replayBudgets.videoBytes);
     }
     if (aacReplayStore_) {
         aacReplayStore_->setRetention(retention100ns);
-        aacReplayStore_->setResidentPayloadBudget(replayBudgets.audioBytes);
+        aacReplayStore_->setInPlaceArchive(archive);
+        aacReplayStore_->setResidentPayloadBudget(settings_.saveInPlace ? 0 : replayBudgets.audioBytes);
     }
     if (pcmRecoveryStore_) {
         pcmRecoveryStore_->setRetention(retention100ns);
@@ -1703,17 +1718,16 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             " ramFallbackBytes=" + std::to_string(videoArchiveStats.ramFallbackBytes));
 
     const auto videoSelectStartedAt = SaveTimingClock::now();
-    auto clipPackets = selectVideoWindowForClip(
-        std::move(videoSnapshot),
-        duration,
-        mediaNow100ns());
+    auto clipPackets = settings_.saveInPlace
+        ? replay::selectReplayVideo(std::move(videoSnapshot), duration, mediaNow100ns(), consumedWindow_.start())
+        : selectVideoWindowForClip(std::move(videoSnapshot), duration, mediaNow100ns());
     logEngineSaveTiming("video_select", videoSelectStartedAt, "clipPackets=" + std::to_string(clipPackets.size()));
     if (clipPackets.empty()) {
         result.message = "No complete keyframe-starting H.264 window is buffered yet. Wait about one second and try again.";
         logEngineSaveTiming("total", totalStartedAt, saveTotalDetails("ok=false reason=no_keyframe_window"));
         return result;
     }
-    const int actualDuration = actualClipDurationSeconds(clipPackets, duration);
+    int actualDuration = actualClipDurationSeconds(clipPackets, duration);
     diagnostics_.lastClipCadence = analyzeVideoCadence(
         std::span<const EncodedPacket>(clipPackets.data(), clipPackets.size()),
         diagnostics_.fps);
@@ -1862,8 +1876,9 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     const int64_t clipStart = clipPackets.front().pts100ns;
     const int64_t clipEnd = clipPackets.back().pts100ns + std::max<int64_t>(clipPackets.back().duration100ns, 0);
     const int64_t requestedClipStart = std::max<int64_t>(
-        clipStart,
+        std::max(clipStart, consumedWindow_.start()),
         clipEnd - static_cast<int64_t>(duration) * 10'000'000LL);
+    actualDuration = std::clamp(static_cast<int>((clipEnd - requestedClipStart + 5'000'000LL) / 10'000'000LL), 1, duration);
     savePacing.presentationStartPts100ns = requestedClipStart;
     savePacing.presentationEndPts100ns = clipEnd;
     const auto audioSelectStartedAt = SaveTimingClock::now();
@@ -2018,6 +2033,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             const auto& lastPacket = clipPackets[segment.end - 1];
             const int64_t segmentStart = firstPacket.pts100ns;
             const int64_t segmentEnd = lastPacket.pts100ns + std::max<int64_t>(lastPacket.duration100ns, 0);
+            if (segmentEnd <= requestedClipStart) continue;
             for (const auto& audioPacket : audioPackets) {
                 const int64_t audioPacketEnd = audioPacket.pts100ns +
                     std::max<int64_t>(1, audioPacket.duration100ns);
@@ -2069,6 +2085,8 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         }
         outputFilePath = stitchedPathForSegments(segmentFiles.front());
     } else {
+        auto inPlaceSave = settings_.saveInPlace ? inPlaceArchive_->takeForSave() : nullptr;
+        savePacing.experimentalInPlace = inPlaceSave.get();
         clipPackets.reserve(clipPackets.size() + audioPackets.size());
         clipPackets.insert(clipPackets.end(), audioPackets.begin(), audioPackets.end());
         const auto muxStartedAt = SaveTimingClock::now();
@@ -2200,6 +2218,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     clip << "}";
 
     result.ok = true;
+    consumedWindow_.commit(clipEnd);
     result.message = segmentFiles.empty()
         ? muxMessage
         : "Saved segmented MP4 clip for export stitching.";
@@ -2292,7 +2311,7 @@ void Engine::refreshPacketCounts() {
     diagnostics_.videoReplayArchiveHealthy = videoArchive.healthy;
     diagnostics_.audioReplayArchiveHealthy = audioArchive.healthy && pcmRecoveryArchive.healthy;
     diagnostics_.replayArchiveDiskBytes =
-        videoArchive.diskBytes + audioArchive.diskBytes + pcmRecoveryArchive.diskBytes;
+        videoArchive.diskBytes + audioArchive.diskBytes + pcmRecoveryArchive.diskBytes + inPlaceArchive_->diskBytes();
     diagnostics_.replayArchiveRamFallbackBytes =
         videoArchive.ramFallbackBytes + audioArchive.ramFallbackBytes + pcmRecoveryArchive.ramFallbackBytes;
     diagnostics_.replayArchiveResidentBytes =

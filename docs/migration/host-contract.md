@@ -31,6 +31,15 @@ The engine protocol fixture in `engine-protocol.v1.json` is separate because it 
 
 ## Contract-test expansion points
 
+`ClipSettings.saveInPlace` is additive and defaults to true when absent; explicit
+false restores overlapping replay saves. Both renderer adapters normalize it.
+Engine `configure` carries `saveInPlace` and `saveFolder`, so native background
+recording chooses storage without depending on a WebView. The engine consumes
+the visible window only after engine save success; subsequent host processing
+failure preserves its source MP4 but does not roll that boundary back. Settings
+defaults and opt-out are pinned in the host fixture, adapter tests and Rust DTO
+tests; the configure fields are pinned in the separate engine fixture.
+
 The additive `ClipRecord.segmentAudioTracks` field describes each segment's
 actual audio stream order; `audioTracks` is their ordered union. Empty entries
 mean no audio exists in that segment. The host pads absent spans and remaps by

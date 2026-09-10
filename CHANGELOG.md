@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.5.2] - 2026-09-10
+
+### In-Place Replay Saving & Zero-Copy MP4 Persistence
+
+- **In-Place Replay Persistence & Zero-Copy Finalization:** Replaces disk/memory duplicate muxing with a dedicated packet arena (`replay/InPlacePacketArchive`). Video and normalized AAC audio samples are written directly into private `.clipture-replay/*.recording` arenas inside the user's save folder, finalizing in place via atomic MP4 atom construction (`ftyp`/`free`/64-bit `mdat`/`moov`) with zero media reads or writes during save.
+- **Rolling Disk Arena & Bounded Storage:** Implements packet lease protection and hard arena caps, reusing retired unleased slots and zeroing free blocks upon detachment to keep disk usage strictly bounded.
+- **Consume-on-Save Window Progression:** Automatically advances the consumed media boundary on save success so rapid successive saves (e.g. 120s followed by 10s) produce only the newly captured delta while retaining necessary decoder preroll.
+- **Native Error Resilience & Windows Path Escaping:** Correctly escapes Windows paths and quotes in native protocol error replies, preventing engine communication timeouts, and guarantees unique sequential filenames for rapid saves.
+- **Shell Explorer Selection & Settings Integration:** Added native Windows `SHOpenFolderAndSelectItems` explorer selection support and exposed the new `saveInPlace` preference (default on) across frontend settings and host adapters.
+
 ## [1.5.1] - 2026-09-09
 
 ### Themed Installer, Player Lifetime & Visual Identity

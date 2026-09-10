@@ -11,6 +11,7 @@
 #include <vector>
 
 namespace clipture {
+namespace replay { class InPlacePacketArchive; }
 
 struct ReplaySegmentStoreOptions {
     std::string streamName;
@@ -22,6 +23,8 @@ struct ReplaySegmentStoreOptions {
     std::size_t residentPayloadBudgetBytes = 0;
     bool alignSegmentsToKeyframes = false;
     bool deleteOnClose = true;
+    // Experimental storage layout; default preserves the production path.
+    bool prepareMp4Samples = false;
 };
 
 struct ReplaySegmentStoreStats {
@@ -56,6 +59,7 @@ public:
     void stop();
     void setRetention(int64_t retention100ns);
     void setResidentPayloadBudget(std::size_t bytes);
+    void setInPlaceArchive(std::shared_ptr<replay::InPlacePacketArchive> archive);
     void push(const EncodedPacket& packet);
     std::vector<EncodedPacket> selectWindow(int64_t startPts100ns, int64_t endPts100ns) const;
     std::vector<EncodedPacket> snapshot() const;

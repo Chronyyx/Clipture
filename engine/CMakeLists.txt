@@ -29,6 +29,19 @@ add_executable(clipture_engine
   src/Mp4Muxer.cpp
   src/NativeRuntime.cpp
   src/ReplaySegmentStore.cpp
+  src/replay/Mp4SamplePacker.cpp
+  src/replay/PayloadLayoutPlan.cpp
+  src/replay/CopyPayloadWriter.cpp
+  src/replay/PayloadCloneJob.cpp
+  src/platform/windows/CloneFileInfo.cpp
+  src/platform/windows/SealedPayloadFile.cpp
+  src/platform/windows/WindowsPayloadOutput.cpp
+  src/mux/PreparedVideoLayout.cpp
+  src/mux/InPlaceMp4Header.cpp
+  src/replay/InPlaceMediaBuffer.cpp
+  src/replay/InPlacePacketArchive.cpp
+  src/replay/ConsumedWindow.cpp
+  src/platform/windows/InPlaceFile.cpp
   src/RawInputHotkey.cpp
   src/Tonemapper.cpp
   src/WgcCaptureBackend.cpp
@@ -64,6 +77,14 @@ if(BUILD_TESTING)
     src/FrameQueue.cpp
     src/Mp4Muxer.cpp
     src/ReplaySegmentStore.cpp
+    src/replay/Mp4SamplePacker.cpp
+    src/replay/PayloadLayoutPlan.cpp
+    src/mux/PreparedVideoLayout.cpp
+    src/mux/InPlaceMp4Header.cpp
+    src/replay/InPlaceMediaBuffer.cpp
+    src/replay/InPlacePacketArchive.cpp
+    src/replay/ConsumedWindow.cpp
+    src/platform/windows/InPlaceFile.cpp
   )
   target_include_directories(clipture_packet_tests PRIVATE include)
   target_compile_features(clipture_packet_tests PRIVATE cxx_std_20)
@@ -73,4 +94,5 @@ if(BUILD_TESTING)
     target_compile_options(clipture_packet_tests PRIVATE /W4 /permissive-)
   endif()
   add_test(NAME clipture_packet_architecture COMMAND clipture_packet_tests)
+  add_subdirectory(tests/replay)
 endif()

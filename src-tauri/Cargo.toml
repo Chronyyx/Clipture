@@ -1,6 +1,6 @@
 [package]
 name = "clipture"
-version = "1.5.1"
+version = "1.5.2"
 description = "Low-footprint native host for Clipture"
 authors = ["Clipture"]
 edition = "2021"
@@ -56,6 +56,7 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Dwm",
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
   "Win32_UI_WindowsAndMessaging",
 ] }
 

@@ -5,6 +5,7 @@ export const defaultSettings: ClipSettings = {
   customMainColor: "#101114",
   customAccentColor: "#c8a6ff",
   clipLengthSeconds: 30,
+  saveInPlace: true,
   fps: 30,
   bitrateMbps: 40,
   autoBitrate: false,

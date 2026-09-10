@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace clipture {
+namespace replay { class InPlaceMediaBuffer; }
 
 struct SaveIoTimelineBucket {
     uint32_t startMs = 0;
@@ -96,6 +97,10 @@ struct MuxWritePacing {
     std::size_t burstBytes = 0;
     bool storageAwareRate = false;
     bool analyzeIo = false;
+    // Internal experiment only; zero retains the compact production layout.
+    // Fully prepared disk video without audio is eligible. No cloning is enabled.
+    uint64_t experimentalPayloadAlignment = 0;
+    replay::InPlaceMediaBuffer* experimentalInPlace = nullptr; // Synchronous, caller-owned optional save target.
 };
 
 std::string saveIoAnalysisToJson(const SaveIoAnalysis& analysis);

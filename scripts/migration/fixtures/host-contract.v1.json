@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "settingsDefaults": { "saveInPlace": true },
   "source": "src/shared/types.ts#CliptureApi",
   "operations": [
     { "method": "getDiagnostics", "transport": "invoke", "channel": "engine:getDiagnostics", "adapterFailure": "reject-without-fabricating-engine-state" },

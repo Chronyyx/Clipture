@@ -124,6 +124,10 @@ pub struct EngineConfigure {
     pub bitrate_mbps: u32,
     pub nvenc_preset: u8,
     pub clip_length_seconds: u32,
+    #[serde(default = "default_save_in_place")]
+    pub save_in_place: bool,
+    #[serde(default)]
+    pub save_folder: String,
     pub monitor_id: String,
     pub target_width: u32,
     pub target_height: u32,
@@ -144,6 +148,10 @@ pub struct EngineConfigure {
     pub mic_device_id: String,
     pub mic_device_match_key: String,
     pub mic_device_name: String,
+}
+
+fn default_save_in_place() -> bool {
+    true
 }
 
 impl EngineConfigure {
@@ -184,6 +192,8 @@ impl EngineConfigure {
             bitrate_mbps,
             nvenc_preset: settings.nvenc_preset,
             clip_length_seconds: settings.clip_length_seconds,
+            save_in_place: settings.save_in_place,
+            save_folder: settings.save_folder.clone(),
             monitor_id: settings.monitor_id.clone(),
             target_width,
             target_height,
@@ -323,6 +333,14 @@ mod tests {
         .unwrap();
         assert_eq!(value["bitrateMbps"], 40);
         assert_eq!(value["includeMixedAudio"], false);
+        assert_eq!(value["saveInPlace"], true);
+        assert_eq!(value["saveFolder"], "");
+        let mut settings = ClipSettings::default();
+        settings.save_in_place = false;
+        settings.save_folder = r"C:\fixture\clips".into();
+        let configured = EngineConfigure::from_settings(&settings, &[]);
+        assert!(!configured.save_in_place);
+        assert_eq!(configured.save_folder, settings.save_folder);
         assert!(value.get("noiseGateDebounceMs").is_some());
     }
 

@@ -91,6 +91,7 @@ for (const event of engineFixture.events) {
 
 const examples = engineFixture.examples;
 require('./test-save-result-contract.cjs');
+require('./test-save-settings.cjs');
 require('./test-diagnostics-refresh.cjs');
 require('./test-ui-process-boundaries.cjs');
 assert.deepEqual(Object.keys(examples.request).sort(), ["id", "type"]);

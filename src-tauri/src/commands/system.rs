@@ -53,15 +53,15 @@ pub async fn reveal_clip(state: State<'_, AppState>, file_path: String) -> Comma
     }
     let library = state.library.clone();
     let settings = state.settings.get();
-    let path = blocking(move || {
+    blocking(move || {
         let (authority, id) = authorize_path(&library, &settings, &file_path)?;
-        authority
+        let path = authority
             .primary(&id)
             .map(PathBuf::from)
-            .ok_or_else(|| AppError::Path("authorized clip disappeared".into()))
+            .ok_or_else(|| AppError::Path("authorized clip disappeared".into()))?;
+        reveal(&path, true)
     })
-    .await?;
-    reveal(&path, true).map_err(|error| error.to_string())
+    .await
 }
 
 #[tauri::command]
@@ -122,6 +122,10 @@ fn reveal(path: &std::path::Path, select_file: bool) -> AppResult<()> {
             "cannot reveal a missing path: {}",
             path.display()
         )));
+    }
+    #[cfg(windows)]
+    if select_file {
+        return crate::platform::windows::reveal_file(path);
     }
     let mut command = Command::new("explorer.exe");
     if select_file {

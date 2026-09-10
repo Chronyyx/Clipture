@@ -13,7 +13,7 @@
     { "type": "listDisplayDevices", "fields": [] },
     { "type": "listRunningProcesses", "fields": ["includeExecutablePaths"] },
     { "type": "getProcessExecutablePath", "fields": ["processId"] },
-    { "type": "configure", "fields": ["fps", "bitrateMbps", "nvencPreset", "clipLengthSeconds", "monitorId", "targetWidth", "targetHeight", "includeMixedAudio", "includeSystemAudio", "includeMicrophoneAudio", "captureGameAudio", "captureForegroundSystemAudio", "appAudioProcesses", "systemAudioProcesses", "micVolume", "micIsolation", "micIsolationWeight", "noiseGateEnabled", "autoNoiseGate", "noiseGateThreshold", "noiseGateDebounceMs", "micDeviceId", "micDeviceMatchKey", "micDeviceName"] },
+    { "type": "configure", "fields": ["fps", "bitrateMbps", "nvencPreset", "clipLengthSeconds", "monitorId", "targetWidth", "targetHeight", "includeMixedAudio", "includeSystemAudio", "includeMicrophoneAudio", "captureGameAudio", "captureForegroundSystemAudio", "appAudioProcesses", "systemAudioProcesses", "micVolume", "micIsolation", "micIsolationWeight", "noiseGateEnabled", "autoNoiseGate", "noiseGateThreshold", "noiseGateDebounceMs", "micDeviceId", "micDeviceMatchKey", "micDeviceName", "saveInPlace", "saveFolder"] },
     { "type": "saveClip", "fields": ["durationSeconds", "saveFolder", "analyzeIo"] }
   ],
   "events": [

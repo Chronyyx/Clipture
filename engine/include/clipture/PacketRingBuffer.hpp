@@ -1,5 +1,8 @@
 #pragma once
 
+#include "clipture/replay/H264DecoderConfig.hpp"
+#include "clipture/replay/PayloadExtent.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -9,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -25,7 +29,8 @@ enum class PacketCodec : uint8_t {
     Unknown,
     H264AnnexB,
     PcmS16,
-    AacLc
+    AacLc,
+    H264Avcc
 };
 
 struct H264NalSpan {
@@ -61,6 +66,9 @@ public:
 
     virtual std::size_t size() const noexcept = 0;
     virtual bool read(std::size_t offset, std::span<std::byte> destination) const = 0;
+    // Optional contiguous, immutable backing range; legacy/opaque readers need
+    // no changes. The returned source pins storage independently of this reader.
+    virtual std::optional<replay::PayloadExtent> extent() const { return std::nullopt; }
 };
 
 using PacketPayloadReaderPtr = std::shared_ptr<const PacketPayloadReader>;
@@ -90,6 +98,7 @@ struct EncodedPacket {
     bool sourceHadDesktopPresent = false;
     bool sourceHadPointerUpdate = false;
     H264PacketLayout h264;
+    std::shared_ptr<const replay::H264DecoderConfig> h264Config;
     PacketPayloadPtr payload;
     PacketPayloadReaderPtr payloadReader;
 };

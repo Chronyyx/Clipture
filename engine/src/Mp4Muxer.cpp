@@ -1,6 +1,10 @@
 #include "clipture/Mp4Muxer.hpp"
 #include "clipture/AacEncoderSession.hpp"
 #include "clipture/BoundedWrite.hpp"
+#include "clipture/mux/PreparedVideoLayout.hpp"
+#include "clipture/mux/WritePadding.hpp"
+#include "clipture/mux/InPlaceMp4Header.hpp"
+#include "clipture/replay/InPlaceMediaBuffer.hpp"
 
 #include <clipture/VideoSampleTiming.hpp>
 
@@ -141,7 +145,13 @@ std::wstring clipFilePath(const std::string& saveFolder) {
          << std::setw(2) << std::setfill(L'0') << localTime.tm_min << L"-"
          << std::setw(2) << std::setfill(L'0') << localTime.tm_sec << L" "
          << period << L".mp4";
-    return path.str();
+    const std::filesystem::path original(path.str());
+    auto candidate = original;
+    for (uint64_t suffix = 1; std::filesystem::exists(candidate); ++suffix) {
+        candidate = original.parent_path() /
+            (original.stem().wstring() + L" (" + std::to_wstring(suffix) + L").mp4");
+    }
+    return candidate.wstring();
 }
 
 bool isVideoPacket(const EncodedPacket& packet) {
@@ -1556,7 +1566,7 @@ public:
             GENERIC_WRITE,
             FILE_SHARE_READ,
             nullptr,
-            CREATE_ALWAYS,
+            CREATE_NEW, // Refuse a collision even if a file appeared after name selection.
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
             nullptr);
         if (handle_ == INVALID_HANDLE_VALUE) {
@@ -2085,6 +2095,9 @@ bool writeAvccSample(
     BufferedByteWriter& out,
     const VideoSamplePlan& sample) {
     if (!sample.packet) return false;
+    if (sample.packet->codec == PacketCodec::H264Avcc) {
+        return writePacketRange(out, *sample.packet, 0, sample.info.size);
+    }
     for (const auto& nalu : sample.writableNalus) {
         writeU32(out, static_cast<uint32_t>(nalu.size));
         if (!writePacketRange(out, *sample.packet, nalu.offset, nalu.size)) return false;
@@ -2200,6 +2213,7 @@ MuxResult muxH264ToMp4(
     };
 
     const auto prepassStartedAt = SaveTimingClock::now();
+    const auto inPlaceBefore = pacing.experimentalInPlace ? pacing.experimentalInPlace->io() : replay::InPlaceIo{};
     for (const auto& packet : packets) {
         if (isVideoPacket(packet)) {
             hasVideoPacket = true;
@@ -2221,7 +2235,13 @@ MuxResult muxH264ToMp4(
                 }
             };
 
-            if (packet.h264.analyzed) {
+            if (packet.codec == PacketCodec::H264Avcc) {
+                if (packet.h264Config) {
+                    if (sps.empty()) sps = packet.h264Config->sps;
+                    if (pps.empty()) pps = packet.h264Config->pps;
+                }
+                sample.info.size = payloadSize(packet);
+            } else if (packet.h264.analyzed) {
                 forEachH264Nal(packet.h264, collectNalu);
                 sample.info.size = packet.h264.avccSampleSize;
             } else {
@@ -2486,6 +2506,14 @@ MuxResult muxH264ToMp4(
             " droppedTrailingSamples=" + std::to_string(audioAlignment.droppedTrailingSamples) +
             " maximumStartDelay100ns=" + std::to_string(audioAlignment.maximumStartDelay100ns));
     std::erase_if(audioTracks, [](const AacAudioTrack& track) { return track.samples.empty(); });
+    if (pacing.experimentalInPlace) {
+        // Match the host's common final stream order in metadata, avoiding an
+        // entire FFmpeg remux just to move system audio before the microphone.
+        const auto order = [](const auto& track) {
+            return track.sourceId == "system-loopback-pcm" ? 0 : track.sourceId == "microphone-pcm" ? 1 : 2;
+        };
+        std::stable_sort(audioTracks.begin(), audioTracks.end(), [&](const auto& a, const auto& b) { return order(a) < order(b); });
+    }
 
     videoSamples.front().info.keyframe = true;
 
@@ -2498,18 +2526,57 @@ MuxResult muxH264ToMp4(
         for (const auto& sample : track.samples) mdatPayloadSize += sample.info.size;
     }
 
-    const bool largeMdat = mdatPayloadSize + 8 > 0xFFFFFFFFULL;
+    std::optional<replay::PayloadLayoutPlan> alignedVideo;
+    std::optional<replay::InPlaceMediaLayout> inPlace;
+    if (pacing.experimentalInPlace) {
+        std::vector<const EncodedPacket*> selected;
+        for (const auto& sample : videoSamples) selected.push_back(sample.packet);
+        inPlace = pacing.experimentalInPlace->layout(selected);
+        if (!inPlace) {
+            result.message = "In-place save could not place its video samples; buffered sources retained.";
+            return result; // Do not silently perform a copy or modify an unrelated file.
+        }
+    }
+    if (!inPlace && pacing.experimentalPayloadAlignment && audioTracks.empty()) {
+        std::vector<const EncodedPacket*> selected;
+        selected.reserve(videoSamples.size());
+        for (const auto& sample : videoSamples) selected.push_back(sample.packet);
+        // Experimental layouts always use a 64-bit mdat header, so padding
+        // cannot change header width after sample offsets have been planned.
+        alignedVideo = mux::preparedVideoLayout(selected, ftyp.size() + 16, pacing.experimentalPayloadAlignment);
+    }
+    const bool largeMdat = alignedVideo.has_value() || mdatPayloadSize + 8 > 0xFFFFFFFFULL;
     const uint64_t mdatHeaderSize = largeMdat ? 16 : 8;
     uint64_t nextOffset = ftyp.size() + mdatHeaderSize;
+    std::size_t videoIndex = 0;
     for (auto& sample : videoSamples) {
+        if (alignedVideo) nextOffset = alignedVideo->sampleOffsets()[videoIndex++];
+        if (inPlace) nextOffset = inPlace->sampleOffsets[videoIndex++];
         sample.info.fileOffset = nextOffset;
         nextOffset += sample.info.size;
     }
     for (auto& track : audioTracks) {
         for (auto& sample : track.samples) {
+            if (inPlace) {
+                const auto offset = pacing.experimentalInPlace->placeSample(
+                    sample.payloadReader, samplePayload(sample), sample.info.size);
+                if (!offset) {
+                    result.message = "In-place save could not place an audio sample; buffered sources retained.";
+                    return result;
+                }
+                nextOffset = *offset;
+            }
             sample.info.fileOffset = nextOffset;
             nextOffset += sample.info.size;
         }
+    }
+    if (alignedVideo) {
+        mdatPayloadSize = alignedVideo->outputEnd() - alignedVideo->outputStart();
+        std::cerr << "[aligned-payload] alignment=" << pacing.experimentalPayloadAlignment
+                  << " samples=" << videoSamples.size()
+                  << " mediaBytes=" << alignedVideo->payloadBytes()
+                  << " paddingBytes=" << alignedVideo->paddingBytes()
+                  << " candidateBytes=" << alignedVideo->alignmentCandidateBytes() << '\n';
     }
 
     const auto moov = makeMoov(
@@ -2522,6 +2589,27 @@ MuxResult muxH264ToMp4(
         movieDuration100ns,
         videoMediaStart100ns,
         videoPresentationStartPts100ns);
+    if (inPlace) {
+        inPlace->mediaEnd = pacing.experimentalInPlace->mediaEnd();
+        const auto header = mux::inPlaceMp4Header(ftyp, inPlace->mediaStart, inPlace->mediaEnd);
+        auto& recording = *pacing.experimentalInPlace;
+        const auto before = inPlaceBefore;
+        const bool finalized = recording.finalize(header, std::as_bytes(std::span(moov)));
+        const bool published = finalized && recording.publish(path);
+        const auto after = recording.io();
+        result.ok = published;
+        result.message = published ? "Finalized MP4 in place." : "In-place finalization/rename failed; private recording retained.";
+        if (published) result.filePath = narrow(path);
+        for (const auto& track : audioTracks) result.audioTracks.push_back(track.sourceId);
+        result.ioAnalysis.enabled = pacing.analyzeIo;
+        result.ioAnalysis.finalFileBytes = finalized ? inPlace->mediaEnd + moov.size() : 0;
+        result.ioAnalysis.elapsedMs = saveTimingElapsedMs(totalStartedAt);
+        std::cerr << "[in-place] ok=" << published << " mediaRead=" << after.bytesRead - before.bytesRead
+                  << " mediaWritten=" << after.mediaWritten - before.mediaWritten
+                  << " metadataWritten=" << after.metadataWritten - before.metadataWritten
+                  << " mediaBytes=" << inPlace->mediaEnd - inPlace->mediaStart << '\n';
+        return result;
+    }
     logMuxSaveTiming(
         "metadata",
         metadataStartedAt,
@@ -2622,12 +2710,17 @@ MuxResult muxH264ToMp4(
     const auto videoWriteStartedAt = SaveTimingClock::now();
     uint64_t videoWrittenBytes = 0;
     bool payloadReadSucceeded = true;
+    uint64_t videoWriteOffset = ftyp.size() + mdatHeaderSize;
     for (const auto& sample : videoSamples) {
+        if (sample.info.fileOffset > videoWriteOffset) {
+            mux::writePadding(bufferedOut, sample.info.fileOffset - videoWriteOffset);
+        }
         if (!writeAvccSample(bufferedOut, sample)) {
             payloadReadSucceeded = false;
             break;
         }
         videoWrittenBytes += sample.info.size;
+        videoWriteOffset = sample.info.fileOffset + sample.info.size;
     }
     bufferedOut.flush();
     const auto videoFlushes = bufferedOut.flushCount();

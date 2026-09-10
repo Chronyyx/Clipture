@@ -118,6 +118,7 @@ pub struct ClipSettings {
     pub custom_main_color: String,
     pub custom_accent_color: String,
     pub clip_length_seconds: u32,
+    pub save_in_place: bool,
     pub fps: u32,
     pub bitrate_mbps: u32,
     pub auto_bitrate: bool,
@@ -152,6 +153,7 @@ impl ClipSettings {
             custom_main_color: "#101114".into(),
             custom_accent_color: "#c8a6ff".into(),
             clip_length_seconds: 30,
+            save_in_place: true,
             fps: 30,
             bitrate_mbps: 40,
             auto_bitrate: false,
@@ -327,6 +329,16 @@ fn unique_paths(paths: Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn in_place_defaults_on_but_explicit_opt_out_survives() {
+        let old: ClipSettings = serde_json::from_str("{}").unwrap();
+        assert!(old.save_in_place);
+        let opted_out: ClipSettings = serde_json::from_str(r#"{"saveInPlace":false}"#).unwrap();
+        let normalized = opted_out.normalize(r"C:\fixture\clips");
+        assert!(!normalized.save_in_place);
+        assert_eq!(serde_json::to_value(normalized).unwrap()["saveInPlace"], false);
+    }
 
     #[test]
     fn invalid_values_are_bounded_and_default_sources_are_restored() {

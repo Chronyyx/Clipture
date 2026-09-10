@@ -9,6 +9,8 @@
 #include "clipture/FrameQueue.hpp"
 #include "clipture/PacketRingBuffer.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
+#include "clipture/replay/ConsumedWindow.hpp"
+#include "clipture/replay/InPlacePacketArchive.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -53,6 +55,8 @@ struct EngineSettings {
     std::string micDeviceName;
     std::vector<std::string> appAudioProcesses;
     std::vector<std::string> systemAudioProcesses;
+    bool saveInPlace = true;
+    std::string saveFolder;
 };
 
 struct SaveClipResult {
@@ -91,6 +95,8 @@ private:
     std::unique_ptr<ReplaySegmentStore> videoReplayStore_;
     std::unique_ptr<ReplaySegmentStore> aacReplayStore_;
     std::unique_ptr<ReplaySegmentStore> pcmRecoveryStore_;
+    std::shared_ptr<replay::InPlacePacketArchive> inPlaceArchive_ = std::make_shared<replay::InPlacePacketArchive>();
+    replay::ConsumedWindow consumedWindow_;
     std::unique_ptr<AudioReplayCoordinator> audioReplayCoordinator_;
     std::unique_ptr<CaptureSession> captureSession_;
     std::unique_ptr<EncoderWorker> encoderWorker_;

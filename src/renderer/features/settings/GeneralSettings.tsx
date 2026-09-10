@@ -82,6 +82,15 @@ export function GeneralSettings({
           {clipSounds.map((sound) => <option key={sound.id} value={sound.id}>{sound.label}</option>)}
         </select>
       </label>
+      <label className='toggle-label wide'>
+        <input className='toggle-switch' type='checkbox' checked={settings.saveInPlace}
+          onChange={(event) => onChange({ saveInPlace: event.target.checked })} />
+        Save in place
+      </label>
+      <p className='wide'>
+        Faster saves where possible. Each successful save starts a new clip window:
+        save again 10 seconds later to get those 10 seconds. Turn off to keep overlapping replay clips.
+      </p>
       <div className='sound-actions wide'>
         <button className='secondary-button' type='button' onClick={onImportSound}>Import sound</button>
         <button className='secondary-button' type='button' onClick={onRevealSounds}>Open sounds folder</button>
