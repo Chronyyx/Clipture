@@ -1726,7 +1726,10 @@ bool testMp4MuxerStreamsDiskBackedVideo() {
 
 }  // namespace
 
+bool testAudioMixerClockPhaseDoesNotChangeAac();
+
 int main() {
+    if (!testAudioMixerClockPhaseDoesNotChangeAac()) return 1;
     if (!testVideoCadenceAnalysis()) return 1;
     if (!testStartCodesAndFlags()) return 1;
     if (!testMalformedPackets()) return 1;

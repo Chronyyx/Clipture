@@ -2,6 +2,7 @@
 
 #include "clipture/AacEncoderSession.hpp"
 #include "clipture/AudioPacketRouting.hpp"
+#include "clipture/PcmBlockMixer.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 
 #include <Windows.h>
@@ -267,22 +268,9 @@ struct AudioReplayCoordinator::Impl {
                 bytes = track.readScratch;
             }
             const auto* input = reinterpret_cast<const int16_t*>(bytes.data());
-            const int64_t inputFrames = static_cast<int64_t>(bytes.size() / (sizeof(int16_t) * track.channels));
-            const int64_t relativeStart =
-                ((packet.pts100ns - blockStart) * track.sampleRate) / 10'000'000LL;
-            const int64_t outputStart = std::max<int64_t>(0, relativeStart);
-            const int64_t inputStart = std::max<int64_t>(0, -relativeStart);
-            const int64_t copiedFrames = std::min<int64_t>(
-                framesPerBlock - outputStart,
-                inputFrames - inputStart);
-            if (copiedFrames <= 0) continue;
-            for (int64_t frame = 0; frame < copiedFrames; ++frame) {
-                for (int channel = 0; channel < track.channels; ++channel) {
-                    const auto outputIndex = static_cast<std::size_t>((outputStart + frame) * track.channels + channel);
-                    const auto inputIndex = static_cast<std::size_t>((inputStart + frame) * track.channels + channel);
-                    track.mixScratch[outputIndex] += input[inputIndex];
-                }
-            }
+            addPcmToMixBlock(
+                {input, bytes.size() / sizeof(int16_t)}, track.channels,
+                track.sampleRate, packet.pts100ns - blockStart, track.mixScratch);
         }
 
         float peak = 0.0f;

@@ -68,12 +68,17 @@ endif()
 target_link_libraries(clipture_engine PRIVATE dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 avrt mfplat mfreadwrite mfuuid winmm user32)
 
 if(BUILD_TESTING)
+  add_executable(clipture_pcm_block_mixer_tests tests/audio/PcmBlockMixerTests.cpp)
+  target_include_directories(clipture_pcm_block_mixer_tests PRIVATE include)
+  target_compile_features(clipture_pcm_block_mixer_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_pcm_block_mixer COMMAND clipture_pcm_block_mixer_tests)
   add_executable(clipture_loopback_silence_tests tests/audio/LoopbackSilenceTests.cpp)
   target_include_directories(clipture_loopback_silence_tests PRIVATE include)
   target_compile_features(clipture_loopback_silence_tests PRIVATE cxx_std_20)
   add_test(NAME clipture_loopback_silence COMMAND clipture_loopback_silence_tests)
   add_executable(clipture_packet_tests
     tests/PacketArchitectureTests.cpp
+    tests/audio/AudioMixerIntegrationTests.cpp
     src/AacEncoderSession.cpp
     src/AudioReplayCoordinator.cpp
     src/DesktopPointerShape.cpp

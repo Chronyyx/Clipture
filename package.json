@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.5.3: WASAPI Loopback Pacing & Audio Sync Stabilization",
+  "releaseTitle": "Clipture 1.5.4: Audio Mixer Quantization & 100 Hz Buzz Elimination",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

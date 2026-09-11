@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.4] - 2026-09-11
+
+### Audio Mixer Quantization & 100 Hz Buzz Elimination
+
+- **Nearest-Sample Grid Quantization:** Replaced truncating integer division in `AudioReplayCoordinator` with a dedicated nearest-sample rounding implementation (`PcmBlockMixer.hpp`). Truncation toward zero previously placed adjacent packets (-479.995 frames and +0.005 frames) into the same output frame index zero, causing an artifactual doubled sample every 480 frames and pumping the peak limiter at the 100 Hz mix-block cadence.
+- **Consistent Half-Frame Tie Breaking:** Standardized boundary tie breaking toward the later frame across negative and positive fractional offsets, ensuring continuous sample flow across 8 kHz, 44.1 kHz, 48 kHz, and 96 kHz streams even after sub-millisecond clock adjustments.
+- **Audio Integration & Phase Sweep Test Coverage:** Added `clipture_pcm_block_mixer` unit tests verifying boundary phase continuity across sample sweeps and multi-track summation, alongside `testAudioMixerClockPhaseDoesNotChangeAac` validating that fractional clock phase corrections do not alter AAC stream encodings.
+
 ## [1.5.3] - 2026-09-10
 
 ### WASAPI Loopback Pacing & Audio Sync Stabilization
