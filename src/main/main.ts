@@ -25,6 +25,7 @@ import { constants as osConstants, cpus, release as osRelease, setPriority, tota
 import type { ActiveProcess, AudioInputDevice, ClipRecord, ClipSettings, DisplayDevice, EngineDiagnostics, FrameDropAnalysis, SaveClipResult, ClipSoundOption, SaveIoAnalysis, SaveIoAnalyzerState, ThemeFontId, UpdateState } from "../shared/types";
 import { CaptureAwareNsisUpdater, CaptureAwareUpdateTransfer } from "./CaptureAwareUpdater";
 import { FrameDropDiagnosticsRecorder } from "./FrameDropDiagnostics";
+import { normalizeCaptureFps } from "../shared/capture-fps";
 
 let consoleStdoutAvailable = true;
 let consoleStderrAvailable = true;
@@ -228,7 +229,7 @@ function normalizeSettings(settings: ClipSettings): ClipSettings {
       audioSources.push({ ...source, enabled: source.enabled ?? false });
     }
   }
-  const fps = [24, 30, 60].includes(Number(settings.fps)) ? Number(settings.fps) as ClipSettings["fps"] : defaultSettings.fps;
+  const fps = normalizeCaptureFps(settings.fps);
   const nvencPreset = [1, 2, 3, 4, 5].includes(Number(settings.nvencPreset)) ? Number(settings.nvencPreset) as ClipSettings["nvencPreset"] : defaultSettings.nvencPreset;
   const validResolutionPresets = new Set(["system", "144p", "360p", "720p", "1080p", "1440p", "4k"]);
   const resolutionPreset = validResolutionPresets.has(settings.resolutionPreset) ? settings.resolutionPreset : defaultSettings.resolutionPreset;

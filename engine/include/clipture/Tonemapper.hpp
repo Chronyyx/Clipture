@@ -4,8 +4,10 @@
 #include <wrl/client.h>
 #include <string>
 #include <vector>
+#include <memory>
 
 namespace clipture {
+class GpuStageProbe;
 
 class Tonemapper {
 public:
@@ -41,6 +43,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> computeShader_;
     std::vector<InputViewCacheEntry> inputViews_;
     std::vector<OutputViewCacheEntry> outputViews_;
+    std::unique_ptr<GpuStageProbe> timingProbe_;
 };
 
 } // namespace clipture

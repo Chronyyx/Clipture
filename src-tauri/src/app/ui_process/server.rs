@@ -9,10 +9,9 @@ use std::{
     thread,
 };
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::Semaphore;
 
 pub fn read(app: AppHandle, session: Arc<Session>, mut reader: impl Read) {
-    let slots = Arc::new(Semaphore::new(6));
+    let slots = super::admission::Admission::new();
     let mut ids = super::request_ids::RequestIds::default();
     while let Ok(Some(frame)) = wire::read_frame(&mut reader) {
         match frame.message {
@@ -29,7 +28,7 @@ pub fn read(app: AppHandle, session: Arc<Session>, mut reader: impl Read) {
             Message::Invoke { id, command, args }
                 if session.ready.load(Ordering::Acquire) && ids.accept(id) =>
             {
-                let Ok(permit) = slots.clone().try_acquire_owned() else {
+                let Some(permit) = slots.acquire(Some(&command)) else {
                     let _ = session.output.send(
                         Message::Reply {
                             id,
@@ -62,7 +61,7 @@ pub fn read(app: AppHandle, session: Arc<Session>, mut reader: impl Read) {
             message @ Message::Media { id, .. }
                 if session.ready.load(Ordering::Acquire) && ids.accept(id) =>
             {
-                let Ok(permit) = slots.clone().try_acquire_owned() else {
+                let Some(permit) = slots.acquire(None) else {
                     let _ = session.output.send(super::media_dispatch::failure(
                         id,
                         503,

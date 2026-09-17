@@ -1,4 +1,5 @@
 #include "CaptureBackend.hpp"
+#include "clipture/GpuTextureReadState.hpp"
 
 #include "clipture/MediaClock.hpp"
 #include "clipture/DesktopDuplicationHelpers.hpp"
@@ -430,7 +431,9 @@ void CaptureSharedState::publish(
     int width,
     int height,
     bool sourceHadDesktopPresent,
-    bool sourceHadPointerUpdate) {
+    bool sourceHadPointerUpdate,
+    std::shared_ptr<DeferredFramePreparation> preparation,
+    std::shared_ptr<GpuTextureReadState> gpuReadState) {
     auto* queue = frameQueue.load(std::memory_order_acquire);
     if (!queue || !texture || !textureLease) return;
     const int64_t publishedAtSteady100ns = monotonicNow100ns();
@@ -463,6 +466,8 @@ void CaptureSharedState::publish(
         ++frameSequence,
         sourceHadDesktopPresent,
         sourceHadPointerUpdate,
+        std::move(preparation),
+        std::move(gpuReadState),
     });
 }
 
@@ -555,8 +560,10 @@ CaptureRuntimeStats CaptureSharedState::snapshot() const {
 
 struct CaptureTexturePool::Slot {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> renderTargetView;
     std::atomic<bool> leased = false;
+    std::shared_ptr<GpuTextureReadState> gpuReadState;
 };
 
 namespace {
@@ -575,15 +582,20 @@ CaptureTexture CaptureTexturePool::acquire(
     UINT width,
     UINT height,
     bool needsUnorderedAccess,
-    std::string& error) {
+    std::string& error,
+    bool deferredHdr,
+    bool sharePrepared) {
     if (!device || width == 0 || height == 0) return {};
     std::lock_guard lock(mutex_);
     const bool needsNewGeneration = slots_.empty() || device_.Get() != device ||
+        deferredHdr_ != deferredHdr || sharePrepared_ != sharePrepared ||
         desc_.Width != width || desc_.Height != height ||
         (((desc_.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0) != needsUnorderedAccess);
     if (needsNewGeneration) {
         slots_.clear();
         device_ = device;
+        deferredHdr_ = deferredHdr;
+        sharePrepared_ = sharePrepared;
         hdrInputTexture_.Reset();
         nextSlot_ = 0;
         desc_ = {};
@@ -596,11 +608,17 @@ CaptureTexture CaptureTexturePool::acquire(
         desc_.Usage = D3D11_USAGE_DEFAULT;
         desc_.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
         if (needsUnorderedAccess) desc_.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+        if (sharePrepared) desc_.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
         slots_.reserve(kCaptureTextureWarmSlots);
         for (std::size_t index = 0; index < kCaptureTextureWarmSlots; ++index) {
             auto slot = std::make_shared<Slot>();
             HRESULT hr = device->CreateTexture2D(&desc_, nullptr, &slot->texture);
+            if (FAILED(hr) && desc_.MiscFlags) {
+                // Capability fallback keeps the established bridge path usable.
+                desc_.MiscFlags = 0;
+                hr = device->CreateTexture2D(&desc_, nullptr, &slot->texture);
+            }
             if (FAILED(hr) || !slot->texture) {
                 error = "CreateTexture2D for capture slot failed: " + hresultHex(hr);
                 slots_.clear();
@@ -612,13 +630,15 @@ CaptureTexture CaptureTexturePool::acquire(
                 slots_.clear();
                 return {};
             }
+            if (desc_.MiscFlags) slot->gpuReadState = std::make_shared<GpuTextureReadState>();
             slots_.push_back(std::move(slot));
         }
 
-        if (needsUnorderedAccess) {
+        if (needsUnorderedAccess && !deferredHdr) {
             D3D11_TEXTURE2D_DESC hdrDesc = desc_;
             hdrDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
             hdrDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            hdrDesc.MiscFlags = 0;
             const HRESULT hr = device->CreateTexture2D(&hdrDesc, nullptr, &hdrInputTexture_);
             if (FAILED(hr) || !hdrInputTexture_) {
                 error = "CreateTexture2D for HDR capture staging failed: " + hresultHex(hr);
@@ -628,17 +648,37 @@ CaptureTexture CaptureTexturePool::acquire(
         }
     }
 
+    bool gpuPending = false;
     for (std::size_t offset = 0; offset < slots_.size(); ++offset) {
         const std::size_t index = (nextSlot_ + offset) % slots_.size();
         const auto& slot = slots_[index];
+        if (slot->leased.load(std::memory_order_acquire)) continue;
+        if (slot->gpuReadState && !slot->gpuReadState->reusable()) {
+            gpuPending = true;
+            continue;
+        }
+        if (deferredHdr && !slot->hdrInputTexture) {
+            auto hdrDesc = desc_;
+            hdrDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            hdrDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            hdrDesc.MiscFlags = 0;
+            if (FAILED(device->CreateTexture2D(&hdrDesc, nullptr, &slot->hdrInputTexture))) {
+                error = "Creating leased HDR input failed.";
+                return {};
+            }
+        }
         bool expected = false;
         if (!slot->leased.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) continue;
         nextSlot_ = (index + 1) % slots_.size();
         auto lease = std::shared_ptr<void>(slot.get(), [slot](void*) {
             slot->leased.store(false, std::memory_order_release);
         });
-        return { slot->texture, hdrInputTexture_, slot->renderTargetView, std::move(lease) };
+        return { slot->texture, deferredHdr ? slot->hdrInputTexture : hdrInputTexture_, slot->renderTargetView, std::move(lease), slot->gpuReadState };
     }
+
+    // GPU-only pressure must not grow a second unbounded buffering queue.
+    // Skip this publication, without waiting or stalling the capture context.
+    if (gpuPending) { ++shared_->ownedSlotDrops; return {}; }
 
     // Grow only under real cross-thread lease pressure. The encoder queue has
     // its own small live-latency budget, so this remains naturally bounded in
@@ -656,12 +696,23 @@ CaptureTexture CaptureTexturePool::acquire(
     }
 
     slot->leased.store(true, std::memory_order_release);
+    if (deferredHdr) {
+        auto hdrDesc = desc_;
+        hdrDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        hdrDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        hdrDesc.MiscFlags = 0;
+        if (FAILED(device->CreateTexture2D(&hdrDesc, nullptr, &slot->hdrInputTexture))) {
+            error = "Growing leased HDR input pool failed.";
+            return {};
+        }
+    }
     auto lease = std::shared_ptr<void>(slot.get(), [slot](void*) {
         slot->leased.store(false, std::memory_order_release);
     });
+    if (desc_.MiscFlags) slot->gpuReadState = std::make_shared<GpuTextureReadState>();
     slots_.push_back(slot);
     nextSlot_ = 0;
-    return { slot->texture, hdrInputTexture_, slot->renderTargetView, std::move(lease) };
+    return { slot->texture, deferredHdr ? slot->hdrInputTexture : hdrInputTexture_, slot->renderTargetView, std::move(lease), slot->gpuReadState };
 }
 void CaptureTexturePool::reset() {
     std::lock_guard lock(mutex_);

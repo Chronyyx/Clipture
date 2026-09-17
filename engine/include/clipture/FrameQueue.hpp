@@ -13,6 +13,9 @@
 
 namespace clipture {
 
+class DeferredFramePreparation;
+class GpuTextureReadState;
+
 struct CapturedFrame {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
     std::shared_ptr<void> textureLease;
@@ -24,6 +27,8 @@ struct CapturedFrame {
     uint64_t sequence = 0;
     bool sourceHadDesktopPresent = false;
     bool sourceHadPointerUpdate = false;
+    std::shared_ptr<DeferredFramePreparation> preparation;
+    std::shared_ptr<GpuTextureReadState> gpuReadState;
 };
 
 struct FrameQueueStats {

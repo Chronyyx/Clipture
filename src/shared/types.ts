@@ -393,7 +393,7 @@ export interface ClipSettings {
   customAccentColor: string;
   clipLengthSeconds: number;
   saveInPlace: boolean;
-  fps: 24 | 30 | 60;
+  fps: import('./capture-fps').CaptureFps;
   bitrateMbps: number;
   autoBitrate: boolean;
   maxAutoBitrateMbps: number;

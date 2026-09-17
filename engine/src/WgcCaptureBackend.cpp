@@ -1,4 +1,6 @@
 #include "WgcCaptureBackend.hpp"
+#include "WgcFramePreparation.hpp"
+#include "clipture/SourceTimestampGate.hpp"
 
 #include "clipture/MediaClock.hpp"
 #include "clipture/Tonemapper.hpp"
@@ -46,7 +48,10 @@ struct WgcCaptureBackend::Impl {
     winrt::event_token itemClosedToken {};
     DirectXPixelFormat framePoolPixelFormat = DirectXPixelFormat::B8G8R8A8UIntNormalized;
     winrt::Windows::Graphics::SizeInt32 framePoolSize {};
-    std::unique_ptr<Tonemapper> tonemapper;
+    std::shared_ptr<Tonemapper> tonemapper;
+    GpuStageProbe copyProbe {"wgc-copy"};
+    SourceTimestampGate sourceClock;
+    bool sourceClockRejectionLogged = false;
     std::mutex callbackMutex;
     std::mutex failureMutex;
     std::string failureReason;
@@ -154,7 +159,7 @@ BackendStartResult WgcCaptureBackend::start() {
         state.shared->hdrTonemappingActive.store(false, std::memory_order_relaxed);
         if (state.output.hdrEnabled) {
             float sdrWhiteLevel = monitorSdrWhiteLevel(state.output.desc.Monitor);
-            state.tonemapper = std::make_unique<Tonemapper>(state.d3dDevice);
+            state.tonemapper = std::make_shared<Tonemapper>(state.d3dDevice);
             std::string tonemapperError;
             if (state.tonemapper->Initialize(tonemapperError, sdrWhiteLevel)) {
                 pixelFormat = DirectXPixelFormat::R16G16B16A16Float;
@@ -180,7 +185,6 @@ BackendStartResult WgcCaptureBackend::start() {
 
                 while (auto frame = sender.TryGetNextFrame()) {
                     ++callbackState.shared->acquiredUpdates;
-                    ++callbackState.shared->desktopPresents;
 
                     const auto size = frame.ContentSize();
                     if (size.Width <= 0 || size.Height <= 0) {
@@ -192,8 +196,11 @@ BackendStartResult WgcCaptureBackend::start() {
                         try { frame.Close(); } catch (...) {}
                         frame = nullptr;
                         callbackState.framePoolSize = size;
-                        if (callbackState.tonemapper) callbackState.tonemapper->ResetViewCache();
+                        // Queued selected frames may still use the tone mapper.
+                        // Its bounded view cache owns old resources until retired.
                         callbackState.texturePool.reset();
+                        callbackState.sourceClock.reset();
+                        callbackState.sourceClockRejectionLogged = false;
                         callbackState.shared->beginEpoch();
                         {
                             std::lock_guard stateLock(callbackState.shared->stateMutex);
@@ -208,8 +215,19 @@ BackendStartResult WgcCaptureBackend::start() {
                         return;
                     }
 
-                    const int64_t sourceTimestamp100ns = mediaTimeFromSystemRelative100ns(
-                        frame.SystemRelativeTime().count());
+                    const int64_t sourceRelative100ns = frame.SystemRelativeTime().count();
+                    if (!callbackState.sourceClock.accept(sourceRelative100ns)) {
+                        ++callbackState.shared->nonMonotonicTimestamps;
+                        if (!callbackState.sourceClockRejectionLogged) {
+                            callbackState.sourceClockRejectionLogged = true;
+                            std::cerr << "[capture] WGC rejected stale source timestamp=" << sourceRelative100ns
+                                      << " last=" << callbackState.sourceClock.last() << '\n';
+                        }
+                        try { frame.Close(); } catch (...) {}
+                        continue;
+                    }
+                    ++callbackState.shared->desktopPresents;
+                    const int64_t sourceTimestamp100ns = mediaTimeFromSystemRelative100ns(sourceRelative100ns);
                     int64_t outputTimestamp100ns = 0;
                     if (!callbackState.shared->selectFrameTimestamp(
                             sourceTimestamp100ns, outputTimestamp100ns)) {
@@ -227,72 +245,33 @@ BackendStartResult WgcCaptureBackend::start() {
                         continue;
                     }
 
-                    D3D11_TEXTURE2D_DESC sourceDesc {};
-                    sourceTexture->GetDesc(&sourceDesc);
-                    const bool needsTonemapping = callbackState.tonemapper &&
-                        sourceDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT;
                     std::string slotError;
-                    auto owned = callbackState.texturePool.acquire(
-                        callbackState.d3dDevice.Get(),
-                        static_cast<UINT>(size.Width),
-                        static_cast<UINT>(size.Height),
-                        needsTonemapping,
-                        slotError);
-                    if (!owned.texture || !owned.lease) {
+                    auto prepared = prepareWgcFrame(sourceTexture.Get(), size.Width, size.Height,
+                        callbackState.texturePool, callbackState.tonemapper, callbackState.shared,
+                        callbackState.d3dDevice.Get(), callbackState.d3dContext, callbackState.copyProbe,
+                        capturePipelinePolicy(), slotError);
+                    if (!prepared.owned.lease) {
                         if (!slotError.empty()) {
+                            ++callbackState.shared->callbackErrors;
                             callbackState.fail(slotError);
-                        } else {
-                            ++callbackState.shared->ownedSlotDrops;
                         }
                         try { frame.Close(); } catch (...) {}
                         continue;
                     }
 
-                    const int64_t framePreparationStarted100ns = monotonicNow100ns();
-                    D3D11_BOX sourceBox {
-                        0,
-                        0,
-                        0,
-                        static_cast<UINT>(std::min<int>(size.Width, static_cast<int>(sourceDesc.Width))),
-                        static_cast<UINT>(std::min<int>(size.Height, static_cast<int>(sourceDesc.Height))),
-                        1,
-                    };
-                    if (needsTonemapping) {
-                        if (owned.hdrInputTexture) {
-                            callbackState.d3dContext->CopySubresourceRegion(
-                                owned.hdrInputTexture.Get(), 0, 0, 0, 0, sourceTexture.Get(), 0, &sourceBox);
-                            std::string error;
-                            if (!callbackState.tonemapper->Process(owned.hdrInputTexture, owned.texture, error)) {
-                                ++callbackState.shared->callbackErrors;
-                                callbackState.fail("WGC HDR tonemapping failed: " + error);
-                                try { frame.Close(); } catch (...) {}
-                                continue;
-                            }
-                        }
-                    } else if (sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
-                               sourceDesc.Width == static_cast<UINT>(size.Width) &&
-                               sourceDesc.Height == static_cast<UINT>(size.Height)) {
-                        callbackState.d3dContext->CopyResource(owned.texture.Get(), sourceTexture.Get());
-                    } else if (sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM) {
-                        callbackState.d3dContext->CopySubresourceRegion(
-                            owned.texture.Get(), 0, 0, 0, 0, sourceTexture.Get(), 0, &sourceBox);
-                    }
                     sourceTexture.Reset();
                     try { frame.Close(); } catch (...) {}
                     frame = nullptr;
-                    const int64_t framePrepared100ns = monotonicNow100ns();
-                    callbackState.shared->framePreparationLatency.record(
-                        framePrepared100ns,
-                        framePrepared100ns - framePreparationStarted100ns);
-
                     callbackState.shared->publish(
-                        std::move(owned.texture),
-                        std::move(owned.lease),
+                        std::move(prepared.owned.texture),
+                        std::move(prepared.owned.lease),
                         outputTimestamp100ns,
                         size.Width,
                         size.Height,
                         true,
-                        false);
+                        false,
+                        std::move(prepared.preparation),
+                        std::move(prepared.owned.gpuReadState));
                     const int64_t frameProcessed100ns = monotonicNow100ns();
                     callbackState.shared->frameProcessingLatency.record(
                         frameProcessed100ns,
@@ -312,6 +291,18 @@ BackendStartResult WgcCaptureBackend::start() {
 
         state.session = state.framePool.CreateCaptureSession(state.item);
         state.session.IsCursorCaptureEnabled(true);
+        // Capability-query the optional API; old Windows keeps its behavior.
+        // Zero removes an API-side rate floor, not a promise of delivered FPS.
+        if (auto cadence = state.session.try_as<winrt::Windows::Graphics::Capture::IGraphicsCaptureSession5>()) {
+            try {
+                cadence.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{0});
+                std::cerr << "[capture-pipeline] WGC minUpdateInterval100ns="
+                          << cadence.MinUpdateInterval().count() << '\n';
+            } catch (const winrt::hresult_error& error) {
+                std::cerr << "[capture-pipeline] WGC interval request unavailable: "
+                          << hresultHex(error.code()) << '\n';
+            }
+        }
         try {
             state.session.IsBorderRequired(false);
         } catch (...) {

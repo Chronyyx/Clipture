@@ -241,8 +241,9 @@ bool DesktopPointerCompositor::update(
 bool DesktopPointerCompositor::ensureBackgroundTexture(UINT width, UINT height, std::string& error) {
     if (backgroundTexture_ && backgroundWidth_ >= width && backgroundHeight_ >= height) return true;
 
-    const UINT allocationWidth = std::max(width, pointerWidth_);
-    const UINT allocationHeight = std::max(height, pointerHeight_);
+    // The caller's immutable snapshot defines the necessary clipped dimensions.
+    const UINT allocationWidth = width;
+    const UINT allocationHeight = height;
 
     D3D11_TEXTURE2D_DESC desc {};
     desc.Width = allocationWidth;
@@ -279,10 +280,20 @@ bool DesktopPointerCompositor::composite(
     UINT outputWidth,
     UINT outputHeight,
     std::string& error) {
-    if (!pointerVisible_ || !pointerView_ || !desktopTexture || !outputView) return true;
+    return compositeSnapshot(snapshot(), desktopTexture, outputView, outputWidth, outputHeight, error);
+}
+
+DesktopPointerCompositor::Snapshot DesktopPointerCompositor::snapshot() const {
+    return { pointerView_, pointerWidth_, pointerHeight_, pointerPosition_, pointerVisible_ };
+}
+
+bool DesktopPointerCompositor::compositeSnapshot(
+    const Snapshot& pointer, ID3D11Texture2D* desktopTexture,
+    ID3D11RenderTargetView* outputView, UINT outputWidth, UINT outputHeight, std::string& error) {
+    if (!pointer.visible || !pointer.view || !desktopTexture || !outputView) return true;
 
     const auto clip = clipDesktopPointer(
-        pointerPosition_, pointerWidth_, pointerHeight_, outputWidth, outputHeight);
+        pointer.position, pointer.width, pointer.height, outputWidth, outputHeight);
     if (!clip) return true;
     const UINT clippedWidth = clip.width;
     const UINT clippedHeight = clip.height;
@@ -329,7 +340,7 @@ bool DesktopPointerCompositor::composite(
     context_->PSSetShader(pixelShader_.Get(), nullptr, 0);
     ID3D11Buffer* constantsBuffer = constantBuffer_.Get();
     context_->PSSetConstantBuffers(0, 1, &constantsBuffer);
-    ID3D11ShaderResourceView* views[] { backgroundView_.Get(), pointerView_.Get() };
+    ID3D11ShaderResourceView* views[] { backgroundView_.Get(), pointer.view.Get() };
     context_->PSSetShaderResources(0, 2, views);
     constexpr float blendFactor[4] {};
     context_->OMSetBlendState(blendState_.Get(), blendFactor, 0xFFFFFFFFu);

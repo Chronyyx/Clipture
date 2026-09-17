@@ -123,6 +123,7 @@ private:
         int nvencPreset = 3;
         int configVersion = 0;
         int freshFrameVersion = 0;
+        int64_t enqueuedAt100ns = 0;
     };
 
     void run();

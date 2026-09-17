@@ -19,12 +19,16 @@ add_executable(clipture_engine
   src/CaptureBackend.cpp
   src/CaptureSession.cpp
   src/DesktopDuplicationBackend.cpp
+  src/DesktopFramePreparation.cpp
   src/DesktopPointerCompositor.cpp
   src/DesktopPointerShape.cpp
   src/Diagnostics.cpp
   src/EncoderWorker.cpp
   src/Engine.cpp
   src/FrameQueue.cpp
+  src/GpuFrameHandoff.cpp
+  src/SharedTextureReader.cpp
+  src/EncoderSourceSnapshot.cpp
   src/H264PacketAnalyzer.cpp
   src/Mp4Muxer.cpp
   src/NativeRuntime.cpp
@@ -45,6 +49,7 @@ add_executable(clipture_engine
   src/RawInputHotkey.cpp
   src/Tonemapper.cpp
   src/WgcCaptureBackend.cpp
+  src/WgcFramePreparation.cpp
   third_party/rnnoise/src/celt_lpc.c
   third_party/rnnoise/src/denoise.c
   third_party/rnnoise/src/kiss_fft.c
@@ -68,6 +73,60 @@ endif()
 target_link_libraries(clipture_engine PRIVATE dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 avrt mfplat mfreadwrite mfuuid winmm user32)
 
 if(BUILD_TESTING)
+  add_executable(clipture_source_snapshot_tests tests/EncoderSourceSnapshotTests.cpp
+    src/EncoderSourceSnapshot.cpp src/SharedTextureReader.cpp)
+  target_include_directories(clipture_source_snapshot_tests PRIVATE src include)
+  target_compile_features(clipture_source_snapshot_tests PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_source_snapshot_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_source_snapshot_tests PRIVATE d3d11 dxgi)
+  add_test(NAME clipture_encoder_source_snapshot COMMAND clipture_source_snapshot_tests)
+  set_tests_properties(clipture_encoder_source_snapshot PROPERTIES TIMEOUT 20)
+  add_executable(clipture_source_timestamp_tests tests/SourceTimestampGateTests.cpp)
+  target_include_directories(clipture_source_timestamp_tests PRIVATE include)
+  target_compile_features(clipture_source_timestamp_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_source_timestamp COMMAND clipture_source_timestamp_tests)
+  add_executable(clipture_shared_reader_tests tests/SharedTextureReaderTests.cpp
+    src/SharedTextureReader.cpp src/CaptureBackend.cpp src/FrameQueue.cpp)
+  target_include_directories(clipture_shared_reader_tests PRIVATE src include)
+  target_compile_features(clipture_shared_reader_tests PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_shared_reader_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_shared_reader_tests PRIVATE d3d11 dxgi user32)
+  add_test(NAME clipture_shared_texture_reader COMMAND clipture_shared_reader_tests)
+  set_tests_properties(clipture_shared_texture_reader PROPERTIES TIMEOUT 20)
+  add_executable(clipture_gpu_probe_tests tests/GpuStageProbeTests.cpp)
+  target_include_directories(clipture_gpu_probe_tests PRIVATE src include)
+  target_compile_features(clipture_gpu_probe_tests PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_gpu_probe_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_gpu_probe_tests PRIVATE d3d11)
+  add_test(NAME clipture_gpu_probe_enabled COMMAND clipture_gpu_probe_tests)
+  set_tests_properties(clipture_gpu_probe_enabled PROPERTIES ENVIRONMENT "CLIPTURE_PIPELINE_TRACE=1" TIMEOUT 15)
+  add_test(NAME clipture_gpu_probe_disabled COMMAND clipture_gpu_probe_tests)
+  set_tests_properties(clipture_gpu_probe_disabled PROPERTIES ENVIRONMENT "CLIPTURE_PIPELINE_TRACE=0" TIMEOUT 15)
+  add_executable(clipture_gpu_handoff_tests tests/GpuFrameHandoffTests.cpp src/GpuFrameHandoff.cpp)
+  target_include_directories(clipture_gpu_handoff_tests PRIVATE src include)
+  target_compile_features(clipture_gpu_handoff_tests PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_gpu_handoff_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_gpu_handoff_tests PRIVATE d3d11 dxgi)
+  add_test(NAME clipture_gpu_frame_handoff COMMAND clipture_gpu_handoff_tests)
+  set_tests_properties(clipture_gpu_frame_handoff PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
+  add_executable(clipture_preparation_gpu_tests
+    tests/DesktopPreparationGpuTests.cpp
+    src/DesktopFramePreparation.cpp src/WgcFramePreparation.cpp src/DesktopPointerCompositor.cpp
+    src/DesktopPointerShape.cpp src/Tonemapper.cpp src/CaptureBackend.cpp src/FrameQueue.cpp)
+  target_include_directories(clipture_preparation_gpu_tests PRIVATE include src)
+  target_compile_features(clipture_preparation_gpu_tests PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_preparation_gpu_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_preparation_gpu_tests PRIVATE d3d11 dxgi d3dcompiler user32)
+  add_test(NAME clipture_desktop_preparation_pixels COMMAND clipture_preparation_gpu_tests)
+  add_test(NAME clipture_shared_hdr_pixels COMMAND clipture_preparation_gpu_tests --shared)
+  add_executable(clipture_preparation_tests tests/DeferredFramePreparationTests.cpp)
+  target_include_directories(clipture_preparation_tests PRIVATE include)
+  target_compile_features(clipture_preparation_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_deferred_preparation COMMAND clipture_preparation_tests)
+  add_executable(clipture_cadence_tests tests/EncoderCadenceTests.cpp)
+  target_include_directories(clipture_cadence_tests PRIVATE include)
+  target_compile_features(clipture_cadence_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_encoder_cadence COMMAND clipture_cadence_tests)
   add_executable(clipture_pcm_block_mixer_tests tests/audio/PcmBlockMixerTests.cpp)
   target_include_directories(clipture_pcm_block_mixer_tests PRIVATE include)
   target_compile_features(clipture_pcm_block_mixer_tests PRIVATE cxx_std_20)

@@ -1,4 +1,5 @@
 #include "clipture/Tonemapper.hpp"
+#include "GpuStageProbe.hpp"
 #include <d3dcompiler.h>
 #include <algorithm>
 #include <cstring>
@@ -54,6 +55,7 @@ bool sameTextureDesc(const D3D11_TEXTURE2D_DESC& a, const D3D11_TEXTURE2D_DESC& 
 Tonemapper::Tonemapper(Microsoft::WRL::ComPtr<ID3D11Device> device)
     : device_(device) {
     device_->GetImmediateContext(&context_);
+    if (pipelineTimingEnabled()) timingProbe_ = std::make_unique<GpuStageProbe>("tone-map");
 }
 
 Tonemapper::~Tonemapper() {}
@@ -116,6 +118,7 @@ bool Tonemapper::Process(
     Microsoft::WRL::ComPtr<ID3D11Texture2D> outputUnorm8,
     std::string& errorMsg
 ) {
+    GpuStageProbe::Scope sample(timingProbe_.get(), context_.Get());
     if (!computeShader_) {
         errorMsg = "Tonemapper not initialized";
         return false;

@@ -12,6 +12,7 @@ function detailFrom(error: unknown) {
 
 export class HostCapabilityError extends Error {
   readonly cause: unknown;
+  readonly retryable: boolean;
 
   constructor(
     readonly host: HostKind,
@@ -21,11 +22,17 @@ export class HostCapabilityError extends Error {
   ) {
     const hostLabel = host === 'tauri' ? 'Tauri' : host === 'electron' ? 'Electron' : 'Browser mock';
     const route = command ? ' through ' + command : '';
+    const busy = detailFrom(error) === 'UI host is busy; retry shortly';
     super(
-      hostLabel + ' capability ' + capability + ' failed' + route + ': ' + detailFrom(error) + '. ' +
-      'Check that the matching desktop command is implemented and registered.'
+      busy ? 'Clipture is busy preparing media. Please try again shortly.' :
+        hostLabel + ' capability ' + capability + ' failed' + route + ': ' + detailFrom(error)
     );
     this.name = 'HostCapabilityError';
     this.cause = error;
+    this.retryable = busy;
   }
+}
+
+export function isHostBusyError(error: unknown): boolean {
+  return error instanceof HostCapabilityError && error.retryable;
 }

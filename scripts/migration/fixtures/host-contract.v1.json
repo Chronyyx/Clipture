@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "settingsDefaults": { "saveInPlace": true },
+  "captureFpsOptions": [24, 30, 60, 120, 144, 210, 240],
   "source": "src/shared/types.ts#CliptureApi",
   "operations": [
     { "method": "getDiagnostics", "transport": "invoke", "channel": "engine:getDiagnostics", "adapterFailure": "reject-without-fabricating-engine-state" },

@@ -1,10 +1,14 @@
 #include "DesktopDuplicationBackend.hpp"
 
 #include "DesktopPointerCompositor.hpp"
+#include "DesktopFramePreparation.hpp"
+#include "GpuStageProbe.hpp"
+#include "clipture/CapturePipelinePolicy.hpp"
 #include "clipture/CaptureBackendPolicy.hpp"
 #include "clipture/DesktopDuplicationHelpers.hpp"
 #include "clipture/FixedRateFrameSampler.hpp"
 #include "clipture/MediaClock.hpp"
+#include "clipture/DeadlineWait.hpp"
 #include "clipture/Tonemapper.hpp"
 
 #include <avrt.h>
@@ -45,7 +49,10 @@ public:
     void markAcquired() { acquired_ = true; }
     void release() {
         if (!acquired_ || !duplication_) return;
+        const auto start = pipelineTimingEnabled() ? monotonicNow100ns() : 0;
         duplication_->ReleaseFrame();
+        static thread_local PipelineTimingTrace trace("dxgi-release");
+        if (pipelineTimingEnabled()) trace.record(monotonicNow100ns() - start);
         acquired_ = false;
     }
 
@@ -98,8 +105,8 @@ struct DesktopDuplicationBackend::Impl {
     Microsoft::WRL::ComPtr<ID3D11Device> d3dDevice;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3dContext;
     Microsoft::WRL::ComPtr<IDXGIOutputDuplication> duplication;
-    std::unique_ptr<DesktopPointerCompositor> pointerCompositor;
-    std::unique_ptr<Tonemapper> tonemapper;
+    std::shared_ptr<DesktopPointerCompositor> pointerCompositor;
+    std::shared_ptr<Tonemapper> tonemapper;
     DXGI_OUTDUPL_DESC duplicationDesc {};
     DXGI_FORMAT captureFormat = DXGI_FORMAT_UNKNOWN;
     int64_t qpcFrequency = 0;
@@ -215,14 +222,14 @@ BackendStartResult DesktopDuplicationBackend::Impl::initialize() {
 
     if (hdrCapture) {
         sdrWhiteLevel = monitorSdrWhiteLevel(output.desc.Monitor);
-        tonemapper = std::make_unique<Tonemapper>(d3dDevice);
+        tonemapper = std::make_shared<Tonemapper>(d3dDevice);
         std::string tonemapperError;
         if (!tonemapper->Initialize(tonemapperError, sdrWhiteLevel)) {
             return { false, "DXGI HDR tonemapper initialization failed: " + tonemapperError };
         }
     }
 
-    pointerCompositor = std::make_unique<DesktopPointerCompositor>(d3dDevice, d3dContext);
+    pointerCompositor = std::make_shared<DesktopPointerCompositor>(d3dDevice, d3dContext);
     std::string pointerError;
     if (!pointerCompositor->initialize(pointerError)) {
         return { false, "Desktop pointer compositor initialization failed: " + pointerError };
@@ -309,6 +316,15 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
     // acquisition whenever a game or a save briefly loads the machine.
     MmcssCaptureRegistration mmcss(true);
     bool bootstrapComplete = false;
+    DeadlineWait idleWait(0);
+    const auto policy = capturePipelinePolicy();
+    PipelineTimingTrace acquireSuccess("dxgi-success"), acquireTimeout("dxgi-timeout"),
+        idleDuration("idle-total"), cycleGap("acquire-cycle"), slotDuration("capture-lease"),
+        copySubmission("capture-copy-submit");
+    GpuStageProbe copyProbe("capture-copy");
+    int64_t lastAcquireStart = 0;
+    std::cerr << "[capture-pipeline] deferred=" << policy.deferPreparation
+              << " idleBackoff=" << policy.idleBackoff << '\n';
 
     while (!stopToken.stop_requested()) {
         auto* tickGate = state.shared->captureTickGate.load(std::memory_order_acquire);
@@ -326,15 +342,26 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
         Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
         AcquiredDesktopFrame acquiredFrame(state.duplication.Get());
         const int64_t acquireStarted100ns = monotonicNow100ns();
-        // Immediate non-blocking poll matching OBS Studio's instant acquisition.
+        // Do not wait inside DXGI: that can serialize the shared D3D device and
+        // NVENC input submission. Idle backoff happens after the call returns.
         const UINT acquireTimeoutMs = 0U;
         HRESULT acquireHr = state.duplication->AcquireNextFrame(
             acquireTimeoutMs,
             &frameInfo,
             &desktopResource);
+        const auto acquireReturned100ns = monotonicNow100ns();
+        if (pipelineTimingEnabled() && lastAcquireStart) cycleGap.record(acquireStarted100ns - lastAcquireStart);
+        lastAcquireStart = acquireStarted100ns;
         if (acquireHr == DXGI_ERROR_WAIT_TIMEOUT) {
+            acquireTimeout.record(acquireReturned100ns - acquireStarted100ns);
             ++state.shared->acquireTimeouts;
-            SwitchToThread();
+            const auto idleStart = pipelineTimingEnabled() ? monotonicNow100ns() : 0;
+            if (policy.idleBackoff) {
+                idleWait.until(monotonicNow100ns() + 2'000, [&] { return !stopToken.stop_requested(); });
+            } else {
+                SwitchToThread();
+            }
+            if (pipelineTimingEnabled()) idleDuration.record(monotonicNow100ns() - idleStart);
             continue;
         }
         if (FAILED(acquireHr)) {
@@ -351,7 +378,8 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             return BackendOutcome::RequestFallback;
         }
         acquiredFrame.markAcquired();
-        const int64_t acquired100ns = monotonicNow100ns();
+        const int64_t acquired100ns = acquireReturned100ns;
+        acquireSuccess.record(acquired100ns - acquireStarted100ns);
         state.shared->acquireWaitLatency.record(acquired100ns, acquired100ns - acquireStarted100ns);
 
         ++state.shared->acquiredUpdates;
@@ -415,8 +443,12 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
         }
 
         std::string slotError;
+        const auto leaseStart = pipelineTimingEnabled() ? monotonicNow100ns() : 0;
         auto owned = state.texturePool.acquire(
-            state.d3dDevice.Get(), state.width, state.height, state.hdrCapture, slotError);
+            state.d3dDevice.Get(), state.width, state.height, state.hdrCapture, slotError,
+            policy.deferPreparation && state.hdrCapture,
+            policy.directTextureRead && policy.isolatedDevice && policy.gpuHandoff);
+        if (pipelineTimingEnabled()) slotDuration.record(monotonicNow100ns() - leaseStart);
         if (!owned.texture || !owned.lease || !owned.renderTargetView) {
             if (!slotError.empty()) {
                 ++state.shared->callbackErrors;
@@ -433,10 +465,17 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
                 state.shared->setFallbackReason("DXGI HDR capture resources were unavailable.");
                 return BackendOutcome::RequestFallback;
             }
-            state.d3dContext->CopyResource(owned.hdrInputTexture.Get(), desktopTexture.Get());
+            int64_t copyDuration = 0;
+            {
+                auto sample = copyProbe.scope(state.d3dContext.Get());
+                const auto copyStart = pipelineTimingEnabled() ? monotonicNow100ns() : 0;
+                state.d3dContext->CopyResource(owned.hdrInputTexture.Get(), desktopTexture.Get());
+                if (pipelineTimingEnabled()) copyDuration = monotonicNow100ns() - copyStart;
+            }
             acquiredFrame.release();
+            copySubmission.record(copyDuration);
             std::string tonemapperError;
-            if (!state.tonemapper->Process(
+            if (!policy.deferPreparation && !state.tonemapper->Process(
                     owned.hdrInputTexture, owned.texture, tonemapperError)) {
                 ++state.shared->callbackErrors;
                 state.shared->setFallbackReason(
@@ -444,15 +483,22 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
                 return BackendOutcome::RequestFallback;
             }
         } else {
-            state.d3dContext->CopyResource(owned.texture.Get(), desktopTexture.Get());
+            int64_t copyDuration = 0;
+            {
+                auto sample = copyProbe.scope(state.d3dContext.Get());
+                const auto copyStart = pipelineTimingEnabled() ? monotonicNow100ns() : 0;
+                state.d3dContext->CopyResource(owned.texture.Get(), desktopTexture.Get());
+                if (pipelineTimingEnabled()) copyDuration = monotonicNow100ns() - copyStart;
+            }
             acquiredFrame.release();
+            copySubmission.record(copyDuration);
         }
         const int64_t framePrepared100ns = monotonicNow100ns();
-        state.shared->framePreparationLatency.record(
+        if (!policy.deferPreparation) state.shared->framePreparationLatency.record(
             framePrepared100ns,
             framePrepared100ns - framePreparationStarted100ns);
         const int64_t cursorCompositeStarted100ns = monotonicNow100ns();
-        if (!state.pointerCompositor->composite(
+        if (!policy.deferPreparation && !state.pointerCompositor->composite(
                 owned.texture.Get(),
                 owned.renderTargetView.Get(),
                 state.width,
@@ -463,10 +509,13 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             return BackendOutcome::RequestFallback;
         }
         const int64_t cursorComposited100ns = monotonicNow100ns();
-        state.shared->cursorCompositeLatency.record(
+        if (!policy.deferPreparation) state.shared->cursorCompositeLatency.record(
             cursorComposited100ns,
             cursorComposited100ns - cursorCompositeStarted100ns);
 
+        auto preparation = policy.deferPreparation ? deferDesktopPreparation(
+            owned, state.tonemapper, state.pointerCompositor, state.pointerCompositor->snapshot(),
+            state.shared, state.d3dContext, state.width, state.height) : nullptr;
         state.shared->publish(
             std::move(owned.texture),
             std::move(owned.lease),
@@ -474,7 +523,7 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             static_cast<int>(state.width),
             static_cast<int>(state.height),
             frameInfo.LastPresentTime.QuadPart != 0,
-            frameInfo.LastMouseUpdateTime.QuadPart != 0);
+            frameInfo.LastMouseUpdateTime.QuadPart != 0, std::move(preparation), std::move(owned.gpuReadState));
         bootstrapComplete = true;
         const int64_t frameProcessed100ns = monotonicNow100ns();
         state.shared->frameProcessingLatency.record(

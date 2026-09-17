@@ -15,6 +15,13 @@ namespace clipture::capture {
 
 class DesktopPointerCompositor {
 public:
+    struct Snapshot {
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+        UINT width = 0, height = 0;
+        POINT position {};
+        bool visible = false;
+    };
+    Snapshot snapshot() const;
     DesktopPointerCompositor(
         Microsoft::WRL::ComPtr<ID3D11Device> device,
         Microsoft::WRL::ComPtr<ID3D11DeviceContext> context);
@@ -27,6 +34,8 @@ public:
         UINT outputWidth,
         UINT outputHeight,
         std::string& error);
+    bool compositeSnapshot(const Snapshot& snapshot, ID3D11Texture2D* desktopTexture,
+        ID3D11RenderTargetView* outputView, UINT width, UINT height, std::string& error);
     void reset();
 
 private:

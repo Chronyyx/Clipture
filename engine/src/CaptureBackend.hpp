@@ -121,7 +121,9 @@ struct CaptureSharedState {
         int width,
         int height,
         bool sourceHadDesktopPresent,
-        bool sourceHadPointerUpdate);
+        bool sourceHadPointerUpdate,
+        std::shared_ptr<DeferredFramePreparation> preparation = {},
+        std::shared_ptr<GpuTextureReadState> gpuReadState = {});
     CaptureRuntimeStats snapshot() const;
 };
 
@@ -130,6 +132,7 @@ struct CaptureTexture {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> renderTargetView;
     std::shared_ptr<void> lease;
+    std::shared_ptr<GpuTextureReadState> gpuReadState;
 };
 
 class CaptureTexturePool {
@@ -141,7 +144,9 @@ public:
         UINT width,
         UINT height,
         bool needsUnorderedAccess,
-        std::string& error);
+        std::string& error,
+        bool deferredHdr = false,
+        bool sharePrepared = false);
     void reset();
 
 private:
@@ -152,6 +157,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture_;
     std::size_t nextSlot_ = 0;
+    bool deferredHdr_ = false;
+    bool sharePrepared_ = false;
     D3D11_TEXTURE2D_DESC desc_ {};
 };
 

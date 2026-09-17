@@ -16,6 +16,14 @@ Diagnostics adapter refresh failures reject instead of synthesizing an offline
 engine. The UI retains the last received snapshot with an explicit delayed/stale
 label until polling recovers. Actual degraded/offline snapshots still replace it.
 
+The disposable UI host retains a six-request concurrency ceiling, reserving two
+slots from background work for playback setup/release. Explicit pre-dispatch
+`UI host is busy; retry shortly` failures are classified by the platform adapter.
+The player retries those failures at most three times (100/250/500 ms), cancelling
+pending retries when the clip changes or the player unmounts. Timeouts and other
+errors are not retried. Busy errors do not suggest missing command registration.
+Run `node scripts/migration/test-playback-busy.cjs` alongside the host contract.
+
 - `invoke` operations return a promise and exactly one result or rejection.
 - `send` operations are deliberately fire-and-forget.
 - `event` registrations synchronously return an idempotent unsubscribe function.
@@ -30,6 +38,14 @@ During migration, keep the v1 facade stable. New optional functionality may be a
 The engine protocol fixture in `engine-protocol.v1.json` is separate because it is a private host-to-sidecar boundary. Its request IDs are controller-generated positive integers; stdout replies are either `{id,payload}` or `{id,error}`, and the native hotkey is an unsolicited event.
 
 ## Contract-test expansion points
+
+`ClipSettings.fps` accepts 24, 30, 60, 120, 144, 210 and 240. Values above 60
+are exposed as experimental recording targets, not guaranteed unique-frame
+throughput. Both frontend adapters share the FPS normalizer; the Electron host
+and Rust settings normalization preserve the same choices. Unsupported values
+fall back to the unchanged 30 FPS default. `captureFpsOptions` in the host fixture
+pins the dropdown, normalization and Rust engine-config serialization; isolated
+settings-store tests verify higher values survive disk save/reload.
 
 `ClipSettings.saveInPlace` is additive and defaults to true when absent; explicit
 false restores overlapping replay saves. Both renderer adapters normalize it.

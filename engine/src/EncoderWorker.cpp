@@ -1,8 +1,16 @@
 #include "clipture/EncoderWorker.hpp"
 #include "clipture/EncoderPipelinePolicy.hpp"
+#include "clipture/CapturePipelinePolicy.hpp"
+#include "clipture/DeferredFramePreparation.hpp"
+#include "clipture/EncoderCadence.hpp"
+#include "clipture/DeadlineWait.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
 #include "clipture/MediaClock.hpp"
+#include "GpuFrameHandoff.hpp"
+#include "GpuStageProbe.hpp"
+#include "SharedTextureReader.hpp"
+#include "EncoderSourceSnapshot.hpp"
 
 #include <clipture/FixedRateFrameSampler.hpp>
 
@@ -44,10 +52,9 @@ constexpr uint32_t kNvencExtendedStructFlag = 1u << 31;
 // prevents blocking the CPU submission loop.
 constexpr bool kPreferObsStyleBufferedSyncNvenc = false;
 
-// OBS uses a single unified D3D11 device across capture and encoding.
-// Sharing the capture device eliminates cross-device KeyedMutex synchronization
-// stalls (AcquireSync/ReleaseSync), which cause severe frame latency and stutter.
-constexpr bool kPreferSharedCaptureDevice = true;
+// Shared versus isolated input devices are an engineering A/B policy. Sharing
+// avoids cross-device transfers; isolation avoids passing the DXGI device into
+// NVENC but must pay for an explicitly synchronized transfer.
 
 constexpr bool kEnableEncoderGpuSchedulingHeadroom = true;
 constexpr bool kEnableRoundTransitionOutputHeadroom = true;
@@ -451,7 +458,7 @@ public:
             }
 
             supportsNv12Input_ = supportsInputFormat(NV_ENC_BUFFER_FORMAT_NV12);
-            preferNv12Input_ = false;
+            preferNv12Input_ = supportsNv12Input_ && capturePipelinePolicy().nv12Input;
             supportsArgbInput_ = supportsInputFormat(NV_ENC_BUFFER_FORMAT_ARGB);
             supportsDirectCaptureInput_ = supportsArgbInput_;
             const int asyncSupport = queryEncodeCap(NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT);
@@ -590,7 +597,7 @@ public:
                 ? "Direct NVENC H.264 async " + nvencPresetName(boundedPreset) + " session initialized."
                 : "Direct NVENC H.264 buffered sync " + nvencPresetName(boundedPreset) + " session initialized.";
             if (separateEncoderDevice_) {
-                status += " Capture and NVENC use isolated D3D11 devices with a shared prepared-frame bridge.";
+                status += " Capture and NVENC use isolated D3D11 devices.";
             }
             if (useDedicatedInputSurfaces_) {
                 status += preferNv12Input_
@@ -687,6 +694,9 @@ public:
             preferNv12Input_) {
             preferNv12Input_ = false;
             supportsNv12Input_ = false;
+            // Invalidate a cached NV12 canonical image as well as the slot.
+            // Otherwise isolated-device retry would register NV12 again.
+            if (separateEncoderDevice_) resetPreparedFrameBridge();
             slot->scaledOutputView.Reset();
             slot->scaledTexture.Reset();
             slot->scaledViewGeneration = 0;
@@ -959,7 +969,7 @@ private:
             return false;
         }
 
-        if constexpr (kPreferSharedCaptureDevice) {
+        if (!capturePipelinePolicy().isolatedDevice) {
             device_ = captureDevice_;
             context_ = captureContext_;
         } else {
@@ -1006,6 +1016,14 @@ private:
             if (SUCCEEDED(context_.As(&encoderMultithread)) && encoderMultithread) {
                 encoderMultithread->SetMultithreadProtected(TRUE);
             }
+            if (capturePipelinePolicy().gpuHandoff &&
+                !gpuHandoff_.initialize(captureDevice_.Get(), device_.Get())) {
+                // Older drivers retain the working shared-device path rather
+                // than silently introducing a synchronous keyed-mutex wait.
+                std::cerr << "[encoder-pipeline] Shared GPU fences unavailable; using shared-device NV12 fallback.\n";
+                device_ = captureDevice_;
+                context_ = captureContext_;
+            }
         }
 
         if constexpr (kEnableEncoderGpuSchedulingHeadroom) {
@@ -1040,10 +1058,15 @@ private:
                       << ".\n";
         }
         separateEncoderDevice_ = device_.Get() != captureDevice_.Get();
+        std::cerr << "[encoder-pipeline] isolated=" << separateEncoderDevice_
+                  << " preferNV12=" << capturePipelinePolicy().nv12Input << '\n';
         return true;
     }
 
     void resetPreparedFrameBridge() {
+        gpuHandoff_ = {};
+        sourceSnapshot_ = {};
+        earlyRetireLogged_ = false;
         canonicalOutputView_.Reset();
         canonicalTexture_.Reset();
         canonicalCaptureEpoch_ = 0;
@@ -1093,7 +1116,14 @@ private:
         bridgeDesc.SampleDesc.Count = 1;
         bridgeDesc.Usage = D3D11_USAGE_DEFAULT;
         bridgeDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-        bridgeDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+        const bool gpuHandoff = capturePipelinePolicy().gpuHandoff &&
+            gpuHandoff_.initialize(captureDevice_.Get(), device_.Get());
+        if (capturePipelinePolicy().gpuHandoff && !gpuHandoff) {
+            status = "NVENC shared-frame bridge failed: GPU fence initialization failed.";
+            return false;
+        }
+        bridgeDesc.MiscFlags = gpuHandoff
+            ? D3D11_RESOURCE_MISC_SHARED : D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
 
         HRESULT hr = captureDevice_->CreateTexture2D(&bridgeDesc, nullptr, &captureBridgeTexture_);
         if (FAILED(hr) || !captureBridgeTexture_) {
@@ -1123,13 +1153,16 @@ private:
             resetPreparedFrameBridge();
             return false;
         }
-        hr = captureBridgeTexture_.As(&captureBridgeMutex_);
-        if (FAILED(hr) || !captureBridgeMutex_ ||
-            FAILED(encoderBridgeTexture_.As(&encoderBridgeMutex_)) || !encoderBridgeMutex_) {
-            status = "NVENC shared-frame bridge failed: keyed mutex is unavailable.";
-            resetPreparedFrameBridge();
-            return false;
+        if (!gpuHandoff) {
+            hr = captureBridgeTexture_.As(&captureBridgeMutex_);
+            if (FAILED(hr) || !captureBridgeMutex_ ||
+                FAILED(encoderBridgeTexture_.As(&encoderBridgeMutex_)) || !encoderBridgeMutex_) {
+                status = "NVENC shared-frame bridge failed: keyed mutex is unavailable.";
+                resetPreparedFrameBridge();
+                return false;
+            }
         }
+        std::cerr << "[encoder-pipeline] handoff=" << (gpuHandoff ? "gpu-fence" : "keyed-mutex") << '\n';
 
         bridgeCaptureDevice_ = frameDevice;
         bridgeWidth_ = frameDesc.Width;
@@ -1139,17 +1172,19 @@ private:
     }
 
     bool ensureCanonicalSurface(int inputWidth, int inputHeight, std::string& status) {
-        const DXGI_FORMAT format = supportsNv12Input_
+        const DXGI_FORMAT format = supportsNv12Input_ &&
+            (preferNv12Input_ || !supportsArgbInput_)
             ? DXGI_FORMAT_NV12
             : DXGI_FORMAT_B8G8R8A8_UNORM;
-        if (format == DXGI_FORMAT_NV12 && !ensureVideoScaler(inputWidth, inputHeight, status)) {
+        const bool processing = format == DXGI_FORMAT_NV12 || inputWidth != width_ || inputHeight != height_;
+        if (processing && !ensureVideoScaler(inputWidth, inputHeight, status)) {
             return false;
         }
 
         if (canonicalTexture_) {
             D3D11_TEXTURE2D_DESC existing {};
             canonicalTexture_->GetDesc(&existing);
-            const bool generationMatches = format != DXGI_FORMAT_NV12 ||
+            const bool generationMatches = !processing ||
                 canonicalScalerGeneration_ == scalerGeneration_;
             if (existing.Width == static_cast<UINT>(width_) &&
                 existing.Height == static_cast<UINT>(height_) &&
@@ -1180,7 +1215,7 @@ private:
             return false;
         }
 
-        if (format == DXGI_FORMAT_NV12) {
+        if (processing) {
             D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outputDesc {};
             outputDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
             outputDesc.Texture2D.MipSlice = 0;
@@ -1191,7 +1226,7 @@ private:
                 &canonicalOutputView_);
             if (FAILED(hr) || !canonicalOutputView_) {
                 std::ostringstream message;
-                message << "NVENC canonical NV12 view creation failed, HRESULT 0x" << std::hex << hr;
+                message << "NVENC canonical processor view creation failed, HRESULT 0x" << std::hex << hr;
                 status = message.str();
                 canonicalTexture_.Reset();
                 return false;
@@ -1199,7 +1234,8 @@ private:
             if (videoContext1_) {
                 videoContext1_->VideoProcessorSetOutputColorSpace1(
                     videoProcessor_.Get(),
-                    DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+                    format == DXGI_FORMAT_NV12 ? DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709
+                        : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
             }
         }
         canonicalScalerGeneration_ = scalerGeneration_;
@@ -1208,12 +1244,7 @@ private:
         return true;
     }
 
-    bool prepareCanonicalFrame(const CapturedFrame& frame, std::string& status) {
-        if (!ensureSharedCaptureBridge(frame, status) ||
-            !ensureCanonicalSurface(frame.width, frame.height, status)) {
-            return false;
-        }
-
+    bool beginLegacyFrameHandoff(const CapturedFrame& frame, std::string& status) {
         constexpr DWORD bridgeWaitMs = 1000;
         HRESULT hr = captureBridgeMutex_->AcquireSync(0, bridgeWaitMs);
         if (hr != S_OK) {
@@ -1236,18 +1267,69 @@ private:
             status = message.str();
             return false;
         }
+        return true;
+    }
+
+    bool prepareCanonicalFrame(const CapturedFrame& frame, std::string& status) {
+        bool direct = false;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> source;
+        if (capturePipelinePolicy().directTextureRead && frame.gpuReadState && !directReadUnavailable_) {
+            if (directReader_.active() || directReader_.initialize(captureDevice_.Get(), device_.Get())) {
+                source = directReader_.open(frame.texture.Get(), frame.gpuReadState, status);
+                direct = source != nullptr;
+            }
+            if (!direct) {
+                directReadUnavailable_ = true;
+                directReader_ = {};
+                std::cerr << "[encoder-pipeline] Direct source sharing unavailable; retaining GPU bridge fallback.\n";
+                status.clear();
+            } else if (!directReadLogged_) {
+                std::cerr << "[encoder-pipeline] handoff=direct-texture-read producerWait=false\n";
+                directReadLogged_ = true;
+            }
+        }
+        if (!direct) {
+            if (!ensureSharedCaptureBridge(frame, status)) return false;
+            source = encoderBridgeTexture_;
+        }
+        if (!ensureCanonicalSurface(frame.width, frame.height, status)) {
+            if (!preferNv12Input_ || !supportsArgbInput_) return false;
+            preferNv12Input_ = false;
+            canonicalOutputView_.Reset();
+            canonicalTexture_.Reset();
+            std::cerr << "[encoder-pipeline] NV12 canonical conversion unavailable; retaining isolated BGRA fallback.\n";
+            if (!ensureCanonicalSurface(frame.width, frame.height, status)) return false;
+        }
+        const bool earlyRetire = direct && canonicalOutputView_ && capturePipelinePolicy().earlySourceRetire;
+        if (earlyRetire) {
+            source = sourceSnapshot_.copyAndRetire(device_.Get(), context_.Get(),
+                directReader_, source.Get(), frame.gpuReadState, status);
+            if (!source) return false; // Armed-reader errors fail closed; no unsafe fallback.
+            if (!earlyRetireLogged_) {
+                std::cerr << "[encoder-pipeline] source-retirement=after-private-copy before-conversion=true\n";
+                earlyRetireLogged_ = true;
+            }
+        } else if (direct) {
+            if (!directReader_.begin(frame.gpuReadState, status)) return false;
+        } else if (gpuHandoff_.active()) {
+            if (!gpuHandoff_.begin(captureBridgeTexture_.Get(), frame.texture.Get(), status)) return false;
+        } else if (!beginLegacyFrameHandoff(frame, status)) {
+            return false;
+        }
 
         bool prepared = true;
+        HRESULT hr = S_OK;
         D3D11_TEXTURE2D_DESC canonicalDesc {};
         canonicalTexture_->GetDesc(&canonicalDesc);
-        if (canonicalDesc.Format == DXGI_FORMAT_NV12) {
-            auto inputView = videoProcessorInputView(encoderBridgeTexture_.Get(), status);
+        if (canonicalOutputView_) {
+            auto inputView = videoProcessorInputView(source.Get(), status);
             if (!inputView) {
                 prepared = false;
             } else {
                 D3D11_VIDEO_PROCESSOR_STREAM stream {};
                 stream.Enable = TRUE;
                 stream.pInputSurface = inputView.Get();
+                auto sample = conversionProbe_.scope(context_.Get());
                 hr = videoContext_->VideoProcessorBlt(
                     videoProcessor_.Get(), canonicalOutputView_.Get(), 0, 1, &stream);
                 if (FAILED(hr)) {
@@ -1258,10 +1340,12 @@ private:
                 }
             }
         } else {
-            context_->CopyResource(canonicalTexture_.Get(), encoderBridgeTexture_.Get());
+            context_->CopyResource(canonicalTexture_.Get(), source.Get());
         }
 
-        const HRESULT releaseHr = encoderBridgeMutex_->ReleaseSync(0);
+        const HRESULT releaseHr = earlyRetire ? S_OK : direct ? (directReader_.end(status) ? S_OK : E_FAIL) : gpuHandoff_.active()
+            ? (gpuHandoff_.end(status) ? S_OK : E_FAIL)
+            : encoderBridgeMutex_->ReleaseSync(0);
         if (FAILED(releaseHr)) {
             status = "NVENC shared-frame consumer release failed.";
             return false;
@@ -1454,6 +1538,13 @@ private:
             status = "NVENC input preparation failed: invalid frame or output size.";
             return nullptr;
         }
+        // Session teardown clears this cached context. NV12/scaling used to
+        // recreate it incidentally; native-size isolated BGRA also needs it.
+        if (!context_) device_->GetImmediateContext(&context_);
+        if (!context_) {
+            status = "NVENC input preparation failed: could not get D3D11 immediate context.";
+            return nullptr;
+        }
         if (separateEncoderDevice_) {
             return prepareSharedFrameForEncode(frame, slot, inputPath, status);
         }
@@ -1476,12 +1567,6 @@ private:
                 inputPath = NvencFrameTimings::InputPath::DirectCaptureBgra;
                 return frame.texture;
             }
-        }
-
-        if (!context_) device_->GetImmediateContext(&context_);
-        if (!context_) {
-            status = "NVENC input preparation failed: could not get D3D11 immediate context.";
-            return nullptr;
         }
 
         if constexpr (useDedicatedInputSurfaces_) {
@@ -2197,6 +2282,7 @@ private:
     }
 
     void destroyEncoderResources() {
+        conversionProbe_ = GpuStageProbe("canonical-conversion");
         initialized_ = false;
         if (encoder_) {
             std::vector<EncodedPacket> ignoredPackets;
@@ -2204,6 +2290,8 @@ private:
             drainAll(ignoredPackets, ignoredStatus);
         }
         stopOutputThread();
+        directReader_ = {};
+        directReadUnavailable_ = directReadLogged_ = false;
         if (encoder_) {
             for (auto& slot : outputSlots_) {
                 if (slot.mappedInput) {
@@ -2310,6 +2398,12 @@ private:
     HMODULE module_ = nullptr;
     NV_ENCODE_API_FUNCTION_LIST funcs_ {};
     Microsoft::WRL::ComPtr<ID3D11Device> captureDevice_;
+    GpuFrameHandoff gpuHandoff_;
+    SharedTextureReader directReader_;
+    EncoderSourceSnapshot sourceSnapshot_;
+    bool earlyRetireLogged_ = false;
+    bool directReadUnavailable_ = false, directReadLogged_ = false;
+    GpuStageProbe conversionProbe_ {"canonical-conversion"};
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> captureContext_;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
@@ -2586,7 +2680,7 @@ uint64_t EncoderWorker::catchUpRepeatedTicks() const {
 }
 
 bool EncoderWorker::stillFrameDuplicationEnabled() const {
-    return false;
+    return kEnableFrameDuplication;
 }
 
 int EncoderWorker::encoderQueueDrops() const {
@@ -2792,6 +2886,7 @@ bool EncoderWorker::queueFrame(EncodeJob job) {
         ++encoderAdmissionRejections_;
     }
 
+    job.enqueuedAt100ns = monotonicNow100ns();
     pendingJobs_.push_back(std::move(job));
     ++pendingOutputFrames_;
     ++pendingFreshFrames_;
@@ -2803,35 +2898,23 @@ bool EncoderWorker::queueFrame(EncodeJob job) {
 
 void EncoderWorker::run() {
     MmcssThreadRegistration mmcss(L"Games", AVRT_PRIORITY_HIGH);
-    int activeFps = std::clamp(targetFps_.load(std::memory_order_relaxed), 24, 240);
-    int64_t frameSpacing100ns = 10'000'000LL / activeFps;
-    auto interval = std::chrono::nanoseconds(frameSpacing100ns * 100);
-    auto nextWake = std::chrono::steady_clock::now() + interval;
+    EncoderCadence cadence(std::clamp(targetFps_.load(std::memory_order_relaxed), 24, 240), monotonicNow100ns());
+    DeadlineWait wait;
     std::optional<CapturedFrame> heldFrame;
-    int64_t nextFramePts100ns = 0;
+    uint64_t previousSequence = 0;
+    uint64_t previousEpoch = 0;
 
     while (running_.load(std::memory_order_relaxed)) {
-        const auto now = std::chrono::steady_clock::now();
-        if (now < nextWake) {
-            const auto sleepDuration = nextWake - now;
-            if (sleepDuration > std::chrono::milliseconds(2)) {
-                std::this_thread::sleep_for(sleepDuration - std::chrono::milliseconds(1));
-            }
-            while (std::chrono::steady_clock::now() < nextWake) {
-                _mm_pause();
-            }
-        }
-        nextWake += interval;
-        if (std::chrono::steady_clock::now() > nextWake + interval) {
-            nextWake = std::chrono::steady_clock::now() + interval;
-        }
-
         const int fps = std::clamp(targetFps_.load(std::memory_order_relaxed), 24, 240);
-        if (fps != activeFps) {
-            activeFps = fps;
-            frameSpacing100ns = 10'000'000LL / activeFps;
-            interval = std::chrono::nanoseconds(frameSpacing100ns * 100);
+        if (fps != cadence.fps()) {
+            cadence = EncoderCadence(fps, monotonicNow100ns());
         }
+        wait.until(cadence.deadline100ns(), [this] { return running_.load(std::memory_order_relaxed); });
+        if (!running_.load(std::memory_order_relaxed)) break;
+        const auto wokeAt100ns = monotonicNow100ns();
+        const auto tick = cadence.advance(wokeAt100ns);
+        recentSchedulerWakeLateness_.record(wokeAt100ns, tick.lateness100ns);
+        schedulerDroppedFrames_.fetch_add(static_cast<int>(std::min<uint64_t>(tick.skipped, INT_MAX)));
 
         if constexpr (kEnableFrameDuplication) {
             if (auto newest = frames_.consumeAllAndGetLatest()) {
@@ -2862,15 +2945,12 @@ void EncoderWorker::run() {
                 heldFrame->width != outputWidth || heldFrame->height != outputHeight,
                 std::memory_order_relaxed);
 
-            const int64_t wallNow100ns = mediaNow100ns();
-            if (nextFramePts100ns <= 0 || std::abs(wallNow100ns - nextFramePts100ns) > 5'000'000LL) {
-                nextFramePts100ns = wallNow100ns;
-            } else {
-                nextFramePts100ns += frameSpacing100ns;
-            }
-
             CapturedFrame frameToEncode = *heldFrame;
-            frameToEncode.pts100ns = nextFramePts100ns;
+            frameToEncode.pts100ns = mediaTimeFromSystemRelative100ns(tick.deadline100ns);
+            if (heldFrame->sequence != 0 && heldFrame->sequence == previousSequence &&
+                heldFrame->captureEpoch == previousEpoch) ++schedulerRepeatedFrames_;
+            previousSequence = heldFrame->sequence;
+            previousEpoch = heldFrame->captureEpoch;
 
             queueFrame(EncodeJob {
                 std::move(frameToEncode),
@@ -3083,11 +3163,10 @@ void EncoderWorker::encodeLoop() {
         }
         previousInputPts100ns = frameForTick.pts100ns;
         previousInputCaptureEpoch = frameForTick.captureEpoch;
-        if (frameForTick.queuedAtSteady100ns > 0 &&
-            submitStarted100ns >= frameForTick.queuedAtSteady100ns) {
+        if (job.enqueuedAt100ns > 0 && submitStarted100ns >= job.enqueuedAt100ns) {
             recentQueueResidenceLatency_.record(
                 submitStarted100ns,
-                submitStarted100ns - frameForTick.queuedAtSteady100ns);
+                submitStarted100ns - job.enqueuedAt100ns);
         }
         const bool freshEpochChanged = activeFreshFrameVersion >= 0 &&
             job.freshFrameVersion != activeFreshFrameVersion;
@@ -3138,6 +3217,11 @@ void EncoderWorker::encodeLoop() {
         }
 
         std::string sessionStatus;
+        if (frameForTick.preparation && !frameForTick.preparation->prepare(sessionStatus)) {
+            ++encoderBackpressureDrops_;
+            setStatus("Deferred capture preparation failed: " + sessionStatus);
+            continue;
+        }
         bool encoderInitialized = false;
         bool encoded = false;
         if (nvencRuntimeLoaded_ && session->initialize(

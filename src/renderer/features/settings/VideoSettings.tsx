@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ClipSettings, DisplayDevice } from '../../../shared/types';
 import { clipture } from '../../platform';
 import { DraftNumberInput } from './DraftNumberInput';
+import { CAPTURE_FPS_OPTIONS } from '../../../shared/capture-fps';
 
 interface VideoSettingsProps {
   settings: ClipSettings;
@@ -72,10 +73,13 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
       <label>
         FPS
         <select value={settings.fps} onChange={(event) => onChange({ fps: Number(event.target.value) as ClipSettings['fps'] })}>
-          <option value={24}>24 low resource</option>
-          <option value={30}>30 default</option>
-          <option value={60}>60 high motion</option>
+          {CAPTURE_FPS_OPTIONS.map(fps => (
+            <option key={fps} value={fps}>
+              {fps}{fps === 24 ? ' low resource' : fps === 30 ? ' default' : fps === 60 ? ' high motion' : ' experimental'}
+            </option>
+          ))}
         </select>
+        <small>Above 60 FPS is experimental. Actual fresh-frame rate depends on display, game and GPU headroom.</small>
       </label>
       <label>
         Resolution

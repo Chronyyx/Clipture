@@ -191,7 +191,7 @@ impl ClipSettings {
         self.custom_main_color = valid_hex(&self.custom_main_color).unwrap_or("#101114".into());
         self.custom_accent_color = valid_hex(&self.custom_accent_color).unwrap_or("#c8a6ff".into());
         self.clip_length_seconds = self.clip_length_seconds.clamp(5, 600);
-        if !matches!(self.fps, 24 | 30 | 60) {
+        if !matches!(self.fps, 24 | 30 | 60 | 120 | 144 | 210 | 240) {
             self.fps = 30;
         }
         self.bitrate_mbps = self.bitrate_mbps.clamp(4, 120);
@@ -344,7 +344,7 @@ mod tests {
     fn invalid_values_are_bounded_and_default_sources_are_restored() {
         let settings = ClipSettings {
             clip_length_seconds: 1,
-            fps: 144,
+            fps: 999,
             bitrate_mbps: 900,
             nvenc_preset: 9,
             save_folder: String::new(),
@@ -367,6 +367,24 @@ mod tests {
         assert!(value.get("clipLengthSeconds").is_some());
         assert!(value.get("audioSources").is_some());
         assert_eq!(value["resolutionPreset"], "system");
+    }
+
+    #[test]
+    fn capture_fps_choices_match_host_fixture_and_survive_normalization() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../scripts/migration/fixtures/host-contract.v1.json"
+        )).unwrap();
+        for fps in fixture["captureFpsOptions"].as_array().unwrap() {
+            let settings: ClipSettings = serde_json::from_value(serde_json::json!({"fps": fps})).unwrap();
+            let normalized = settings.normalize(r"C:\fixture\clips");
+            let configured = super::super::EngineConfigure::from_settings(&normalized, &[]);
+            assert_eq!(serde_json::to_value(configured).unwrap()["fps"], *fps);
+            assert_eq!(serde_json::to_value(normalized).unwrap()["fps"], *fps);
+        }
+        for fps in [0, 59, 61, 119, 241, 999] {
+            let settings = ClipSettings { fps, ..ClipSettings::default() };
+            assert_eq!(settings.normalize(r"C:\fixture\clips").fps, 30);
+        }
     }
 
     #[test]

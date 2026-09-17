@@ -1,6 +1,7 @@
 //! Disposable UI-process host; see ADR 0004 and the migration checkpoint.
 mod client;
 mod controller;
+mod admission;
 mod dispatch;
 mod media_dispatch;
 mod output;

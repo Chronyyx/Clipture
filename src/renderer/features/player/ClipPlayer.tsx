@@ -7,6 +7,7 @@ import { useClipIconUrl } from '../../shared/clips/useClipIconUrl';
 import { PlayerVideoSurface } from './PlayerVideoSurface';
 import { useMixedAudioPlayback } from './useMixedAudioPlayback';
 import { usePlayerInteractions } from './usePlayerInteractions';
+import { preparePlayback } from './preparePlayback';
 
 interface ClipPlayerProps {
   clip: ClipRecord;
@@ -61,7 +62,6 @@ export function ClipPlayer({
   });
 
   useEffect(() => {
-    let active = true;
     setSourceUrl('');
     setMessage('Preparing playback');
     setMixedPlayback(false);
@@ -74,19 +74,19 @@ export function ClipPlayer({
     mixed.cancelPlayRequest();
     mixed.clear();
 
-    void clipture.clipPlaybackUrl(clip.filePath, clip.audioTracks).then((result) => {
-      if (!active) return;
+    const cancelPreparation = preparePlayback(
+      () => clipture.clipPlaybackUrl(clip.filePath, clip.audioTracks), (result) => {
       setSourceUrl(result.url);
       setMessage(result.message);
       setMixedPlayback(result.mixed && Boolean(result.audioChunkUrl));
       setMixedAudioChunkUrl(result.audioChunkUrl || '');
       setMixedAudioChunkSeconds(result.audioChunkSeconds || 8);
-    }).catch((error) => {
-      if (active) setMessage(error instanceof Error ? error.message : 'Could not prepare playback.');
+    }, (error) => {
+      setMessage(error instanceof Error ? error.message : 'Could not prepare playback.');
     });
 
     return () => {
-      active = false;
+      cancelPreparation();
       void clipture.releasePlaybackCache().catch(error => console.warn('Playback release failed:', error));
     };
   }, [clip.audioTracks, clip.filePath]);

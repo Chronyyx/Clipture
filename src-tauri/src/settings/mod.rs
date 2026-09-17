@@ -118,4 +118,17 @@ mod tests {
         let reopened = SettingsStore::load(paths).unwrap();
         assert_eq!(reopened.get().clip_length_seconds, 77);
     }
+
+    #[test]
+    fn high_fps_survives_save_and_reload() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = AppPaths::test_fixture(root.path());
+        for fps in [120, 144, 210, 240] {
+            let store = SettingsStore::load(paths.clone()).unwrap();
+            let mut settings = store.get();
+            settings.fps = fps;
+            assert_eq!(store.save(settings).unwrap().fps, fps);
+            assert_eq!(SettingsStore::load(paths.clone()).unwrap().get().fps, fps);
+        }
+    }
 }
