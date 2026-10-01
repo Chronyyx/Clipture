@@ -17,7 +17,7 @@ tauri-build = { version = "2", features = [] }
 webview2-com = "0.38.2"
 
 [dev-dependencies]
-minisign = "0.9"
+minisign = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
