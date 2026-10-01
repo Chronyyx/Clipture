@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.1] - 2026-10-01
+
+### Version Label & Update Status
+
+- **Version in the sidebar:** The running version is shown at the bottom of the sidebar. It is taken from `package.json` at build time, so it always matches the executable the interface ships in, and it stays pinned while a long friends list scrolls.
+- **"Updates off" for local builds:** Builds that cannot update themselves (local `build`/`dist:win` output, development and test builds) now show "Updates off" in the title bar, with the reason on hover, instead of an update check that can never find anything. `UpdateState` gains an optional `disabled` flag; release builds are unchanged.
+- **First runtime update:** 1.6.0 installs receive this release through the signed component runtime path (ADR 0009) instead of the installer.
+
 ## [1.6.0] - 2026-10-01
 
 ### Friend Sharing, Smaller Clips & Signed Runtime Updates

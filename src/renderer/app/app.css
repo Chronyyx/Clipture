@@ -8,6 +8,32 @@
   scrollbar-gutter: stable;
 }
 
+/* Full-width sidebar is a column so the version can sit at its foot; the
+   narrow-window top bar keeps its own grid. */
+@media (min-width: 901px) {
+  .sidebar { display: flex; flex-direction: column; }
+}
+
+/* Stays on screen when a long friends list scrolls the sidebar; the fade
+   keeps scrolled names from running into it. */
+.sidebar-version {
+  position: sticky;
+  bottom: -20px;
+  z-index: 1;
+  margin: auto -14px -20px;
+  padding: 22px 18px 14px;
+  background: linear-gradient(to bottom, transparent, var(--sidebar-bg) 55%);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+:root[data-theme="halloween"] .sidebar-version { background: none; }
+
+@media (max-width: 900px) {
+  .sidebar-version { display: none; }
+}
+
 .startup-error { display: grid; justify-items: start; gap: 18px; padding: 48px; }
 
 .brand {

@@ -57,6 +57,7 @@ export function mockPreviewSeed(search: string): MockCliptureState | undefined {
     latencyMs: params.has('slow') ? 15000 : params.has('demo') ? 250 : 450,
     ...(params.has('demo') ? { demo: { playbackUrl: DEMO_CLIP_URL } } : {}),
     clips: params.has('empty') ? [] : clips,
+    ...(params.has('updates-off') ? { update: { status: 'idle' as const, disabled: true, message: 'Updates are off in this build. Builds from GitHub or clipture.app update themselves.' } } : {}),
     thumbnails,
     settings: {
       ...defaultSettings,

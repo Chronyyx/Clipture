@@ -21,6 +21,10 @@ pub struct UpdateState {
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<String>,
+    /// Set when this build cannot update itself (local or test builds), so
+    /// the UI can say so instead of offering a check that does nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
 }
 
 impl Default for UpdateState {
@@ -30,6 +34,7 @@ impl Default for UpdateState {
             version: None,
             message: None,
             checked_at: None,
+            disabled: false,
         }
     }
 }
@@ -41,6 +46,7 @@ impl UpdateState {
             version: previous.version.clone(),
             message: Some("Checking for updates...".into()),
             checked_at: Some(checked_at),
+            disabled: false,
         }
     }
 
@@ -50,6 +56,7 @@ impl UpdateState {
             message: Some(format!("Update {version} is available.")),
             version: Some(version),
             checked_at: Some(checked_at),
+            disabled: false,
         }
     }
 
@@ -59,7 +66,13 @@ impl UpdateState {
             version,
             message: Some("Clipture is up to date.".into()),
             checked_at: Some(checked_at),
+            disabled: false,
         }
+    }
+
+    /// The state of a build that cannot update itself, before any check.
+    pub(crate) fn disabled(message: String) -> Self {
+        Self { message: Some(message), disabled: true, ..Self::default() }
     }
 
     pub(crate) fn unavailable(message: String, checked_at: String) -> Self {
@@ -68,6 +81,7 @@ impl UpdateState {
             version: None,
             message: Some(message),
             checked_at: Some(checked_at),
+            disabled: true,
         }
     }
 
@@ -77,6 +91,7 @@ impl UpdateState {
             version: Some(version),
             message: Some(message),
             checked_at: Some(checked_at),
+            disabled: false,
         }
     }
 
@@ -86,6 +101,7 @@ impl UpdateState {
             message: Some(format!("Clipture {version} is staged for the next full launch. Apply now restarts recording and discards unsaved replay.")),
             version: Some(version),
             checked_at: Some(checked_at),
+            disabled: false,
         }
     }
 
@@ -95,6 +111,7 @@ impl UpdateState {
             version: previous.version.clone(),
             message: Some(message),
             checked_at: previous.checked_at.clone(),
+            disabled: false,
         }
     }
 
@@ -108,6 +125,7 @@ impl UpdateState {
             version: previous.version.clone(),
             message: Some(message),
             checked_at: previous.checked_at.clone(),
+            disabled: false,
         }
     }
 }
@@ -140,6 +158,7 @@ mod tests {
         assert_eq!(value["version"], "2.0.0");
         assert_eq!(value["checkedAt"], "2026-09-04T01:02:03Z");
         assert!(value.get("checked_at").is_none());
+        assert!(value.get("disabled").is_none(), "only builds that cannot update send the flag");
     }
 
     #[test]
@@ -149,6 +168,7 @@ mod tests {
             version: Some("2.0.0".into()),
             message: None,
             checked_at: None,
+            disabled: false,
         };
 
         assert_eq!(
@@ -165,6 +185,7 @@ mod tests {
         );
 
         assert_eq!(state.status, UpdateStatus::Idle);
+        assert!(state.disabled);
         assert!(state.message.unwrap().contains("CLIPTURE_TEST_MODE"));
     }
 }

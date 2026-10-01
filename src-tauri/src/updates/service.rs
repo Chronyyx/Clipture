@@ -69,8 +69,12 @@ impl UpdateService {
         gate: Arc<dyn UpdateGate>,
         check_disabled_message: Option<String>,
     ) -> Self {
+        let state = match &check_disabled_message {
+            Some(message) => UpdateState::disabled(message.clone()),
+            None => UpdateState::default(),
+        };
         Self {
-            state: RwLock::new(UpdateState::default()),
+            state: RwLock::new(state),
             native_pending: Mutex::new(None),
             pending: Mutex::new(None),
             operation: tokio::sync::Mutex::new(()),
@@ -344,5 +348,8 @@ mod tests {
             service.check_disabled_message.as_deref(),
             Some("Updates are disabled by CLIPTURE_TEST_MODE.")
         );
+        let state = service.get();
+        assert!(state.disabled, "a build that cannot update says so before any check");
+        assert_eq!(state.message.as_deref(), Some("Updates are disabled by CLIPTURE_TEST_MODE."));
     }
 }

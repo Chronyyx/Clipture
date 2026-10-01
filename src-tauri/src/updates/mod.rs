@@ -33,9 +33,9 @@ pub(crate) fn runtime_service(
     if test_mode {
         UpdateService::without_network_checks(gate, "Updates are disabled by CLIPTURE_TEST_MODE.")
     } else if cfg!(debug_assertions) {
-        UpdateService::without_network_checks(gate, "Updates are checked in installed builds.")
+        UpdateService::without_network_checks(gate, "Updates are off in development builds.")
     } else if !activation::enabled() {
-        UpdateService::without_network_checks(gate, "Native updates are disabled in this build: a valid signing key and native identity are required.")
+        UpdateService::without_network_checks(gate, "Updates are off in this build. Builds from GitHub or clipture.app update themselves.")
     } else {
         UpdateService::new(gate)
     }

@@ -331,6 +331,17 @@ select {
   cursor: default;
 }
 
+.titlebar-update-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .titlebar-update-button.download.downloading,
 .titlebar-update-button.refresh.checking {
   color: var(--accent);

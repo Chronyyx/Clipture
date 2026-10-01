@@ -6,6 +6,7 @@ import logoUrl from "../../../assets/clipture-logo-ui.png";
 import type { ClipRecord, ClipSettings } from "../../shared/types";
 import { useCaptureActions } from "../features/capture";
 import { DiagnosticsView, RecorderStatus, useDiagnostics } from "../features/diagnostics";
+import { appVersion } from "./appVersion";
 import { LibraryView, useClipLibrary } from "../features/library";
 import { SettingsView, useClipPreferences } from "../features/settings";
 import { FriendsSidebar, FriendsView, InviteDialog, ShareClipDialog, useSharing } from "../features/sharing";
@@ -110,6 +111,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
           clipLengthSeconds={settings?.clipLengthSeconds ?? 30}
         />
         <FriendsSidebar controller={sharing} onOpenFriend={openFriends} onOpenFriends={() => openFriends()} />
+        {appVersion && <p className="sidebar-version">Version {appVersion}</p>}
       </aside>
 
       <main className="workspace">

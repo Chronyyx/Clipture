@@ -1,4 +1,4 @@
-import { Download, RefreshCw } from "lucide-react";
+import { CloudOff, Download, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { UpdateState } from "../../../shared/types";
@@ -59,6 +59,18 @@ export function TitlebarUpdateControls({
   const refreshTitle = error 
     ? (updateState.message ? `Update failed: ${updateState.message}` : "Update check failed")
     : (checking ? "Checking for updates" : "Check for updates");
+
+  // Local and test builds cannot update themselves; say so rather than
+  // offering a check that can never find anything.
+  if (updateState.disabled) {
+    return (
+      <div className="titlebar-update-controls">
+        <span className="titlebar-update-note" title={updateState.message}>
+          <CloudOff size={14} strokeWidth={2.1} aria-hidden="true" /> Updates off
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div className="titlebar-update-controls">

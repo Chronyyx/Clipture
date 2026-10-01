@@ -573,6 +573,8 @@ export interface UpdateState {
   version?: string;
   message?: string;
   checkedAt?: string;
+  /** This build cannot update itself (local or test build); `message` says why. */
+  disabled?: boolean;
 }
 
 export interface ActiveProcess {

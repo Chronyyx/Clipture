@@ -84,6 +84,12 @@ failure preserves its source MP4 but does not roll that boundary back. Settings
 defaults and opt-outs are pinned in the host fixture, adapter tests and Rust DTO
 tests; the configure fields are pinned in the separate engine fixture.
 
+`UpdateState.disabled` is additive and optional: the Tauri host sets it (with
+`message` explaining why) for builds that cannot update themselves, from the
+first `getUpdateState` on, and omits it otherwise. The title bar then shows
+"Updates off" instead of a check button. Adapters pass the state through
+unchanged; the Electron reference never sets it.
+
 Folder settings are host-owned in the Tauri host. `saveSettings` ignores
 `importedVideoDirectories` and `importedVideoTitles` from the renderer (they
 change only through import, rename and delete), and accepts a new `saveFolder`
