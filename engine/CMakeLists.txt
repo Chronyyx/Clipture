@@ -9,6 +9,15 @@ endif()
 
 include(CTest)
 
+add_library(clipture_selection_trace STATIC src/FrameSelectionTrace.cpp)
+target_include_directories(clipture_selection_trace PUBLIC include)
+target_compile_features(clipture_selection_trace PUBLIC cxx_std_20)
+target_compile_definitions(clipture_selection_trace PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+
+add_library(clipture_json_fields STATIC src/protocol/JsonFields.cpp)
+target_include_directories(clipture_json_fields PUBLIC include)
+target_compile_features(clipture_json_fields PUBLIC cxx_std_20)
+
 add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 
 add_executable(clipture_engine
@@ -24,6 +33,7 @@ add_executable(clipture_engine
   src/DesktopPointerShape.cpp
   src/Diagnostics.cpp
   src/EncoderWorker.cpp
+  src/NvencRateControl.cpp
   src/Engine.cpp
   src/FrameQueue.cpp
   src/GpuFrameHandoff.cpp
@@ -45,6 +55,7 @@ add_executable(clipture_engine
   src/replay/InPlaceMediaBuffer.cpp
   src/replay/InPlacePacketArchive.cpp
   src/replay/ConsumedWindow.cpp
+  src/replay/BackfillPace.cpp
   src/platform/windows/InPlaceFile.cpp
   src/RawInputHotkey.cpp
   src/Tonemapper.cpp
@@ -70,9 +81,31 @@ if(MSVC)
   target_compile_options(clipture_engine PRIVATE /W4 /permissive-)
 endif()
 
-target_link_libraries(clipture_engine PRIVATE dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 avrt mfplat mfreadwrite mfuuid winmm user32)
+target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 avrt mfplat mfreadwrite mfuuid winmm user32)
 
 if(BUILD_TESTING)
+  add_executable(clipture_selection_trace_tests tests/FrameSelectionTraceTests.cpp)
+  target_link_libraries(clipture_selection_trace_tests PRIVATE clipture_selection_trace)
+  add_test(NAME clipture_selection_trace COMMAND clipture_selection_trace_tests)
+  add_executable(clipture_rate_control_tests tests/NvencRateControlTests.cpp src/NvencRateControl.cpp)
+  target_include_directories(clipture_rate_control_tests PRIVATE include ../third_party/nv-codec-headers/include)
+  target_compile_features(clipture_rate_control_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_rate_control COMMAND clipture_rate_control_tests)
+  add_executable(clipture_encoded_frontier_tests tests/EncodedFrontierTests.cpp)
+  target_include_directories(clipture_encoded_frontier_tests PRIVATE include)
+  target_compile_features(clipture_encoded_frontier_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_encoded_frontier COMMAND clipture_encoded_frontier_tests)
+  add_executable(clipture_json_fields_tests tests/JsonFieldsTests.cpp)
+  target_link_libraries(clipture_json_fields_tests PRIVATE clipture_json_fields)
+  add_test(NAME clipture_json_fields COMMAND clipture_json_fields_tests)
+  add_executable(clipture_fresh_conversion_tests tests/FreshConversionTests.cpp)
+  target_include_directories(clipture_fresh_conversion_tests PRIVATE include src)
+  target_compile_features(clipture_fresh_conversion_tests PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_fresh_conversion_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_fresh_conversion_tests PRIVATE d3d11 dxgi)
+  add_test(NAME clipture_fresh_conversion_policy COMMAND clipture_fresh_conversion_tests)
+  add_test(NAME clipture_fresh_conversion_pixels COMMAND clipture_fresh_conversion_tests --gpu)
+  set_tests_properties(clipture_fresh_conversion_pixels PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
   add_executable(clipture_source_snapshot_tests tests/EncoderSourceSnapshotTests.cpp
     src/EncoderSourceSnapshot.cpp src/SharedTextureReader.cpp)
   target_include_directories(clipture_source_snapshot_tests PRIVATE src include)
@@ -90,7 +123,7 @@ if(BUILD_TESTING)
   target_include_directories(clipture_shared_reader_tests PRIVATE src include)
   target_compile_features(clipture_shared_reader_tests PRIVATE cxx_std_20)
   target_compile_definitions(clipture_shared_reader_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_link_libraries(clipture_shared_reader_tests PRIVATE d3d11 dxgi user32)
+  target_link_libraries(clipture_shared_reader_tests PRIVATE clipture_selection_trace d3d11 dxgi user32)
   add_test(NAME clipture_shared_texture_reader COMMAND clipture_shared_reader_tests)
   set_tests_properties(clipture_shared_texture_reader PROPERTIES TIMEOUT 20)
   add_executable(clipture_gpu_probe_tests tests/GpuStageProbeTests.cpp)
@@ -116,7 +149,7 @@ if(BUILD_TESTING)
   target_include_directories(clipture_preparation_gpu_tests PRIVATE include src)
   target_compile_features(clipture_preparation_gpu_tests PRIVATE cxx_std_20)
   target_compile_definitions(clipture_preparation_gpu_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_link_libraries(clipture_preparation_gpu_tests PRIVATE d3d11 dxgi d3dcompiler user32)
+  target_link_libraries(clipture_preparation_gpu_tests PRIVATE clipture_selection_trace d3d11 dxgi d3dcompiler user32)
   add_test(NAME clipture_desktop_preparation_pixels COMMAND clipture_preparation_gpu_tests)
   add_test(NAME clipture_shared_hdr_pixels COMMAND clipture_preparation_gpu_tests --shared)
   add_executable(clipture_preparation_tests tests/DeferredFramePreparationTests.cpp)
@@ -152,12 +185,13 @@ if(BUILD_TESTING)
     src/replay/InPlaceMediaBuffer.cpp
     src/replay/InPlacePacketArchive.cpp
     src/replay/ConsumedWindow.cpp
+    src/replay/BackfillPace.cpp
     src/platform/windows/InPlaceFile.cpp
   )
   target_include_directories(clipture_packet_tests PRIVATE include)
   target_compile_features(clipture_packet_tests PRIVATE cxx_std_20)
   target_compile_definitions(clipture_packet_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_link_libraries(clipture_packet_tests PRIVATE ole32 mfplat mfreadwrite mfuuid winmm)
+  target_link_libraries(clipture_packet_tests PRIVATE clipture_selection_trace ole32 mfplat mfreadwrite mfuuid winmm)
   if(MSVC)
     target_compile_options(clipture_packet_tests PRIVATE /W4 /permissive-)
   endif()

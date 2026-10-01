@@ -290,6 +290,7 @@ struct ReplaySegmentStore::Impl {
         EncodedPacket packet;
         std::atomic<bool> retired { false };
         bool persistenceQueued = false;
+        bool rehomeQueued = false;
         std::size_t payloadBytes = 0;
     };
 
@@ -330,6 +331,7 @@ struct ReplaySegmentStore::Impl {
             stopRequested = true;
             for (const auto& entry : entries) entry->retired = true;
             pending.clear();
+            rehomeQueue.clear();
             queuedPackets = 0;
             queuedBytes = 0;
             queuedResidentBytes = 0;
@@ -418,6 +420,7 @@ struct ReplaySegmentStore::Impl {
         for (const auto& entry : entries) entry->retired = true;
         entries.clear();
         pending.clear();
+        rehomeQueue.clear();
         queuedPackets = 0;
         queuedBytes = 0;
         queuedResidentBytes = 0;
@@ -450,6 +453,10 @@ struct ReplaySegmentStore::Impl {
             result.residentPackets = residentPackets;
             result.diskBackedPackets = diskBackedPackets;
             result.spillCandidateInspections = spillCandidateInspections;
+            result.rehomeQueuedPackets = rehomeQueue.size();
+            result.rehomedPackets = rehomedPackets;
+            result.rehomedBytes = rehomedBytes;
+            result.rehomeBytesPerSecond = rehomeQueue.empty() ? 0 : rehomeBytesPerSecond;
         }
         {
             std::lock_guard lock(segmentMutex);
@@ -469,6 +476,96 @@ struct ReplaySegmentStore::Impl {
     bool waitUntilIdle(std::chrono::milliseconds timeout) const {
         std::unique_lock lock(mutex);
         return idle.wait_for(lock, timeout, [this] { return pending.empty() || !running.load(); });
+    }
+
+    bool waitUntilRehomed(std::chrono::milliseconds timeout) const {
+        std::unique_lock lock(mutex);
+        return idle.wait_for(lock, timeout, [this] {
+            return (pending.empty() && rehomeQueue.empty() && !rehomeInFlight) || !running.load();
+        });
+    }
+
+    // Bytes per second of retained footage, i.e. how fast data comes in.
+    uint64_t footageBytesPerSecondLocked() const {
+        uint64_t bytes = 0;
+        int64_t oldest = std::numeric_limits<int64_t>::max();
+        int64_t newest = std::numeric_limits<int64_t>::min();
+        for (const auto& entry : entries) {
+            if (entry->retired.load(std::memory_order_relaxed)) continue;
+            bytes += entry->payloadBytes;
+            oldest = std::min(oldest, entry->packet.pts100ns);
+            newest = std::max(newest, entry->packet.pts100ns + std::max<int64_t>(0, entry->packet.duration100ns));
+        }
+        if (bytes == 0 || newest <= oldest) return bytes;
+        return static_cast<uint64_t>(static_cast<double>(bytes) * 10'000'000.0 / static_cast<double>(newest - oldest));
+    }
+
+    void scheduleRehome(double multiplier) {
+        std::shared_ptr<replay::InPlacePacketArchive> archive;
+        {
+            std::lock_guard lock(segmentMutex);
+            archive = inPlaceArchive;
+        }
+        if (!archive) return;
+        std::vector<std::pair<std::shared_ptr<Entry>, EncodedPacket>> candidates;
+        {
+            std::lock_guard lock(mutex);
+            candidates.reserve(entries.size());
+            // Newest first: the oldest footage expires soonest and may never
+            // need copying before retention drops it.
+            for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry) {
+                if (!(*entry)->retired.load(std::memory_order_relaxed) && !(*entry)->rehomeQueued) {
+                    candidates.emplace_back(*entry, (*entry)->packet);
+                }
+            }
+        }
+        std::erase_if(candidates, [&](const auto& item) { return !archive->isDetached(item.second); });
+        {
+            std::lock_guard lock(mutex);
+            // A new save re-targets any backfill still running from an earlier one.
+            rehomeBytesPerSecond = std::max<uint64_t>(1, static_cast<uint64_t>(
+                std::max(0.0, multiplier) * static_cast<double>(footageBytesPerSecondLocked())));
+            if (candidates.empty()) return;
+            for (auto& [entry, packet] : candidates) {
+                if (entry->retired.load(std::memory_order_relaxed) || entry->rehomeQueued) continue;
+                entry->rehomeQueued = true;
+                rehomeQueue.push_back(std::move(entry));
+            }
+        }
+        wake.notify_one();
+    }
+
+    // Copies one chunk (ascending order, so reads from the saved clip stay
+    // sequential) and returns the bytes copied, for pacing.
+    std::size_t rehomeChunk(const std::vector<std::shared_ptr<Entry>>& chunk) {
+        std::shared_ptr<replay::InPlacePacketArchive> archive;
+        {
+            std::lock_guard lock(segmentMutex);
+            archive = inPlaceArchive;
+        }
+        if (!archive) return 0;
+        std::vector<EncodedPacket> sources;
+        sources.reserve(chunk.size());
+        {
+            std::lock_guard lock(mutex);
+            for (const auto& entry : chunk) sources.push_back(entry->packet);
+        }
+        // Left in the saved clip on failure; the next save copies it if selected.
+        auto moved = archive->rehome(sources);
+        std::size_t bytes = 0;
+        std::lock_guard lock(mutex);
+        for (std::size_t i = 0; i < chunk.size(); ++i) {
+            if (!moved[i]) continue;
+            const auto size = payloadSize(*moved[i]);
+            bytes += size;
+            // Install only if nothing else replaced the packet while it was copied.
+            if (chunk[i]->retired.load(std::memory_order_relaxed) ||
+                chunk[i]->packet.payloadReader != sources[i].payloadReader) continue;
+            chunk[i]->packet = std::move(*moved[i]);
+            ++rehomedPackets;
+            rehomedBytes += size;
+        }
+        return bytes;
     }
 
     void trimLocked() {
@@ -751,9 +848,10 @@ struct ReplaySegmentStore::Impl {
             std::shared_ptr<Entry> entry;
             {
                 std::unique_lock lock(mutex);
-                wake.wait(lock, [this] {
+                const auto liveWork = [this] {
                     return stopRequested || !pending.empty() || rotationRequested.load(std::memory_order_relaxed);
-                });
+                };
+                wake.wait(lock, [&] { return liveWork() || !rehomeQueue.empty(); });
                 if (stopRequested) break;
                 if (rotationRequested.load(std::memory_order_relaxed) && pending.empty()) {
                     lock.unlock();
@@ -763,7 +861,49 @@ struct ReplaySegmentStore::Impl {
                     cleanupSegments();
                     continue;
                 }
-                if (pending.empty()) continue;
+                if (pending.empty()) {
+                    // Expired entries leave the back first; dropping them releases
+                    // their leases on the saved clip without any I/O.
+                    while (!rehomeQueue.empty() && rehomeQueue.back()->retired.load(std::memory_order_relaxed)) {
+                        rehomeQueue.back()->rehomeQueued = false;
+                        rehomeQueue.pop_back();
+                    }
+                    if (rehomeQueue.empty()) {
+                        idle.notify_all();
+                        continue;
+                    }
+                    if (std::chrono::steady_clock::now() < rehomeReadyAt) {
+                        wake.wait_until(lock, rehomeReadyAt, liveWork);
+                        continue;
+                    }
+                    // About half a second of footage per chunk: a steady trickle of
+                    // sequential I/O instead of one small seek per frame. Sized by
+                    // time, so video and audio copies of the same moment stay close.
+                    const auto rate = std::max<uint64_t>(1, rehomeBytesPerSecond);
+                    const auto chunkBytes = std::clamp<uint64_t>(rate / 2, 64u * 1024u, 4u * 1024u * 1024u);
+                    std::vector<std::shared_ptr<Entry>> chunk;
+                    uint64_t planned = 0;
+                    while (!rehomeQueue.empty() &&
+                        (chunk.empty() || planned + rehomeQueue.front()->payloadBytes <= chunkBytes)) {
+                        auto next = std::move(rehomeQueue.front());
+                        rehomeQueue.pop_front();
+                        next->rehomeQueued = false;
+                        if (next->retired.load(std::memory_order_relaxed)) continue;
+                        planned += next->payloadBytes;
+                        chunk.push_back(std::move(next));
+                    }
+                    std::reverse(chunk.begin(), chunk.end());
+                    rehomeInFlight = true;
+                    lock.unlock();
+                    const auto bytes = chunk.empty() ? 0 : rehomeChunk(chunk);
+                    chunk.clear();
+                    lock.lock();
+                    rehomeInFlight = false;
+                    rehomeReadyAt = std::chrono::steady_clock::now() + std::chrono::microseconds(
+                        static_cast<int64_t>(static_cast<double>(bytes) * 1'000'000.0 / static_cast<double>(rate)));
+                    if (rehomeQueue.empty()) idle.notify_all();
+                    continue;
+                }
                 entry = pending.front();
             }
 
@@ -808,6 +948,12 @@ struct ReplaySegmentStore::Impl {
     std::atomic<bool> rotationRequested { false };
     std::deque<std::shared_ptr<Entry>> entries;
     std::deque<std::shared_ptr<Entry>> pending;
+    std::deque<std::shared_ptr<Entry>> rehomeQueue; // Newest first.
+    bool rehomeInFlight = false;
+    std::chrono::steady_clock::time_point rehomeReadyAt {};
+    uint64_t rehomedPackets = 0;
+    uint64_t rehomedBytes = 0;
+    uint64_t rehomeBytesPerSecond = 1;
     std::shared_ptr<ReplaySessionDirectory> session;
     std::shared_ptr<SegmentReadCache> readCache = std::make_shared<SegmentReadCache>();
     std::vector<std::shared_ptr<SegmentBacking>> segments;
@@ -843,6 +989,7 @@ void ReplaySegmentStore::setInPlaceArchive(std::shared_ptr<replay::InPlacePacket
     impl_->inPlaceArchive = std::move(archive);
 }
 void ReplaySegmentStore::push(const EncodedPacket& packet) { impl_->push(packet); }
+void ReplaySegmentStore::scheduleInPlaceRehome(double rateMultiplier) { impl_->scheduleRehome(rateMultiplier); }
 
 std::vector<EncodedPacket> ReplaySegmentStore::selectWindow(
     int64_t startPts100ns,
@@ -857,6 +1004,10 @@ ReplaySegmentStoreStats ReplaySegmentStore::stats() const { return impl_->stats(
 
 bool ReplaySegmentStore::waitUntilIdle(std::chrono::milliseconds timeout) const {
     return impl_->waitUntilIdle(timeout);
+}
+
+bool ReplaySegmentStore::waitUntilRehomed(std::chrono::milliseconds timeout) const {
+    return impl_->waitUntilRehomed(timeout);
 }
 
 }  // namespace clipture

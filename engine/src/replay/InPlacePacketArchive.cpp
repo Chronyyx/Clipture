@@ -54,6 +54,13 @@ struct Arena : std::enable_shared_from_this<Arena> {
         // from a packet lease destructor. The hard arena cap still applies.
     }
     PacketPayloadReaderPtr write(std::span<const std::byte> bytes) {
+        const std::size_t lengths[] = {bytes.size()};
+        auto readers = writeRun(bytes, lengths);
+        return readers.empty() ? PacketPayloadReaderPtr{} : std::move(readers.front());
+    }
+    // One contiguous slot and one write for several samples; each sample still
+    // gets its own lease, so they expire and are reused independently.
+    std::vector<PacketPayloadReaderPtr> writeRun(std::span<const std::byte> bytes, std::span<const std::size_t> lengths) {
         std::unique_lock lock(mutex);
         if (bytes.empty() || bytes.size() > 64u * 1024u * 1024u) return {};
         auto slot = std::find_if(free.begin(), free.end(), [&](const auto& item) { return item.second >= bytes.size(); });
@@ -67,23 +74,35 @@ struct Arena : std::enable_shared_from_this<Arena> {
         }
         end = std::max(end, offset + bytes.size());
         lock.unlock(); // A failed reader allocation can destroy/release its lease.
-        return std::make_shared<Reader>(std::make_shared<Range>(shared_from_this(), offset, bytes.size()));
+        std::vector<PacketPayloadReaderPtr> readers;
+        readers.reserve(lengths.size());
+        uint64_t next = offset;
+        for (const auto length : lengths) {
+            readers.push_back(std::make_shared<Reader>(std::make_shared<Range>(shared_from_this(), next, length)));
+            next += length;
+        }
+        return readers;
     }
     bool seal() {
         std::vector<std::pair<uint64_t, uint64_t>> padding;
+        uint64_t tail = 0, full = 0;
         {
             std::lock_guard lock(mutex);
+            tail = full = end;
             padding.assign(free.begin(), free.end());
+            // Space past the last retained sample is left over from when the
+            // footage took more bytes (a busier scene, a higher bitrate); the
+            // clip ends before it instead of carrying it as padding.
+            if (!padding.empty() && padding.back().first + padding.back().second == end) {
+                tail = padding.back().first;
+                padding.pop_back();
+            }
         }
+        if (tail != full && !file->trimEnd(tail)) padding.emplace_back(tail, full - tail);
         // Expired slots are padding, not hidden recoverable footage in a shared
         // clip. Zero only unleased ranges; selected/live samples are untouched.
-        const std::vector<std::byte> zeros(512 * 1024);
         for (const auto& [offset, length] : padding) {
-            for (uint64_t done = 0; done < length;) {
-                const auto bytes = static_cast<std::size_t>(std::min<uint64_t>(zeros.size(), length - done));
-                if (!file->writeSlot(offset + done, std::span(zeros).first(bytes))) return false;
-                done += bytes;
-            }
+            if (!file->zeroSlot(offset, length)) return false;
         }
         return file->seal();
     }
@@ -143,6 +162,53 @@ std::optional<EncodedPacket> InPlacePacketArchive::persist(const EncodedPacket& 
     prepared->payloadReader = std::move(reader);
     prepared->payload.reset();
     return prepared;
+}
+namespace {
+std::shared_ptr<InPlaceFile> leasedFile(const EncodedPacket& packet) {
+    if (packet.payload || !packet.payloadReader) return {};
+    const auto extent = packet.payloadReader->extent();
+    const auto lease = extent ? std::dynamic_pointer_cast<const InPlaceExtent>(extent->source) : nullptr;
+    return lease ? lease->file() : nullptr;
+}
+}
+bool InPlacePacketArchive::isDetached(const EncodedPacket& packet) const {
+    const auto file = leasedFile(packet);
+    if (!file) return false;
+    std::lock_guard lock(impl_->mutex);
+    return impl_->enabled && (!impl_->active || impl_->active->file != file);
+}
+std::vector<std::optional<EncodedPacket>> InPlacePacketArchive::rehome(std::span<const EncodedPacket> packets) {
+    std::vector<std::optional<EncodedPacket>> result(packets.size());
+    std::vector<std::size_t> indexes, lengths;
+    PacketPayload joined;
+    // The source is usually a clip published seconds ago, so these reads are
+    // normally served by the file cache. No archive mutex is held during them.
+    for (std::size_t i = 0; i < packets.size(); ++i) {
+        const auto length = payloadSize(packets[i]);
+        if (!isDetached(packets[i]) || length == 0 || length > 64u * 1024u * 1024u - joined.size()) continue;
+        const auto start = joined.size();
+        joined.resize(start + length);
+        if (!readPayload(packets[i], 0, std::span(joined).subspan(start))) {
+            joined.resize(start);
+            continue;
+        }
+        indexes.push_back(i);
+        lengths.push_back(length);
+    }
+    if (joined.empty()) return result;
+    std::vector<PacketPayloadReaderPtr> readers;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (!impl_->ensureActive()) return result;
+        readers = impl_->active->writeRun(joined, lengths);
+    }
+    // Full arena: nothing is installed and the next save copies these instead.
+    for (std::size_t i = 0; i < readers.size(); ++i) {
+        auto moved = packets[indexes[i]];
+        moved.payloadReader = std::move(readers[i]);
+        result[indexes[i]] = std::move(moved);
+    }
+    return result;
 }
 std::unique_ptr<InPlaceMediaBuffer> InPlacePacketArchive::takeForSave() {
     std::shared_ptr<Arena> arena;

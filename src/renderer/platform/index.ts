@@ -1,4 +1,6 @@
 export { clipture, hostKind } from './client';
+export { sharing } from './sharing-client';
+export { createMockSharingAdapter } from './mock-sharing-adapter';
 export { revealMainWindow } from './window-presentation';
 export { isHostBusyError } from './hostError';
 export type { CliptureApi } from './client';

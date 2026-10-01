@@ -64,6 +64,7 @@ The native engine boundary is already host-neutral: one JSON object per line on 
 | Updates | Rust `updates` | Present state and ask for actions |
 | Save feedback | Rust `sounds` and `notifications` | Optional preview while UI is open |
 | Diagnostics | Rust `diagnostics` plus engine | Presentation/export request |
+| Friend sharing (P2P node, friends, streams, kept copies) | Rust `sharing` | Friends tab, share dialog, stream playback |
 
 ## Data flow
 
@@ -100,3 +101,4 @@ The renderer is feature-oriented and the Rust host is domain-oriented. Detailed 
 - [ADR 0002: Lazy, disposable WebView](adr/0002-lazy-disposable-webview.md)
 - [ADR 0003: Preserve the legacy data path](adr/0003-preserve-legacy-data-path.md)
 - [ADR 0004: Isolate the WebView host lifetime](adr/0004-disposable-ui-process.md)
+- [ADR 0011: Friend-to-friend clip sharing over iroh](adr/0011-p2p-clip-sharing.md)

@@ -95,6 +95,7 @@ require('./test-save-settings.cjs');
 require('./test-fps-adapters.cjs');
 require('./test-diagnostics-refresh.cjs');
 require('./test-ui-process-boundaries.cjs');
+require('./test-sharing-contract.cjs');
 assert.deepEqual(Object.keys(examples.request).sort(), ["id", "type"]);
 assert.ok("id" in examples.success && "payload" in examples.success);
 assert.ok("id" in examples.error && "error" in examples.error);

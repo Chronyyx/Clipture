@@ -1,3 +1,4 @@
+mod audio_apps;
 mod caption;
 mod child_job;
 mod icon_extract;
@@ -6,11 +7,16 @@ mod installed_games;
 mod legacy_startup;
 mod notification;
 mod notification_paint;
+mod replace_file;
+mod sparse_file;
 mod reveal;
 mod system_info;
 mod wave_sound;
 
+pub(crate) use audio_apps::detect_default_audio_apps;
 pub(crate) use caption::style_main_caption;
+pub(crate) use replace_file::replace_file;
+pub(crate) use sparse_file::make_sparse;
 pub(crate) use reveal::reveal_file;
 pub(crate) use legacy_startup::remove_legacy_login_items;
 pub(crate) use child_job::ChildJob;

@@ -134,4 +134,4 @@ one change at a time under real capture: steady state, long session, save,
 post-save idle, resolution switch, audio-source removal and game-load stalls.
 Preserve frame-drop, latency and audio-sync behavior. Do not use EmptyWorkingSet
 or forced heap trimming to make Task Manager look smaller without releasing
-unneeded resources. User approval to optimize is separate from this audit.
+unneeded resources. Any optimization is separate from this audit.

@@ -1,9 +1,10 @@
-import { Check, Edit3, FolderOpen } from "lucide-react";
+import { Check, Edit3, FolderOpen, Send } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ClipRecord, ClipSettings } from "../../../shared/types";
 import { useNearViewport } from "../../shared/hooks/useNearViewport";
 import { clipSourceLabels, formatClipDate, formatClipTime, formatDuration, parseClipDate } from "../../shared/clips/clipMetadata";
 import { useClipIconUrl } from "../../shared/clips/useClipIconUrl";
+import { useClipThumbnail } from "../../shared/clips/useClipThumbnail";
 import { clipture } from "../../platform/cliptureClient";
 
 function ClipRailItem({
@@ -21,29 +22,23 @@ function ClipRailItem({
   selected: boolean;
   selectionMode: boolean;
 }) {
-  const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [itemRef, loadMedia] = useNearViewport<HTMLDivElement>(20);
+  const thumbnailUrl = useClipThumbnail(clip.filePath, loadMedia);
   const createdAt = parseClipDate(clip.createdAt);
   const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
 
+  // Scroll only the rail: scrollIntoView would also move every scrollable
+  // ancestor, including a page that embeds the app.
   useEffect(() => {
-    let mounted = true;
-    if (!loadMedia) {
-      setThumbnailUrl("");
-      return () => {
-        mounted = false;
-      };
-    }
-    void clipture.clipThumbnailUrl(clip.filePath).then((url) => {
-      if (mounted) setThumbnailUrl(url || "");
-    });
-    return () => {
-      mounted = false;
-    };
-  }, [clip.filePath, loadMedia]);
-
-  useEffect(() => {
-    if (active) itemRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const item = itemRef.current;
+    const rail = item?.closest<HTMLElement>(".clip-rail");
+    if (!active || !item || !rail) return;
+    const itemBox = item.getBoundingClientRect();
+    const railBox = rail.getBoundingClientRect();
+    const offset = itemBox.top < railBox.top
+      ? itemBox.top - railBox.top
+      : itemBox.bottom > railBox.bottom ? itemBox.bottom - railBox.bottom : 0;
+    if (offset !== 0) rail.scrollBy({ top: offset, behavior: "smooth" });
   }, [active]);
 
   return (
@@ -78,7 +73,7 @@ function ClipRailItem({
         </span>
         <span className="clip-rail-copy">
           <strong>{displayTitle}</strong>
-          <span>{formatClipDate(createdAt)} | {formatClipTime(createdAt)}</span>
+          <span>{formatClipDate(createdAt)}, {formatClipTime(createdAt)}</span>
         </span>
       </button>
       <button
@@ -101,7 +96,8 @@ export function LibraryPlayerSidebar({
   onSelectClip,
   onToggleSelected,
   selectedClipIds,
-  selectionMode = false
+  selectionMode = false,
+  onShare
 }: {
   clip: ClipRecord;
   railClips: ClipRecord[];
@@ -110,6 +106,7 @@ export function LibraryPlayerSidebar({
   onToggleSelected?: (clipId: string) => void;
   selectedClipIds?: ReadonlySet<string>;
   selectionMode?: boolean;
+  onShare?: (clip: ClipRecord) => void;
 }) {
   const createdAt = parseClipDate(clip.createdAt);
   const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
@@ -178,13 +175,25 @@ export function LibraryPlayerSidebar({
               </span>
             )}
           </h2>
+          {onShare && (
+            <button
+              className="icon-button"
+              type="button"
+              title="Send to a friend"
+              aria-label={`Send ${displayTitle} to a friend`}
+              onClick={() => onShare(clip)}
+            >
+              <Send size={16} />
+            </button>
+          )}
         </div>
         <p>{sourceText}</p>
-        <div className="library-player-side-meta">
-          <span>{formatClipDate(createdAt)} | {formatClipTime(createdAt)}</span>
-          <span>{formatDuration(clip.durationSeconds)} | {clip.resolution} | {clip.fps} FPS</span>
-          <span>{clip.audioTracks.length} audio</span>
-        </div>
+        <dl className="library-player-side-meta">
+          <div><dt>Recorded</dt><dd>{formatClipDate(createdAt)}, {formatClipTime(createdAt)}</dd></div>
+          <div><dt>Length</dt><dd>{formatDuration(clip.durationSeconds)}</dd></div>
+          <div><dt>Video</dt><dd>{clip.resolution}, {clip.fps} FPS</dd></div>
+          <div><dt>Audio</dt><dd>{clip.audioTracks.length} {clip.audioTracks.length === 1 ? "track" : "tracks"}</dd></div>
+        </dl>
       </div>
       <div className="clip-rail-heading">
         <strong>{selectionMode ? "Select clips" : "More clips"}</strong>

@@ -1,7 +1,9 @@
+#include <algorithm>
 #include "TestSupport.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/replay/InPlacePacketArchive.hpp"
 #include "clipture/replay/InPlaceExtent.hpp"
+#include "clipture/platform/windows/InPlaceFile.hpp"
 #include "clipture/replay/ConsumedWindow.hpp"
 
 namespace replay_tests {
@@ -40,6 +42,26 @@ void testInPlaceArchive() {
     const auto nextFile = std::dynamic_pointer_cast<const replay::InPlaceExtent>(next->payloadReader->extent()->source)->file();
     require(oldFile != nextFile, "save and next recording own different files");
     require(firstExtent->source->read(firstExtent->offset, actual) && actual == expected, "frozen file remains readable");
+    // Save trims free space off the arena's end and zeroes free slots inside it.
+    archive->configure(scratch.path / "trim", true, 4096 + 80);
+    auto kept = archive->persist(source);
+    auto expired = archive->persist(source);
+    auto last = archive->persist(source);
+    auto tail = archive->persist(source);
+    require(kept && expired && last && tail, "four 20-byte slots fit the arena");
+    // Offsets only: a held extent would keep the slot leased.
+    const auto holeOffset = expired->payloadReader->extent()->offset;
+    PacketPayload hole(payloadSize(*expired));
+    expired.reset();
+    tail.reset();
+    auto trimmed = archive->takeForSave();
+    require(trimmed && trimmed->mediaEnd() == 4096 + 60, "free space past the last sample is not saved");
+    const auto trimmedFile = std::dynamic_pointer_cast<const replay::InPlaceExtent>(
+        kept->payloadReader->extent()->source)->file();
+    require(trimmedFile->read(holeOffset, hole) &&
+        std::all_of(hole.begin(), hole.end(), [](auto byte) { return byte == std::byte{0}; }),
+        "an expired slot inside the clip is zeroed");
+    require(readPayload(*last, 0, actual) && readPayload(*kept, 0, actual), "retained samples survive the trim");
     archive->configure(scratch.path, false, 4096 + 40);
     require(!archive->persist(source) && !archive->takeForSave(), "opt-out restores legacy persistence");
 

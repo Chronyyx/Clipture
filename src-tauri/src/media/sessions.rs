@@ -62,6 +62,10 @@ pub struct MediaSessionRegistry {
 }
 
 impl MediaSessionRegistry {
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
     pub fn new(endpoint: impl Into<String>) -> AppResult<Self> {
         Self::with_policy(endpoint, DEFAULT_SESSION_TTL, DEFAULT_SESSION_LIMIT)
     }
@@ -204,7 +208,7 @@ impl MediaSessionRegistry {
     }
 }
 
-fn selected_audio_indexes(tracks: &[String]) -> Vec<u8> {
+pub(crate) fn selected_audio_indexes(tracks: &[String]) -> Vec<u8> {
     tracks
         .iter()
         .enumerate()
@@ -268,7 +272,7 @@ fn media_content_type(path: &Path) -> &'static str {
 
 static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-fn random_token() -> String {
+pub(crate) fn random_token() -> String {
     let mut bytes = [0_u8; 24];
     if fill_system_random(&mut bytes) {
         return bytes.iter().map(|byte| format!("{byte:02x}")).collect();

@@ -142,7 +142,7 @@ async fn transfer(
     Ok(temporary)
 }
 
-async fn wait_until_allowed(gate: &dyn UpdateGate) -> Result<(), UpdateError> {
+pub(super) async fn wait_until_allowed(gate: &dyn UpdateGate) -> Result<(), UpdateError> {
     let deadline = Instant::now() + Duration::from_secs(1800);
     while let Some(reason) = gate.block_reason(UpdateOperation::Download) {
         if Instant::now() >= deadline {
@@ -153,7 +153,7 @@ async fn wait_until_allowed(gate: &dyn UpdateGate) -> Result<(), UpdateError> {
     Ok(())
 }
 
-fn transfer_rate(pressure: CapturePressure) -> u64 {
+pub(super) fn transfer_rate(pressure: CapturePressure) -> u64 {
     // Conservative ceilings from the legacy updater. React to live pressure
     // before every bounded write; do not raise the controller's process priority.
     match pressure {

@@ -12,6 +12,7 @@ struct CapturePipelinePolicy {
     bool idleBackoff = true;
     bool directTextureRead = true;
     bool earlySourceRetire = false;
+    bool directFreshConversion = false;
 };
 inline const CapturePipelinePolicy& capturePipelinePolicy() {
     static const auto policy = [] {
@@ -30,6 +31,7 @@ inline const CapturePipelinePolicy& capturePipelinePolicy() {
         result.idleBackoff = flag(L"CLIPTURE_CAPTURE_IDLE_BACKOFF", result.idleBackoff);
         result.directTextureRead = flag(L"CLIPTURE_DIRECT_TEXTURE_READ", result.directTextureRead);
         result.earlySourceRetire = flag(L"CLIPTURE_EARLY_SOURCE_RETIRE", result.earlySourceRetire);
+        result.directFreshConversion = flag(L"CLIPTURE_DIRECT_FRESH_CONVERSION", result.directFreshConversion);
         return result;
     }();
     return policy;

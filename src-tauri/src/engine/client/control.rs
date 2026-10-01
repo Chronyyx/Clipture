@@ -79,6 +79,13 @@ impl EngineClient {
         if unchanged {
             return Ok(self.cached_diagnostics());
         }
+        // A new engine (or save folder): clear buffers earlier engines that
+        // crashed or were killed left behind. The live one is locked.
+        let save_folder = std::path::PathBuf::from(&settings.save_folder);
+        let _ = tokio::task::spawn_blocking(move || {
+            super::super::replay_leftovers::remove_abandoned_replay_buffers(&save_folder)
+        })
+        .await;
 
         let diagnostics: EngineDiagnostics = self
             .call("configure", &configure, CONFIGURE_TIMEOUT)

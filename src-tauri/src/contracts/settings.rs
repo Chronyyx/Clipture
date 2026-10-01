@@ -11,6 +11,8 @@ pub enum UiTheme {
     Light,
     Glitten,
     Milate,
+    MaidCafe,
+    Halloween,
     Custom,
     #[serde(other)]
     Unknown,
@@ -119,6 +121,7 @@ pub struct ClipSettings {
     pub custom_accent_color: String,
     pub clip_length_seconds: u32,
     pub save_in_place: bool,
+    pub save_in_place_overlap: bool,
     pub fps: u32,
     pub bitrate_mbps: u32,
     pub auto_bitrate: bool,
@@ -136,6 +139,8 @@ pub struct ClipSettings {
     pub imported_video_directories: Vec<String>,
     pub imported_video_titles: BTreeMap<String, String>,
     pub audio_sources: Vec<AudioSourceRule>,
+    /// One-time default app tracks (browser, Discord) have been offered.
+    pub default_app_sources_version: u32,
     #[serde(flatten)]
     pub compatibility_fields: BTreeMap<String, Value>,
 }
@@ -152,11 +157,13 @@ impl ClipSettings {
             ui_theme: UiTheme::Graphite,
             custom_main_color: "#101114".into(),
             custom_accent_color: "#c8a6ff".into(),
-            clip_length_seconds: 30,
+            // Fresh installs only; saved profiles keep every field they store.
+            clip_length_seconds: 60,
             save_in_place: true,
-            fps: 30,
+            save_in_place_overlap: true,
+            fps: 60,
             bitrate_mbps: 40,
-            auto_bitrate: false,
+            auto_bitrate: true,
             max_auto_bitrate_mbps: 80,
             nvenc_preset: 3,
             resolution_preset: ResolutionPreset::System,
@@ -171,6 +178,7 @@ impl ClipSettings {
             imported_video_directories: Vec::new(),
             imported_video_titles: BTreeMap::new(),
             audio_sources: default_audio_sources(),
+            default_app_sources_version: 0,
             compatibility_fields: BTreeMap::new(),
         }
     }
@@ -191,7 +199,7 @@ impl ClipSettings {
         self.custom_main_color = valid_hex(&self.custom_main_color).unwrap_or("#101114".into());
         self.custom_accent_color = valid_hex(&self.custom_accent_color).unwrap_or("#c8a6ff".into());
         self.clip_length_seconds = self.clip_length_seconds.clamp(5, 600);
-        if !matches!(self.fps, 24 | 30 | 60 | 120 | 144 | 210 | 240) {
+        if !matches!(self.fps, 24 | 30 | 60 | 120) {
             self.fps = 30;
         }
         self.bitrate_mbps = self.bitrate_mbps.clamp(4, 120);
@@ -341,6 +349,20 @@ mod tests {
     }
 
     #[test]
+    fn in_place_overlap_defaults_on_but_explicit_opt_out_survives() {
+        let old: ClipSettings = serde_json::from_str(r#"{"saveInPlace":true}"#).unwrap();
+        assert!(old.save_in_place_overlap);
+        let opted_out: ClipSettings =
+            serde_json::from_str(r#"{"saveInPlaceOverlap":false}"#).unwrap();
+        let normalized = opted_out.normalize(r"C:ixture\clips");
+        assert!(!normalized.save_in_place_overlap);
+        assert_eq!(
+            serde_json::to_value(normalized).unwrap()["saveInPlaceOverlap"],
+            false
+        );
+    }
+
+    #[test]
     fn invalid_values_are_bounded_and_default_sources_are_restored() {
         let settings = ClipSettings {
             clip_length_seconds: 1,
@@ -359,6 +381,19 @@ mod tests {
         assert_eq!(settings.nvenc_preset, 3);
         assert_eq!(settings.save_folder, r"C:\safe\clips");
         assert_eq!(settings.audio_sources.len(), 3);
+    }
+
+    #[test]
+    fn playful_themes_round_trip_and_unknown_themes_fall_back() {
+        let settings: ClipSettings =
+            serde_json::from_str(r#"{"uiTheme":"maid-cafe"}"#).unwrap();
+        assert_eq!(settings.ui_theme, UiTheme::MaidCafe);
+        assert_eq!(serde_json::to_value(&settings).unwrap()["uiTheme"], "maid-cafe");
+        let spooky: ClipSettings = serde_json::from_str(r#"{"uiTheme":"halloween"}"#).unwrap();
+        assert_eq!(spooky.ui_theme, UiTheme::Halloween);
+
+        let future: ClipSettings = serde_json::from_str(r#"{"uiTheme":"neon"}"#).unwrap();
+        assert_eq!(future.normalize("C:\\Clips").ui_theme, UiTheme::Graphite);
     }
 
     #[test]
@@ -381,7 +416,7 @@ mod tests {
             assert_eq!(serde_json::to_value(configured).unwrap()["fps"], *fps);
             assert_eq!(serde_json::to_value(normalized).unwrap()["fps"], *fps);
         }
-        for fps in [0, 59, 61, 119, 241, 999] {
+        for fps in [0, 59, 61, 119, 144, 210, 240, 241, 999] {
             let settings = ClipSettings { fps, ..ClipSettings::default() };
             assert_eq!(settings.normalize(r"C:\fixture\clips").fps, 30);
         }

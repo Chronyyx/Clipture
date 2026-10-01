@@ -116,3 +116,34 @@ fn writer_failure_disconnects_and_unblocks_waiting_producers() {
     });
     done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 }
+
+#[test]
+fn a_users_close_survives_a_queue_full_of_media_replies() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let output = start(PausedWriter {
+        entered: Some(entered_tx),
+        resume: resume_rx,
+        finished: done_tx,
+        bytes: vec![],
+    });
+    output.send(reply(1)).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    output.try_send(reply(2)).unwrap();
+    output.try_send(reply(3)).unwrap();
+    // The window is closing while streaming has filled the queue.
+    output.signal(Message::Closing {}.into()).unwrap();
+    output.signal(Message::Focus {}.into()).unwrap();
+    resume_tx.send(()).unwrap();
+    drop(output);
+    let bytes = done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let mut cursor = io::Cursor::new(bytes);
+    let mut closing = 0;
+    while let Some(frame) = wire::read_frame(&mut cursor).unwrap() {
+        if matches!(frame.message, Message::Closing {}) {
+            closing += 1;
+        }
+    }
+    assert_eq!(closing, 1, "a later Focus must not displace Closing");
+}

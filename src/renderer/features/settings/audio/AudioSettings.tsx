@@ -29,8 +29,15 @@ function sourceDescription(source: AudioSourceRule) {
   return source.enabled ? 'Recorded when enabled' : 'Currently disabled';
 }
 
+// Friendly names (e.g. "Chromium" for chrome.exe) win over the process name.
 function appSourceName(source: AudioSourceRule) {
-  return source.processName || source.label || 'Select process';
+  const label = source.label && source.label !== 'New App Source' ? source.label : '';
+  return label || source.processName || 'Choose an app';
+}
+
+function appSourceDetail(source: AudioSourceRule) {
+  if (!source.processName) return 'Not set up yet';
+  return appSourceName(source) === source.processName ? 'Separate track' : 'Separate track for ' + source.processName;
 }
 
 function appSourceInitial(source: AudioSourceRule) {
@@ -44,6 +51,8 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
   const appSources = audioSources.filter((source) => source.kind === 'app');
   const [activeProcesses, setActiveProcesses] = useState<ActiveProcess[]>([]);
   const [inputDevices, setInputDevices] = useState<AudioInputDevice[]>([]);
+  const [processesLoading, setProcessesLoading] = useState(true);
+  const [devicesLoading, setDevicesLoading] = useState(true);
   const [configuringSystem, setConfiguringSystem] = useState(false);
   const [configuringApp, setConfiguringApp] = useState<string | null>(null);
   const [configuringMic, setConfiguringMic] = useState<string | null>(null);
@@ -52,11 +61,15 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
   ), [appSources]);
 
   function refreshProcesses() {
-    void clipture.listActiveProcesses().then(setActiveProcesses).catch(() => setActiveProcesses([]));
+    setProcessesLoading(true);
+    void clipture.listActiveProcesses().then(setActiveProcesses).catch(() => setActiveProcesses([]))
+      .finally(() => setProcessesLoading(false));
   }
 
   function refreshInputDevices() {
-    void clipture.listAudioInputDevices().then(setInputDevices).catch(() => setInputDevices([]));
+    setDevicesLoading(true);
+    void clipture.listAudioInputDevices().then(setInputDevices).catch(() => setInputDevices([]))
+      .finally(() => setDevicesLoading(false));
   }
 
   useEffect(() => {
@@ -138,6 +151,7 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
                 <SystemAudioModal
                   source={source}
                   activeProcesses={activeProcesses}
+                  loading={processesLoading && activeProcesses.length === 0}
                   otherAppProcesses={otherAppProcesses}
                   onSave={(patch) => updateSource(source.id, patch)}
                   onClose={() => setConfiguringSystem(false)}
@@ -147,6 +161,7 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
                 <MicrophoneSettingsModal
                   source={source}
                   inputDevices={inputDevices}
+                  loading={devicesLoading && inputDevices.length === 0}
                   onUpdate={(patch) => updateSource(source.id, patch)}
                   onClose={() => setConfiguringMic(null)}
                 />
@@ -173,7 +188,7 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
                 >
                   <button className='audio-source-main audio-source-main-button' type='button' onClick={() => { refreshProcesses(); setConfiguringApp(source.id); }}>
                     <AppAudioSourceIcon source={source} fallback={appSourceInitial(source)} />
-                    <span className='audio-source-text'><strong>{appSourceName(source)}</strong><span>Separate track</span></span>
+                    <span className='audio-source-text'><strong>{appSourceName(source)}</strong><span>{appSourceDetail(source)}</span></span>
                   </button>
                   <div className='audio-source-actions'>
                     <label className='audio-source-toggle' title={source.enabled ? 'Disable this track' : 'Enable this track'}>
@@ -188,6 +203,7 @@ export function AudioSettings({ settings, onChange }: AudioSettingsProps) {
                   <AppAudioModal
                     source={source}
                     activeProcesses={activeProcesses}
+                    loading={processesLoading && activeProcesses.length === 0}
                     onSave={(patch) => { updateSource(source.id, patch); setConfiguringApp(null); }}
                     onClose={() => setConfiguringApp(null)}
                   />

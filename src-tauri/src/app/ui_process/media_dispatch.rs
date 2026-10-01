@@ -1,12 +1,17 @@
 use super::wire::{Frame, Message};
-use crate::media::MediaService;
+use crate::media::{MediaAdmission, MediaService};
 use std::sync::Arc;
 use tauri::http::{
     header::{ORIGIN, RANGE},
     Request,
 };
 
-pub fn respond(media: Arc<MediaService>, owner: &str, request: Message) -> Frame {
+pub fn respond(
+    media: Arc<MediaService>,
+    admission: &MediaAdmission,
+    owner: &str,
+    request: Message,
+) -> Frame {
     let Message::Media {
         id,
         method,
@@ -35,8 +40,17 @@ pub fn respond(media: Arc<MediaService>, owner: &str, request: Message) -> Frame
         Ok(request) => request,
         Err(_) => return failure(id, 400, "Invalid media headers"),
     };
+    let Some(_permit) = admission.admit(request.uri()) else {
+        return failure(id, 503, "UI media host is busy");
+    };
     let response = crate::media::handle_protocol_request(Some(media), owner, request);
     let (parts, binary) = response.into_parts();
+    // The window process treats an oversized frame as a protocol violation
+    // and closes; a failed read only fails that one request.
+    if binary.len() > super::wire::MAXIMUM_BINARY_BYTES {
+        tracing::warn!(bytes = binary.len(), "media reply exceeds the UI transport limit");
+        return failure(id, 502, "Media reply too large");
+    }
     Frame {
         message: Message::MediaReply {
             id,

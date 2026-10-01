@@ -5,6 +5,7 @@ import type { ActiveProcess, AudioSourceRule } from '../../../../shared/types';
 interface SystemAudioModalProps {
   source: AudioSourceRule;
   activeProcesses: ActiveProcess[];
+  loading?: boolean;
   otherAppProcesses: Set<string>;
   onSave: (patch: Partial<AudioSourceRule>) => void;
   onClose: () => void;
@@ -13,6 +14,7 @@ interface SystemAudioModalProps {
 export function SystemAudioModal({
   source,
   activeProcesses,
+  loading = false,
   otherAppProcesses,
   onSave,
   onClose
@@ -82,7 +84,8 @@ export function SystemAudioModal({
                   {hasSelectedVisibleProcess ? 'Clear All' : 'Select All'}
                 </button>
               </div>
-              <div className='process-list'>
+              <div className='process-list' aria-busy={loading}>
+                {loading && [0, 1, 2, 3].map((row) => <span key={row} className='skeleton process-skeleton' aria-hidden='true' />)}
                 {visibleNames.map((name) => {
                   const isSeparateTrack = otherAppProcesses.has(name);
                   const isOffline = !activeProcesses.some((process) => process.name === name);

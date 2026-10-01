@@ -30,7 +30,7 @@ pub async fn save_settings(
     settings: ClipSettings,
 ) -> CommandResult<ClipSettings> {
     let store = state.settings.clone();
-    let saved = blocking(move || store.save(settings)).await?;
+    let saved = blocking(move || store.save_from_ui(settings)).await?;
     if !state.paths.test_mode && !state.paths.isolated_profile {
         if let Err(error) = app::autostart::apply(&app, saved.start_on_login) {
             tracing::warn!(%error, "could not update autostart registration");

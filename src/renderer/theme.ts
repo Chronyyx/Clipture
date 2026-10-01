@@ -116,7 +116,7 @@ function clearCustomProperties(root: HTMLElement): void {
 }
 
 function normalizeUiTheme(value: unknown): UiTheme {
-  return value === "light" || value === "glitten" || value === "milate" || value === "custom" ? value : "graphite";
+  return value === "light" || value === "glitten" || value === "milate" || value === "maid-cafe" || value === "halloween" || value === "custom" ? value : "graphite";
 }
 
 export function refreshLocalThemeFont(theme: ThemeFontId): Promise<boolean> {

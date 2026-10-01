@@ -44,6 +44,12 @@ export interface MockCliptureState {
   audioInputs?: AudioInputDevice[];
   displays?: DisplayDevice[];
   update?: UpdateState;
+  /** Browser preview only: simulated host latency and clip thumbnails. */
+  latencyMs?: number;
+  thumbnails?: Record<string, string>;
+  /** Public web demo: one playable sample clip, working saves, and
+   * plain-language messages for features that need the desktop app. */
+  demo?: { playbackUrl: string };
 }
 
 export interface MockCliptureController {
@@ -54,15 +60,22 @@ export interface MockCliptureController {
   emitShowNotification(thumbnailUrl: string, position: string, message?: string): void;
 }
 
+function delay(ms = 0): Promise<void> {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
-function unavailable(capability: string): never {
-  throw new HostCapabilityError('mock', capability, 'This operation requires a native desktop host');
-}
-
 export function createMockCliptureController(seed: MockCliptureState = {}): MockCliptureController {
+  const unavailable = (capability: string): never => {
+    if (seed.demo) throw new Error("This needs the Clipture desktop app. The web demo can't reach your PC.");
+    throw new HostCapabilityError('mock', capability, 'This operation requires a native desktop host');
+  };
+  const playable = (filePath: string) => seed.demo?.playbackUrl ?? filePath;
+  let demoSaves = 0;
+
   let settings = clone(seed.settings ?? defaultSettings);
   let clips = clone(seed.clips ?? []);
   let update: UpdateState = clone(seed.update ?? { status: 'idle' });
@@ -79,23 +92,51 @@ export function createMockCliptureController(seed: MockCliptureState = {}): Mock
     setSaveIoAnalyzerArmed: async (armed) => clone(saveIo = { ...saveIo, armed }),
     getSettings: async () => clone(settings),
     saveSettings: async (next) => clone(settings = clone(next)),
-    saveClip: async () => unavailable('saveClip'),
-    listClips: async () => clone(clips),
+    saveClip: async () => {
+      if (!seed.demo) return unavailable('saveClip');
+      // A save in the demo copies the newest clip's look as a fresh clip.
+      const source = clips[0];
+      const now = new Date();
+      demoSaves += 1;
+      const filePath = 'C:\\Users\\you\\Videos\\Clipture\\Demo\\saved-' + demoSaves + '.mp4';
+      const clip: ClipRecord = {
+        id: 'demo-save-' + demoSaves,
+        title: 'Clipture clip',
+        gameOrApp: source?.gameOrApp ?? 'Desktop',
+        librarySource: 'clip',
+        isGame: source?.isGame ?? false,
+        createdAt: now.toISOString(),
+        durationSeconds: settings.clipLengthSeconds,
+        filePath,
+        resolution: source?.resolution ?? '1920x1080',
+        fps: settings.fps,
+        encoder: source?.encoder ?? 'NVENC H.264',
+        audioTracks: source?.audioTracks ?? []
+      };
+      if (source && seed.thumbnails?.[source.filePath]) seed.thumbnails[filePath] = seed.thumbnails[source.filePath];
+      clips = [clip, ...clips];
+      libraryChanged.emit(clone(clip));
+      return { ok: true, message: 'Saved the last ' + settings.clipLengthSeconds + 's.', clip: clone(clip) };
+    },
+    listClips: async () => { await delay(seed.latencyMs); return clone(clips); },
     deleteClips: async (ids) => {
       clips = clips.filter((clip) => !ids.includes(clip.id));
       libraryChanged.emit(undefined);
       return true;
     },
     importVideoFolders: async () => unavailable('importVideoFolders'),
-    clipUrl: async (filePath) => filePath,
+    clipUrl: async (filePath) => playable(filePath),
     clipIconUrl: async () => '',
     processIconUrl: async () => '',
-    clipThumbnailUrl: async () => '',
-    clipPlaybackUrl: async (filePath) => ({ url: filePath, mixed: false, message: 'Mock playback' }),
+    clipThumbnailUrl: async (filePath) => { await delay(seed.latencyMs); return seed.thumbnails?.[filePath] ?? ''; },
+    clipPlaybackUrl: async (filePath) => ({ url: playable(filePath), mixed: false, message: 'Mock playback' }),
     releasePlaybackCache: async () => true,
+    getClipRepairStatus: async () => ({ phase: 'idle', checked: 0, total: 0, needsRepair: 0, needsRepairBytes: 0, repaired: 0, failed: 0 }),
+    checkClipLayouts: async () => unavailable('checkClipLayouts'),
+    fixClipLayouts: async () => unavailable('fixClipLayouts'),
     listActiveProcesses: async () => clone(seed.processes ?? []),
-    listAudioInputDevices: async () => clone(seed.audioInputs ?? []),
-    listDisplayDevices: async () => clone(seed.displays ?? []),
+    listAudioInputDevices: async () => { await delay(seed.latencyMs); return clone(seed.audioInputs ?? []); },
+    listDisplayDevices: async () => { await delay(seed.latencyMs); return clone(seed.displays ?? []); },
     listClipSounds: async () => clone(seed.sounds ?? []),
     importClipSound: async () => unavailable('importClipSound'),
     revealSoundsFolder: async () => unavailable('revealSoundsFolder'),

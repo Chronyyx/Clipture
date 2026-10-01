@@ -42,10 +42,11 @@ struct PendingUpdate {
 }
 
 pub struct UpdateService {
-    state: RwLock<UpdateState>,
+    pub(super) state: RwLock<UpdateState>,
+    pub(super) native_pending: Mutex<Option<super::manifest::SignedManifest>>,
     pending: Mutex<Option<PendingUpdate>>,
     operation: tokio::sync::Mutex<()>,
-    gate: Arc<dyn UpdateGate>,
+    pub(super) gate: Arc<dyn UpdateGate>,
     check_disabled_message: Option<String>,
 }
 
@@ -70,6 +71,7 @@ impl UpdateService {
     ) -> Self {
         Self {
             state: RwLock::new(UpdateState::default()),
+            native_pending: Mutex::new(None),
             pending: Mutex::new(None),
             operation: tokio::sync::Mutex::new(()),
             gate,
@@ -95,6 +97,9 @@ impl UpdateService {
         if let Some(message) = &self.check_disabled_message {
             self.replace_pending(None);
             return Ok(self.publish(app, UpdateState::unavailable(message.clone(), checked_at)));
+        }
+        if !cfg!(debug_assertions) {
+            return self.check_native(app, checked_at).await;
         }
         self.publish(app, UpdateState::checking(&previous, checked_at.clone()));
 
@@ -135,6 +140,9 @@ impl UpdateService {
 
     pub async fn download(&self, app: &AppHandle) -> Result<(), UpdateError> {
         let _operation = self.operation.lock().await;
+        if !cfg!(debug_assertions) {
+            return self.download_native(app).await;
+        }
         self.ensure_allowed(app, UpdateOperation::Download)?;
 
         let mut pending = self.take_pending().ok_or(UpdateError::NoPendingUpdate)?;
@@ -209,6 +217,9 @@ impl UpdateService {
         let _operation = self.operation.lock().await;
         self.ensure_allowed(app, UpdateOperation::Install)?;
 
+        if !cfg!(debug_assertions) {
+            return self.install_native(app).await;
+        }
         let (update, public_key, payload_path) = {
             let pending = self
                 .pending
@@ -261,7 +272,7 @@ impl UpdateService {
         Err(UpdateError::Blocked(reason))
     }
 
-    fn publish(&self, app: &AppHandle, next: UpdateState) -> UpdateState {
+    pub(super) fn publish(&self, app: &AppHandle, next: UpdateState) -> UpdateState {
         *self
             .state
             .write()
@@ -270,7 +281,7 @@ impl UpdateService {
         next
     }
 
-    fn fail(&self, app: &AppHandle, error: UpdateError) -> UpdateError {
+    pub(super) fn fail(&self, app: &AppHandle, error: UpdateError) -> UpdateError {
         let previous = self.get();
         self.publish(app, UpdateState::failed(&previous, error.to_string()));
         error

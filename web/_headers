@@ -1,0 +1,22 @@
+# Cloudflare Pages response headers for clipture.app (ADR 0011).
+# Same-origin scripts, styles and images only; no third-party requests.
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), clipboard-read=()
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+
+/invite/*
+  X-Robots-Tag: noindex
+  Cache-Control: public, max-age=300
+
+# The real Clipture interface in demo mode. Only clipture.app itself may
+# embed it, and it may load its bundled fonts and the sample clip.
+/demo/*
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  X-Frame-Options: SAMEORIGIN
+  X-Robots-Tag: noindex

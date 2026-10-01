@@ -10,6 +10,7 @@
 #include "clipture/PacketRingBuffer.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/replay/ConsumedWindow.hpp"
+#include "clipture/replay/BackfillPace.hpp"
 #include "clipture/replay/InPlacePacketArchive.hpp"
 
 #include <cstdint>
@@ -56,6 +57,7 @@ struct EngineSettings {
     std::vector<std::string> appAudioProcesses;
     std::vector<std::string> systemAudioProcesses;
     bool saveInPlace = true;
+    bool saveInPlaceOverlap = true;
     std::string saveFolder;
 };
 
@@ -97,6 +99,10 @@ private:
     std::unique_ptr<ReplaySegmentStore> pcmRecoveryStore_;
     std::shared_ptr<replay::InPlacePacketArchive> inPlaceArchive_ = std::make_shared<replay::InPlacePacketArchive>();
     replay::ConsumedWindow consumedWindow_;
+    replay::BackfillPace backfillPace_;
+    // Save writer rate learned by the last paced save into this folder.
+    std::string learnedSaveWriteFolder_;
+    uint64_t learnedSaveWriteBytesPerSecond_ = 0;
     std::unique_ptr<AudioReplayCoordinator> audioReplayCoordinator_;
     std::unique_ptr<CaptureSession> captureSession_;
     std::unique_ptr<EncoderWorker> encoderWorker_;

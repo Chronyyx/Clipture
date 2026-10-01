@@ -36,14 +36,34 @@ pub fn audio_edit_list_patches(path: &Path) -> Vec<PlaybackPatch> {
     find_patches(path).unwrap_or_default()
 }
 
-fn find_patches(path: &Path) -> std::io::Result<Vec<PlaybackPatch>> {
+/// The number of audio tracks in an MP4, read from its `moov` box. Clipture
+/// records each source (game, microphone, apps) as its own track.
+pub fn audio_track_count(path: &Path) -> Option<usize> {
+    let (_, data) = read_moov(path).ok()??;
+    let root = box_at(&data, 0, data.len())?;
+    Some(
+        children(&data, root)
+            .into_iter()
+            .filter(|view| view.kind == *b"trak")
+            .filter(|track| {
+                children(&data, *track)
+                    .iter()
+                    .find(|view| view.kind == *b"mdia")
+                    .is_some_and(|media| is_audio_track(&data, *media))
+            })
+            .count(),
+    )
+}
+
+/// The `moov` box and its file offset, if the file has a sane one.
+fn read_moov(path: &Path) -> std::io::Result<Option<(u64, Vec<u8>)>> {
     let mut file = File::open(path)?;
     let file_size = file.metadata()?.len();
     let mut cursor = 0_u64;
     let mut moov = None;
     while cursor.saturating_add(8) <= file_size {
         let Some((kind, size, header)) = read_file_box_header(&mut file, cursor, file_size)? else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
         if kind == *b"moov" {
             moov = Some((cursor, size));
@@ -51,24 +71,29 @@ fn find_patches(path: &Path) -> std::io::Result<Vec<PlaybackPatch>> {
         }
         cursor = cursor.saturating_add(size);
         if size < header {
-            return Ok(Vec::new());
+            return Ok(None);
         }
     }
     let Some((moov_offset, moov_size)) = moov else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     if moov_size > MAXIMUM_MOOV_BYTES || moov_size > usize::MAX as u64 {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     file.seek(SeekFrom::Start(moov_offset))?;
     let mut data = vec![0_u8; moov_size as usize];
     file.read_exact(&mut data)?;
+    let is_moov = box_at(&data, 0, data.len()).is_some_and(|root| root.kind == *b"moov");
+    Ok(is_moov.then_some((moov_offset, data)))
+}
+
+fn find_patches(path: &Path) -> std::io::Result<Vec<PlaybackPatch>> {
+    let Some((moov_offset, data)) = read_moov(path)? else {
+        return Ok(Vec::new());
+    };
     let Some(root) = box_at(&data, 0, data.len()) else {
         return Ok(Vec::new());
     };
-    if root.kind != *b"moov" {
-        return Ok(Vec::new());
-    }
 
     let mut patches = Vec::new();
     for track in children(&data, root)

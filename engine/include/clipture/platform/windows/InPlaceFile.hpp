@@ -20,8 +20,14 @@ public:
     std::optional<uint64_t> append(std::span<const std::byte> bytes);
     std::optional<uint64_t> appendFinalSample(std::span<const std::byte> bytes);
     bool writeSlot(uint64_t offset, std::span<const std::byte> bytes);
+    // Unused arena space before sealing: zeroes a range (releasing its disk
+    // space where the volume allows) or cuts unused space off the end.
+    bool zeroSlot(uint64_t offset, uint64_t length);
+    bool trimEnd(uint64_t end);
     void discardWhenUnused();
     void retainForRecovery();
+    // Game and live-capture I/O go first while this file is copied into/out of.
+    bool lowerIoPriority();
     bool seal();
     bool finalize(std::span<const std::byte> prefix, std::span<const std::byte> movieIndex);
     bool publish(const std::filesystem::path& destination);
@@ -36,5 +42,6 @@ private:
     State state_ = State::Appending;
     mutable InPlaceIo io_;
     bool discard_ = false;
+    bool sparse_ = false;
 };
 } // namespace clipture::platform::windows

@@ -1,0 +1,387 @@
+@import '@fontsource/m-plus-rounded-1c/latin-500.css';
+@import '@fontsource/m-plus-rounded-1c/latin-700.css';
+@import '@fontsource/m-plus-rounded-1c/latin-800.css';
+
+/* Maid café: a pastel café under a striped awning. Strawberry-milk walls,
+   apron-white surfaces with pink stitching, plum ink instead of black, and
+   raspberry candy buttons. Everything here is scoped to the theme. */
+:root[data-theme="maid-cafe"] {
+  --font-ui: "M PLUS Rounded 1c", "Segoe UI", system-ui, sans-serif;
+  --font-display: var(--font-ui);
+  --font-instrument: var(--font-ui);
+  --app-bg: #ffe3ec;
+  --sidebar-bg: #fff4f8;
+  --surface: #fffafc;
+  --surface-deep: #fff0f5;
+  --surface-row: #fff6f9;
+  --surface-control: #ffffff;
+  --surface-hover: #ffe6ef;
+  --surface-active: #ffd9e7;
+  --surface-video: #3a1d33;
+  --border: #f6c3d6;
+  --border-strong: #eba3bf;
+  --text: #5b2a4e;
+  --text-strong: #3f1937;
+  --text-muted: #87567a;
+  --text-subtle: #9a6a8a;
+  --icon: #9b4f7f;
+  --accent: #ff6f9f;
+  --accent-hover: #f0548a;
+  --accent-soft: #ffe1ec;
+  --accent-border: #ffabc8;
+  --accent-text: #c2336f;
+  --on-accent: #ffffff;
+  --primary-bg: #d63b77;
+  --primary-text: #ffffff;
+  --selection: #ff6f9f;
+  --selection-ring: rgb(255 111 159 / 38%);
+  --toggle-on: #ff6f9f;
+  --scrollbar: #f5b3cb;
+  --scrollbar-hover: #ec8fb2;
+  --scrollbar-active: #e0709c;
+  --shadow: rgb(214 80 132 / 14%);
+  --inset-highlight: rgba(255, 255, 255, 0.8);
+  --tally: #ff4f8b;
+  --stitch: #ffb3cb;
+  --candy-edge: #a8285b;
+  --mint: #bff0dc;
+  --lavender: #e2d5ff;
+  --custard: #ffe9a8;
+  --sky: #cfe8ff;
+  color-scheme: light;
+  font-weight: 500;
+}
+
+:root[data-theme="maid-cafe"] :is(h1, h2, h3, .brand strong, .clip-name, .clip-title) {
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+/* --- The room: hearts on the wall, lace where the sidebar meets it, and a
+   striped awning that stays over every view. --- */
+:root[data-theme="maid-cafe"] .app-shell { background: var(--app-bg); }
+
+:root[data-theme="maid-cafe"] .workspace {
+  background:
+    radial-gradient(circle at 0 7px, var(--sidebar-bg) 6px, transparent 6.5px) left top / 9px 14px repeat-y,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cpath d='M24 30c-5-3.6-7.5-6.4-7.5-9a3.6 3.6 0 0 1 7.5-1.2A3.6 3.6 0 0 1 31.5 21c0 2.6-2.5 5.4-7.5 9z' fill='%23ffc6d8'/%3E%3Cpath d='M86 78l2 5 5 2-5 2-2 5-2-5-5-2 5-2z' fill='%23ffd98a' fill-opacity='.8'/%3E%3Ccircle cx='92' cy='22' r='2.4' fill='%23ffd0df'/%3E%3Ccircle cx='30' cy='96' r='1.8' fill='%23e2d5ff'/%3E%3C/svg%3E") 0 0 / 120px 120px,
+    var(--app-bg);
+}
+
+:root[data-theme="maid-cafe"] .workspace::before {
+  content: "";
+  position: sticky;
+  z-index: 6;
+  top: 0;
+  display: block;
+  height: 30px;
+  margin: 0 -24px -30px;
+  pointer-events: none;
+  background: repeating-linear-gradient(90deg, #ffb3cb 0 26px, #fffafc 26px 52px);
+  filter: drop-shadow(0 3px 2px rgb(214 80 132 / 18%));
+  -webkit-mask:
+    linear-gradient(#000 0 0) top / 100% 22px no-repeat,
+    radial-gradient(circle at 13px 0, #000 12.5px, transparent 13px) 0 22px / 26px 8px repeat-x;
+  mask:
+    linear-gradient(#000 0 0) top / 100% 22px no-repeat,
+    radial-gradient(circle at 13px 0, #000 12.5px, transparent 13px) 0 22px / 26px 8px repeat-x;
+}
+
+:root[data-theme="maid-cafe"] .sidebar {
+  border-right: 0;
+  background:
+    linear-gradient(90deg, rgb(255 182 206 / 22%) 50%, transparent 50%) 0 0 / 24px 24px,
+    linear-gradient(rgb(255 182 206 / 22%) 50%, transparent 50%) 0 0 / 24px 24px,
+    var(--sidebar-bg);
+}
+
+/* --- Brand: the logo wears a bow, the name gets its café sign. --- */
+:root[data-theme="maid-cafe"] .brand { position: relative; }
+:root[data-theme="maid-cafe"] .brand::before {
+  content: "";
+  position: absolute;
+  top: -9px;
+  left: -8px;
+  width: 26px;
+  height: 18px;
+  transform: rotate(-18deg);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-13 -9 26 18'%3E%3Cg fill='%23ff7aa8' stroke='%235b2a4e' stroke-width='1.6' stroke-linejoin='round'%3E%3Cpath d='M0 0C-4-7-12-7-11 0-12 7-4 7 0 0z'/%3E%3Cpath d='M0 0C4-7 12-7 11 0 12 7 4 7 0 0z'/%3E%3Ccircle r='2.6'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+:root[data-theme="maid-cafe"] .brand .mark { border-radius: 50%; background: #fff; box-shadow: 0 0 0 3px var(--stitch); }
+:root[data-theme="maid-cafe"] .brand strong { color: var(--primary-bg); font-size: 19px; }
+:root[data-theme="maid-cafe"] .brand strong::after {
+  content: "maid café";
+  display: block;
+  margin-top: 1px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+/* --- Navigation: menu pills, with a bow on the chosen one. --- */
+:root[data-theme="maid-cafe"] .nav {
+  height: 42px;
+  margin-bottom: 4px;
+  border-radius: 999px;
+  color: var(--text);
+  font-weight: 700;
+}
+:root[data-theme="maid-cafe"] .nav svg { color: var(--icon); }
+:root[data-theme="maid-cafe"] .nav:hover { background: var(--surface-hover); }
+:root[data-theme="maid-cafe"] .nav.active { background: transparent; color: var(--text-strong); }
+:root[data-theme="maid-cafe"] .nav.active svg { color: var(--primary-bg); }
+/* The labels are bare text nodes; keep the full pill behind them. */
+:root[data-theme="maid-cafe"] .nav { isolation: isolate; }
+:root[data-theme="maid-cafe"] .nav-indicator {
+  z-index: -1;
+  inset: 0;
+  width: auto;
+  height: auto;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 0 0 2px var(--stitch), 0 3px 0 var(--border);
+}
+:root[data-theme="maid-cafe"] .nav-indicator::after {
+  content: "♡";
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+  color: var(--accent);
+  font-size: 15px;
+}
+
+/* --- Buttons: candy that presses down. --- */
+:root[data-theme="maid-cafe"] .primary {
+  position: relative;
+  border-radius: 999px;
+  padding: 0 20px;
+  color: var(--primary-text);
+  background: linear-gradient(to bottom, rgb(255 255 255 / 22%), transparent 50%), var(--primary-bg);
+  box-shadow: 0 3px 0 var(--candy-edge), inset 0 1px 0 rgb(255 255 255 / 40%);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+:root[data-theme="maid-cafe"] .primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 0 var(--candy-edge), inset 0 1px 0 rgb(255 255 255 / 40%); }
+:root[data-theme="maid-cafe"] .primary:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 1px 0 var(--candy-edge); }
+
+:root[data-theme="maid-cafe"] :is(.secondary-button, .modal-footer button:not(.primary), .danger-button) {
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 2px 0 var(--border);
+  font-weight: 700;
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+:root[data-theme="maid-cafe"] :is(.secondary-button, .modal-footer button:not(.primary)):hover:not(:disabled) { background: var(--surface-hover); }
+:root[data-theme="maid-cafe"] :is(.secondary-button, .modal-footer button, .danger-button):active:not(:disabled) { transform: translateY(2px); box-shadow: none; }
+
+:root[data-theme="maid-cafe"] .icon-button { border-radius: 999px; }
+
+/* Filter chips are macarons: each folder gets its own pastel. */
+:root[data-theme="maid-cafe"] .chip {
+  border: 2px solid transparent;
+  color: var(--text);
+  background: #ffd0df;
+  font-weight: 700;
+}
+:root[data-theme="maid-cafe"] .chip:nth-child(5n + 2) { background: var(--mint); }
+:root[data-theme="maid-cafe"] .chip:nth-child(5n + 3) { background: var(--lavender); }
+:root[data-theme="maid-cafe"] .chip:nth-child(5n + 4) { background: var(--custard); }
+:root[data-theme="maid-cafe"] .chip:nth-child(5n) { background: var(--sky); }
+:root[data-theme="maid-cafe"] .chip:hover { border-color: var(--accent-border); color: var(--text-strong); }
+:root[data-theme="maid-cafe"] .chip.active {
+  border-color: var(--primary-bg);
+  color: #fff;
+  background: var(--primary-bg);
+}
+:root[data-theme="maid-cafe"] .chip.active::before { content: "♡ "; }
+
+/* --- Library header --- */
+:root[data-theme="maid-cafe"] .library-top {
+  border-bottom: 0;
+  background: var(--app-bg);
+  box-shadow: 0 10px 22px -12px rgb(214 80 132 / 30%);
+}
+:root[data-theme="maid-cafe"] .library-heading-default { display: none; }
+:root[data-theme="maid-cafe"] .library-heading-cafe { display: inline; }
+:root[data-theme="maid-cafe"] .library-title-icon { display: none; }
+:root[data-theme="maid-cafe"] .library-title h1 { color: var(--text-strong); font-size: 30px; }
+:root[data-theme="maid-cafe"] .library-title h1::after {
+  content: "✦";
+  margin-left: 6px;
+  color: #ffc94d;
+  font-size: 0.6em;
+  vertical-align: 0.7em;
+}
+:root[data-theme="maid-cafe"] .library-title::before {
+  content: "";
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'%3E%3Cg stroke='%235b2a4e' stroke-width='2' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M6 14h19v7a8 8 0 0 1-8 8h-3a8 8 0 0 1-8-8z' fill='%23fff'/%3E%3Cpath d='M25 16h2.5a3.5 3.5 0 0 1 0 7H24' fill='none'/%3E%3Cpath d='M3 30h26' /%3E%3C/g%3E%3Cpath d='M15.5 24.5c-3-2.2-4.4-3.8-4.4-5.4a2.2 2.2 0 0 1 4.4-.7 2.2 2.2 0 0 1 4.4.7c0 1.6-1.4 3.2-4.4 5.4z' fill='%23ff6f9f'/%3E%3Cpath d='M12 11c-1.5-2 1.5-3 0-6M18 11c-1.5-2 1.5-3 0-6' fill='none' stroke='%23ffb3cb' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+:root[data-theme="maid-cafe"] .library-save-button { height: 46px; }
+
+:root[data-theme="maid-cafe"] .library-tabs { gap: 6px; border-bottom: 0; }
+:root[data-theme="maid-cafe"] .library-tab {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 18px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+:root[data-theme="maid-cafe"] .library-tab:hover { color: var(--text); background: rgb(255 255 255 / 60%); }
+:root[data-theme="maid-cafe"] .library-tab.active {
+  border-color: var(--stitch);
+  color: var(--text-strong);
+  background: #fff;
+}
+
+:root[data-theme="maid-cafe"] .library-search {
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+}
+:root[data-theme="maid-cafe"] .diagnostics-search { border: 2px solid var(--border); border-radius: 999px; background: #fff; }
+:root[data-theme="maid-cafe"] :is(.library-search, .diagnostics-search) svg { color: var(--accent); }
+:root[data-theme="maid-cafe"] .library-search:focus-within { outline-color: var(--accent); }
+
+/* --- Surfaces: apron white with pink stitching just inside the edge. --- */
+:root[data-theme="maid-cafe"] :is(.panel, .settings-group, .modal) { border-radius: 20px; }
+:root[data-theme="maid-cafe"] :is(.settings-rows, .recorder-status, .metric, .audio-source-card, .notice, .modal, .library-player-sidebar, .settings-group:not(.single-column)) {
+  outline: 1.5px dashed var(--stitch);
+  outline-offset: -6px;
+}
+:root[data-theme="maid-cafe"] .settings-rows {
+  border: 2px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: 0 6px 0 -2px var(--border);
+}
+:root[data-theme="maid-cafe"] .setting-row { padding: 16px 22px; }
+:root[data-theme="maid-cafe"] .setting-row + .setting-row { border-top: 1.5px dotted var(--border-strong); }
+:root[data-theme="maid-cafe"] .setting-row-title { font-weight: 700; }
+
+:root[data-theme="maid-cafe"] .library-player {
+  border: 2px solid var(--border);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: 0 8px 0 -2px var(--border), 0 18px 32px -18px rgb(214 80 132 / 35%);
+}
+:root[data-theme="maid-cafe"] .library-player-sidebar { border-left: 0; background: var(--surface); }
+:root[data-theme="maid-cafe"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, var(--surface) 88%); }
+:root[data-theme="maid-cafe"] .library-player-side-title { color: var(--text-strong); font-weight: 800; }
+:root[data-theme="maid-cafe"] .library-player-side-header { border-bottom: 1.5px dotted var(--border-strong); }
+:root[data-theme="maid-cafe"] .clip-rail-item { border-top: 0; border-radius: 14px; padding-left: 8px; }
+:root[data-theme="maid-cafe"] .clip-rail-item.active {
+  padding-left: 8px;
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--stitch);
+}
+:root[data-theme="maid-cafe"] .clip-rail-item.active .clip-rail-copy strong::before { content: "♡ "; color: var(--accent); }
+:root[data-theme="maid-cafe"] .clip-rail-thumbnail { border: 2px solid #fff; border-radius: 10px; box-shadow: 0 0 0 1px var(--border); }
+:root[data-theme="maid-cafe"] .clip-rail-duration { border-radius: 999px; background: rgb(63 25 55 / 82%); }
+:root[data-theme="maid-cafe"] .library-preview-play { color: var(--primary-bg); }
+
+/* The player transport becomes a pastel music box. */
+:root[data-theme="maid-cafe"] .field-transport {
+  --transport-face: #fff6f9;
+  --transport-key: #ffffff;
+  --transport-edge: #f6c3d6;
+  --transport-ink: #5b2a4e;
+  --transport-muted: #87567a;
+  --transport-track: #f8cfdd;
+  --transport-fill: #ff6f9f;
+  --transport-marker: #d63b77;
+  --transport-highlight: rgb(255 255 255 / 90%);
+  --transport-display: #ffe1ec;
+  --transport-display-ink: #3f1937;
+  border-width: 2px;
+  border-radius: 999px;
+}
+
+/* --- Recorder: the tally light is a heart. --- */
+:root[data-theme="maid-cafe"] .recorder-status {
+  position: relative;
+  margin-top: 64px;
+  border: 2px solid var(--border);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 5px 0 -1px var(--border);
+}
+:root[data-theme="maid-cafe"] .recorder-tally {
+  width: 13px;
+  height: 12px;
+  border-radius: 0;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-6 -6.5 12 11'%3E%3Cpath d='M0 3.5C-5-.5-6-4-3.2-5.5-1.6-6.3-.4-5.4 0-4.2.4-5.4 1.6-6.3 3.2-5.5 6-4 5-.5 0 3.5z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-6 -6.5 12 11'%3E%3Cpath d='M0 3.5C-5-.5-6-4-3.2-5.5-1.6-6.3-.4-5.4 0-4.2.4-5.4 1.6-6.3 3.2-5.5 6-4 5-.5 0 3.5z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+:root[data-theme="maid-cafe"] .recorder-status.live .recorder-tally { box-shadow: none; }
+:root[data-theme="maid-cafe"] .recorder-buffer-track {
+  height: 6px;
+  border-radius: 999px;
+  background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 2px), #fff calc(25% - 2px) 25%), linear-gradient(90deg, #ffd0df, var(--accent));
+}
+:root[data-theme="maid-cafe"] .recorder-readout { border-top: 1.5px dotted var(--border-strong); }
+
+/* --- Settings --- */
+:root[data-theme="maid-cafe"] .settings-rail-item { border-radius: 999px; color: var(--text); font-weight: 700; }
+:root[data-theme="maid-cafe"] .settings-rail-item:not(.active):hover { background: rgb(255 255 255 / 65%); }
+:root[data-theme="maid-cafe"] .settings-rail-indicator {
+  border: 0;
+  background: #fff;
+  box-shadow: 0 0 0 2px var(--stitch), 0 3px 0 var(--border);
+}
+:root[data-theme="maid-cafe"] .settings-rail-item.active svg { color: var(--primary-bg); }
+:root[data-theme="maid-cafe"] .settings-section-header h2 { font-size: 20px; font-weight: 800; }
+:root[data-theme="maid-cafe"] .settings-section-header h2::before { content: "♡ "; color: var(--accent); }
+
+:root[data-theme="maid-cafe"] :is(input:not([type="range"], [type="checkbox"], [type="radio"], .library-search input, .diagnostics-search input), select, .keybind-button) {
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
+:root[data-theme="maid-cafe"] .progress-track { height: 8px; border-radius: 999px; }
+:root[data-theme="maid-cafe"] .progress-fill { background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, #ff9dbd 8px 16px); }
+
+/* Toggles: the knob becomes a little heart button when switched on. */
+:root[data-theme="maid-cafe"] input[type="checkbox"].toggle-switch { width: 40px; min-width: 40px; height: 22px; background: #f3d3df; }
+:root[data-theme="maid-cafe"] input[type="checkbox"].toggle-switch::after { width: 18px; height: 18px; box-shadow: 0 1px 2px rgb(91 42 78 / 30%); }
+:root[data-theme="maid-cafe"] input[type="checkbox"].toggle-switch:checked { background: var(--toggle-on); }
+:root[data-theme="maid-cafe"] input[type="checkbox"].toggle-switch:checked::after {
+  transform: translateX(18px);
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-6 -6.5 12 11'%3E%3Cpath d='M0 3.5C-5-.5-6-4-3.2-5.5-1.6-6.3-.4-5.4 0-4.2.4-5.4 1.6-6.3 3.2-5.5 6-4 5-.5 0 3.5z' fill='%23ff6f9f'/%3E%3C/svg%3E") center / 11px no-repeat;
+}
+
+/* --- Notices, dialogs, diagnostics --- */
+:root[data-theme="maid-cafe"] .notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 20px 8px 10px;
+  color: var(--text-strong);
+  background: #fff;
+  font-weight: 700;
+  outline-offset: -5px;
+}
+/* In the library the notice leads the page, where the awning would hide it. */
+:root[data-theme="maid-cafe"] .workspace > .notice:first-child { margin-top: 40px; }
+:root[data-theme="maid-cafe"] .modal { border: 2px solid var(--border); box-shadow: 0 10px 0 -3px var(--border), 0 30px 60px -20px rgb(214 80 132 / 45%); }
+:root[data-theme="maid-cafe"] .modal-header h2::before { content: "♡ "; color: var(--accent); }
+:root[data-theme="maid-cafe"] .modal-backdrop { background: rgb(91 42 78 / 28%); }
+:root[data-theme="maid-cafe"] .metric { border: 2px solid var(--border); border-radius: 18px; background: #fff; }
+:root[data-theme="maid-cafe"] .metric strong { color: var(--accent-text); }
+:root[data-theme="maid-cafe"] .topbar h1 { color: var(--text-strong); font-size: 28px; }
+:root[data-theme="maid-cafe"] .topbar h1::after { content: "✦"; margin-left: 6px; color: #ffc94d; font-size: 0.6em; vertical-align: 0.7em; }
+
+:root[data-theme="maid-cafe"] .library-empty-state h2 { color: var(--text-strong); font-size: 24px; }
+:root[data-theme="maid-cafe"] .skeleton::after,
+:root[data-theme="maid-cafe"] .thumbnail-skeleton::after { background: linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 70%) 45%, transparent 70%); }
+:root[data-theme="maid-cafe"] .library-preview-main > .thumbnail-skeleton { background: var(--surface-active); }
+
+:root[data-theme="maid-cafe"] ::selection { color: var(--text-strong); background: #ffc2d6; }

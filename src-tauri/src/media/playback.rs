@@ -1,4 +1,10 @@
-use std::{ffi::OsString, fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use crate::{
     clips::PathAuthorizer,
@@ -6,8 +12,9 @@ use crate::{
 };
 
 use super::{
-    audio_edit_list_patches, resolve_range, ByteRange, FfmpegExecutor, FfmpegJob,
-    MediaSessionRegistry, PlaybackDescriptor, PlaybackPatch, ThumbnailService,
+    audio_edit_list_patches, library_input, resolve_range, ByteRange, FfmpegExecutor, FfmpegJob,
+    MediaSessionRegistry, PlaybackDescriptor, PlaybackPatch, RemoteMediaSource, RemoteVideoChunk,
+    ThumbnailService,
 };
 
 const MAXIMUM_AUDIO_CHUNK_BYTES: usize = 8 * 1024 * 1024;
@@ -24,6 +31,7 @@ pub struct MediaService {
     sessions: Arc<MediaSessionRegistry>,
     ffmpeg: Arc<dyn FfmpegExecutor>,
     thumbnails: ThumbnailService,
+    remote: OnceLock<Arc<dyn RemoteMediaSource>>,
 }
 
 impl MediaService {
@@ -32,6 +40,7 @@ impl MediaService {
             sessions,
             thumbnails: ThumbnailService::new(ffmpeg.clone()),
             ffmpeg,
+            remote: OnceLock::new(),
         }
     }
 
@@ -82,7 +91,40 @@ impl MediaService {
         duration_seconds: f64,
     ) -> AppResult<Vec<u8>> {
         let session = self.sessions.resolve(session_id, owner)?;
-        if session.selected_audio_indexes.is_empty() {
+        self.mix_audio(
+            &session.path,
+            &session.selected_audio_indexes,
+            start_seconds,
+            duration_seconds,
+        )
+    }
+
+    /// Every audio track of a friend's clip, mixed, once it has fully
+    /// arrived; a video element alone plays only the first track.
+    pub fn remote_mixed_audio_chunk(
+        &self,
+        stream_id: &str,
+        owner: &str,
+        start_seconds: f64,
+        duration_seconds: f64,
+    ) -> AppResult<Vec<u8>> {
+        let file = self
+            .remote
+            .get()
+            .ok_or_else(|| AppError::Path("remote media is unavailable".into()))?
+            .complete_file(stream_id, owner)?;
+        let indexes = super::sessions::selected_audio_indexes(&file.audio_tracks);
+        self.mix_audio(&file.path, &indexes, start_seconds, duration_seconds)
+    }
+
+    fn mix_audio(
+        &self,
+        path: &std::path::Path,
+        indexes: &[u8],
+        start_seconds: f64,
+        duration_seconds: f64,
+    ) -> AppResult<Vec<u8>> {
+        if indexes.is_empty() {
             return Err(AppError::Path(
                 "playback session has no selected audio tracks".into(),
             ));
@@ -97,16 +139,16 @@ impl MediaService {
         } else {
             8.0
         };
-        let filter = mixed_audio_filter(&session.selected_audio_indexes);
+        let filter = mixed_audio_filter(indexes);
+        let head = [
+            OsString::from("-nostdin"),
+            OsString::from("-hide_banner"),
+            OsString::from("-loglevel"),
+            OsString::from("error"),
+        ];
         let mut job = FfmpegJob::new(
             "mixed audio preview",
-            [
-                OsString::from("-nostdin"),
-                OsString::from("-hide_banner"),
-                OsString::from("-loglevel"),
-                OsString::from("error"),
-                OsString::from("-i"),
-                session.path.as_os_str().to_owned(),
+            head.into_iter().chain(library_input(path)).chain([
                 OsString::from("-filter_complex"),
                 OsString::from(filter),
                 OsString::from("-map"),
@@ -126,7 +168,7 @@ impl MediaService {
                 OsString::from("-f"),
                 OsString::from("wav"),
                 OsString::from("pipe:1"),
-            ],
+            ]),
         );
         job.timeout = Duration::from_secs(25);
         job.maximum_stdout_bytes = MAXIMUM_AUDIO_CHUNK_BYTES;
@@ -142,6 +184,12 @@ impl MediaService {
         }
     }
 
+    /// A copy of a clip laid out for streaming to a friend; `false` when
+    /// the clip already streams well and no copy was written.
+    pub fn write_stream_copy(&self, input: &Path, output: &Path) -> AppResult<bool> {
+        super::layout_repair::write_stream_copy(self.ffmpeg.as_ref(), input, output)
+    }
+
     pub fn thumbnail(&self, authority: &PathAuthorizer, clip_id: &str) -> AppResult<String> {
         self.thumbnails.thumbnail(authority, clip_id)
     }
@@ -150,9 +198,44 @@ impl MediaService {
         self.sessions.release(session_id, owner)
     }
 
+    /// Player switch/close: playback sessions only. Thumbnails stay cached so
+    /// the library does not re-run FFmpeg for every card after each clip.
     pub fn release_owner(&self, owner: &str) -> usize {
+        self.sessions.release_owner(owner) + self.release_remote(owner)
+    }
+
+    /// The UI owner is gone (window destroyed or UI process exited).
+    pub fn release_ui(&self, owner: &str) -> usize {
         self.thumbnails.clear();
-        self.sessions.release_owner(owner)
+        self.sessions.release_owner(owner) + self.release_remote(owner)
+    }
+
+    /// Installs the source for `/v1/remote/<id>/video` once during setup.
+    pub fn set_remote_source(&self, source: Arc<dyn RemoteMediaSource>) {
+        let _ = self.remote.set(source);
+    }
+
+    pub fn remote_url(&self, stream_id: &str) -> String {
+        format!("{}/v1/remote/{stream_id}/video", self.sessions.endpoint())
+    }
+
+
+    pub fn remote_video(
+        &self,
+        stream_id: &str,
+        owner: &str,
+        range_header: Option<&str>,
+    ) -> AppResult<RemoteVideoChunk> {
+        self.remote
+            .get()
+            .ok_or_else(|| AppError::Path("remote media is unavailable".into()))?
+            .read_video(stream_id, owner, range_header)
+    }
+
+    fn release_remote(&self, owner: &str) -> usize {
+        self.remote
+            .get()
+            .map_or(0, |remote| remote.release_owner(owner))
     }
 }
 
@@ -184,6 +267,44 @@ fn mixed_audio_filter(indexes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::{contracts::ClipRecord, media::FfmpegOutput};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingFfmpeg(AtomicUsize);
+    impl FfmpegExecutor for CountingFfmpeg {
+        fn run(&self, _: FfmpegJob) -> AppResult<FfmpegOutput> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(FfmpegOutput {
+                success: true,
+                exit_code: Some(0),
+                stdout: vec![0xff, 0xd8, 0xff],
+                stderr: String::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn switching_clips_keeps_thumbnails_but_ui_teardown_clears_them() {
+        let root = tempfile::tempdir().unwrap();
+        let video = root.path().join("clip.mp4");
+        fs::write(&video, b"video").unwrap();
+        let authority = PathAuthorizer::from_records([ClipRecord {
+            id: "clip".into(),
+            file_path: video.to_string_lossy().into(),
+            ..ClipRecord::default()
+        }]);
+        let ffmpeg = Arc::new(CountingFfmpeg(AtomicUsize::new(0)));
+        let sessions = Arc::new(MediaSessionRegistry::new("clipture-media://localhost").unwrap());
+        let media = MediaService::new(sessions, ffmpeg.clone());
+        media.thumbnail(&authority, "clip").unwrap();
+        media.release_owner("main");
+        media.thumbnail(&authority, "clip").unwrap();
+        assert_eq!(ffmpeg.0.load(Ordering::Relaxed), 1, "player release must not evict thumbnails");
+        media.release_ui("main");
+        media.thumbnail(&authority, "clip").unwrap();
+        assert_eq!(ffmpeg.0.load(Ordering::Relaxed), 2, "UI teardown frees the thumbnail cache");
+    }
 
     #[test]
     fn mix_filter_aligns_sparse_tracks_before_mix() {

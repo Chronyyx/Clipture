@@ -1,6 +1,6 @@
 # Clipture
 
-Clipture is a Windows replay-buffer application built around low-latency NVIDIA NVENC capture. It continuously persists compressed video and audio into a rolling replay archive, then muxes the selected time window into MP4 when a clip is saved.
+Clipture is a Windows replay-buffer application built around low-latency NVIDIA NVENC capture. It continuously persists compressed video and audio into a rolling replay archive in the save folder, then finalizes the selected time window as an MP4 in place when a clip is saved. Clips can be shared directly with friends, peer to peer.
 
 Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 
@@ -8,12 +8,13 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 
 - DXGI Desktop Duplication capture with automatic Windows.Graphics.Capture fallback and non-blocking frame caching.
 - High-precision hybrid clock combining Windows waitable timers with sub-millisecond CPU pause loops for jitter-free 60 FPS pacing.
-- Direct NVIDIA NVENC H.264 encoding with runtime API compatibility checks.
-- Configurable 24, 30, or 60 FPS capture and up to ten minutes of replay history.
+- Direct NVIDIA NVENC H.264 encoding with runtime API compatibility checks and capped-quality rate control: CQ 21 with the configured bitrate as a one-second ceiling, so simple scenes take a fraction of the space (ADR 0012).
+- Configurable 24, 30, 60, or 120 FPS (experimental) capture and up to ten minutes of replay history.
 - Constant-frame-rate output with real encoded samples for unchanged desktop intervals, using compact repeated-frame runs instead of duplicate queued jobs.
 - Unified capture and encoder D3D11 device architecture eliminating KeyedMutex cross-device stalls and GPU pipeline flushes.
 - System, microphone, detected game/app, and explicit per-app audio capture.
 - Separate AAC tracks with silent-track omission and short PCM recovery coverage.
+- In-place saves: the replay arena becomes the clip, so saving writes only the MP4 header and index. Unused arena space is trimmed or left sparse, never written out as padding.
 - Shared packet payloads that avoid copying the full replay buffer while saving.
 - Judder-free MP4 muxing with CFR-quantized sample durations directly from buffered H.264 and AAC packets.
 - Adaptive storage-aware saves with preallocated files, low I/O priority, and writes capped at 512 KB.
@@ -21,11 +22,13 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 - Resolution-change segmentation and stream-copy stitching when compatible.
 - HDR-to-SDR tonemapping on supported HDR capture paths.
 - Searchable clip library with folder filters, multi-select deletion, renaming, and non-copying imported video directories.
+- Friend-to-friend sharing over iroh (opt-in): invite links, click-to-play streaming in playback order, resumable "Add to library" downloads, and LAN discovery (ADR 0011).
+- Fix clips: lossless, verified repair of clips with a poor sample layout or zero padding.
 - Range-buffered playback with rolling mixed-audio chunks, Spacebar controls, automatic resume after unloaded seeks, fullscreen controls, and accelerated keyboard seeking.
 - Viewport-aware 480x270 thumbnails with bounded extraction concurrency and compressed RAM caching.
 - Persistent separate-app audio capture that follows supported multi-process application trees and reconnects after restarts.
 - Format-aware microphone processing that respects PCM container width and valid-bit depth while feeding RNNoise its expected S16-scaled samples.
-- Native Windows Raw Input save hotkey for background and fullscreen games, plus tray operation, startup-on-login, notifications, customizable UI themes (Graphite, Light, Glitten, Milate, Custom), and capture-aware background updates.
+- Native Windows Raw Input save hotkey for background and fullscreen games, plus tray operation, startup-on-login, notifications, customizable UI themes (Graphite, Light, Glitten, Milate, Maid café, Halloween, Custom), and capture-aware, signed block-delta runtime updates (ADR 0009).
 
 ## Architecture
 
@@ -41,9 +44,9 @@ Video
 DXGI Desktop Duplication (WGC fallback)
   -> unified D3D11 capture & encoder device
   -> direct on-tick target-FPS sampler
-  -> native NVENC H.264 hardware encoding with 2.0s GOP & VBV buffering
+  -> native NVENC H.264, capped-quality VBR, 2.0s GOP, 1s VBV at the bitrate cap
   -> shared packet payload + cached NAL metadata
-  -> rolling replay archive + bounded RAM fallback
+  -> in-place replay arena (<saveFolder>/.clipture-replay) + bounded RAM fallback
 
 Audio
 WASAPI capture
@@ -53,9 +56,10 @@ WASAPI capture
   -> rolling AAC archive + short PCM recovery window
 
 Save
-select packet ranges from the replay archive
-  -> metadata-only MP4 plan
-  -> bounded adaptive low-I/O-priority file writer
+wait for frames still in the encoder (bounded)
+  -> select packet ranges from the replay arena
+  -> trim unused arena space, release free slots as sparse ranges
+  -> write MP4 header + index, rename in place
   -> final MP4
 ```
 
@@ -71,15 +75,26 @@ The Glitten library uses an editorial in-place 16:9 player with a scrollable rel
 
 The replay archive continuously writes encoded H.264 and AAC packets to managed rolling segments. A short hot window and packets waiting for persistence remain in RAM; if archive writes fail, Clipture automatically retains affected packets in RAM until persistence recovers.
 
-Approximate archive storage for video is:
+The bitrate setting is a ceiling, so archive storage for video is at most:
 
 ```text
-video bytes ~= bitrate in Mb/s * clip seconds / 8
+video bytes <= bitrate in Mb/s * clip seconds / 8
 ```
 
-For example, two minutes at 80 Mb/s is approximately 1.2 GB of compressed video. The rolling archive trims expired segments automatically, and saving streams selected packet ranges without constructing another full-size video copy in RAM.
+For example, two minutes at 80 Mb/s is at most about 1.2 GB of compressed video; menus, desktops and slow scenes use far less. The rolling archive trims expired segments automatically, and saving streams selected packet ranges without constructing another full-size video copy in RAM.
 
 Save output is paced according to storage type, observed write service, and capture pressure added after the save begins. The measured storage service establishes a throughput floor, keeping SSD saves fast without allowing a large cached write burst to be deferred to file close.
+
+## Friend Sharing
+
+Sharing is off until enabled in the Friends tab. Each install has its own iroh
+identity; friends are added with an invite link and must accept each other.
+Clips travel directly between the two PCs over QUIC (a relay is used only when
+no direct path exists), and nothing is uploaded to a Clipture server. Sharing a
+clip makes a lossless, stream-ready copy under `<saveFolder>\.clipture-sharing`
+(capped at 10 GB / 30 days, removed with the share); the original is never
+modified. The protocol, limits and threat model are in
+[ADR 0011](docs/adr/0011-p2p-clip-sharing.md).
 
 ## Requirements
 
@@ -183,6 +198,10 @@ none are copied into the Tauri payload.
 Development builds can temporarily use substantial CPU, disk, and memory and should not be used to judge installed-app startup performance.
 
 The Customize settings tab includes Glitten and Milate themes. Their personal-use demo fonts are opened from their download pages rather than bundled with Clipture. After installing a font, return to Clipture or use Refresh font; the typeface is detected and applied without restarting the app.
+
+The Maid café theme is the playful one: a pastel café with a striped awning, gingham, lace and heart details, set in the bundled M PLUS Rounded 1c typeface (OFL). Four original mascots live in it: Mochi the bunny head maid perches on the recorder panel and greets you, Azuki the shy kitten peeks over the clip preview and ducks when you come close, Purin the sleepy pudding naps while clips load and at the foot of Settings, and Pip the star chick cheers in notices. They only mount under this theme and respect reduced-motion settings.
+
+The Halloween theme turns the app into a quiet Halloween night rather than a costume: near-black indigo with moonlight and a little candle amber, Cormorant Garamond titles (bundled, OFL), and the same clean panels as every other theme. The atmosphere is ambient and mostly driven by Motion: a thread of fairy lights whose bulbs twinkle, stars that swell one at a time, embers and dust rising, slow fog, the odd falling leaf, small bat silhouettes crossing now and then, and, rarely, a faint ghost drifting past behind the panels. A witch on her broom crosses the sidebar moon, and the "i" in the library title is dotted with a bloodshot eye that follows your cursor. The cast is small and meant to be discovered: Jack, a tiny lantern-pumpkin on the recorder panel whose glow flickers like a candle (click him five times); Soot, a black cat on the edge of the clip preview; Flap, a bat asleep on the light string who climbs away when a notice appears; Boo, a small ghost with a lantern in an empty library and beside notices; Brewster, a cauldron simmering while clips load; and Wick, a candle at the foot of Settings. Everything pauses while the window is hidden and stops for reduced motion.
 
 Installed startup with `--hidden` opens Clipture in the tray while the native capture engine begins filling the replay buffer.
 

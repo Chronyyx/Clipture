@@ -128,6 +128,27 @@ impl Session {
         );
     }
 
+    /// The window process's exit code once it has ended, waiting up to a
+    /// second for it to finish dying.
+    pub fn exit_code(&self) -> Option<u32> {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let status = self
+                .child
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_mut()
+                .and_then(|child| child.try_wait().ok().flatten());
+            if let Some(status) = status {
+                return status.code().map(|code| code as u32);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     pub fn startup_watchdog(self: &Arc<Self>) {
         let session = self.clone();
         thread::spawn(move || {

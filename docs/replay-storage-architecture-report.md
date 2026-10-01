@@ -2,7 +2,7 @@
 
 Date: 2026-09-09. Status: proposal, not an accepted ADR or implementation.
 
-Historical design baseline: the user's subsequent direction prioritizes default-on
+Historical design baseline: the project later prioritized default-on
 in-place saves without overlapping presentation windows. Current implementation,
 verification and limitations are in [milestone 6](replay-storage-progress.md).
 Descriptions of current code below refer to the original report date.
@@ -94,7 +94,7 @@ and repair, mux reads/writes, pacing, optional FFmpeg processing, and publicatio
 Existing `[save-timing]` logs and the one-shot I/O analyzer provide a starting
 point. Their process-level counters are not equivalent to physical SSD writes,
 and concurrent capture can affect them. No evidence here establishes that copying
-is the dominant cause of the user's previously observed long saves.
+is the dominant cause of the long saves observed earlier.
 
 ## 4. Options compared
 
@@ -104,7 +104,7 @@ is the dominant cause of the user's previously observed long saves.
 | MP4-ready disk chunks + copy writer | Ordinary MP4 | Usually one sequential payload copy | Portable foundation; moves packet formatting earlier but does not eliminate writes. |
 | MP4-ready aligned chunks + ReFS cloning | Independent MP4 | Metadata operations for cloneable ranges; copy remaining bytes | Best documented route to low-copy overlapping saves, but filesystem-limited. |
 | Single rolling media file, finalized in place | Intended ordinary MP4 | Mostly metadata for eligible saves | Worth an isolated experiment; complex continuation and compatibility constraints. |
-| Keep referenced chunks as the saved clip | Manifest plus backing data | Small metadata commit | Works architecturally, but conflicts with the user's ordinary-file preference. Not recommended. |
+| Keep referenced chunks as the saved clip | Manifest plus backing data | Small metadata commit | Works architecturally, but conflicts with the goal of ordinary MP4 files. Not recommended. |
 | OBS-style append-only hybrid MP4 | Ordinary finalized MP4 | Small finalization changes | Good for normal recording; alone it does not bound a rolling 120-second history. |
 
 OBS demonstrates finalizing already-written fragments by adding a full movie
@@ -208,7 +208,7 @@ No drive formatting, ReFS migration, or hard requirement on ReFS is proposed.
 
 ## 7. Experimental single-file finalization on NTFS
 
-This is the closest match to the user's original idea, but has less evidence than
+This is the closest match to the original idea, but has less evidence than
 the clone path. Proposed scratch filename: `session-id.recording`, not a published
 MP4 until validation succeeds.
 

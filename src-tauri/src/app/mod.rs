@@ -5,6 +5,7 @@ mod background;
 #[cfg(all(debug_assertions, windows))]
 mod capture_smoke;
 mod hotkeys;
+mod sharing_events;
 #[cfg(debug_assertions)]
 mod smoke;
 mod tray;
@@ -51,12 +52,15 @@ pub fn setup(application: &mut App) -> AppResult<()> {
         engine,
         Arc::new(NativeIconSource),
         notification_sink,
+        Box::new(sharing_events::TauriSharingEvents(application.handle().clone())),
+        tauri::async_runtime::handle().inner().clone(),
     );
     let update_service = updates::runtime_service(
         state.engine.clone(),
         state.saves.clone(),
         restricted_profile,
     );
+    let sharing = state.sharing.clone();
     application.manage(state);
     application.manage(ui_process::UiController::default());
     application.manage(update_service);
@@ -67,6 +71,7 @@ pub fn setup(application: &mut App) -> AppResult<()> {
 
     tray::create(application.handle())?;
     background::start(application.handle().clone());
+    sharing.resume();
     updates::start_background_checks(
         application.handle().clone(),
         updates::automatic_checks_enabled(restricted_profile),
@@ -77,10 +82,15 @@ pub fn setup(application: &mut App) -> AppResult<()> {
 }
 
 pub fn handle_second_instance(app: &AppHandle, arguments: &[String]) {
+    // An invite link (clipture://add/...) always opens the UI to confirm it.
+    let invite = crate::sharing::invite_argument(arguments);
+    if let (Some(invite), Some(state)) = (invite.clone(), app.try_state::<AppState>()) {
+        state.sharing.receive_invite(invite);
+    }
     let background_launch = arguments
         .iter()
         .any(|argument| matches!(argument.as_str(), "--hidden" | "--background"));
-    if !background_launch {
+    if !background_launch || invite.is_some() {
         if let Err(error) = windows::open_main(app) {
             tracing::error!(%error, "could not open the main window for second instance");
         }

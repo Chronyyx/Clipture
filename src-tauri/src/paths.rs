@@ -142,6 +142,9 @@ impl AppPaths {
     }
 
     pub fn development_engine(&self) -> Option<PathBuf> {
+        if !cfg!(debug_assertions) {
+            return None;
+        }
         if let Some(path) = &self.engine_override {
             return Some(path.clone());
         }

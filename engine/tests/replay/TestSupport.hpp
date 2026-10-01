@@ -74,6 +74,8 @@ void testClonePolicy();
 void testCloneJob();
 void testInPlace();
 void testInPlaceArchive();
+void testInPlaceOverlap();
+void testInPlaceInterleave();
 void verifyInPlaceRollingFixture(const std::vector<clipture::EncodedPacket>& source, const std::filesystem::path& root);
 void runInPlaceAudioFixture(const std::vector<clipture::EncodedPacket>& video, const std::filesystem::path& root);
 void verifyInPlaceFixture(const std::vector<clipture::EncodedPacket>& packets, const std::filesystem::path& root);

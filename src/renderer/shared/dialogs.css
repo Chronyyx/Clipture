@@ -21,6 +21,24 @@
   box-shadow: 0 10px 40px rgba(0,0,0,0.5);
 }
 
+.update-confirm-dialog {
+  margin: auto;
+  padding: 24px;
+  gap: 16px;
+  color: #f4f4f5;
+  overflow-y: auto;
+  -webkit-app-region: no-drag;
+}
+
+.update-confirm-dialog:not([open]) {
+  display: none;
+}
+
+.update-confirm-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  -webkit-app-region: no-drag;
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;
@@ -360,3 +378,16 @@ input[type="checkbox"].toggle-switch:focus-visible {
   box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.4);
 }
 
+
+/* Dialogs answer the click that opened them: the backdrop fades in and the
+   panel rises into place. Opacity and transform only. */
+.modal-backdrop { animation: modal-backdrop-in 160ms ease-out; }
+.modal { animation: modal-panel-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+@keyframes modal-backdrop-in { from { opacity: 0; } }
+@keyframes modal-panel-in { from { opacity: 0; transform: translateY(8px) scale(0.985); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop,
+  .modal { animation: none; }
+}

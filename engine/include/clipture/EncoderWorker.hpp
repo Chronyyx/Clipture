@@ -1,5 +1,6 @@
 #pragma once
 
+#include "clipture/EncodedFrontier.hpp"
 #include "clipture/FrameQueue.hpp"
 #include "clipture/LatencyWindow.hpp"
 #include "clipture/PacketRingBuffer.hpp"
@@ -50,6 +51,10 @@ public:
 
     void start();
     void stop();
+    // Waits until encoded video reaches `end100ns` (media clock), at most `limit`.
+    bool waitForEncodedThrough(int64_t end100ns, std::chrono::milliseconds limit) const {
+        return encodedFrontier_.waitUntil(end100ns, limit);
+    }
     void configure(
         int fps,
         int bitrateMbps,
@@ -134,6 +139,7 @@ private:
     FrameQueue& frames_;
     PacketRingBuffer& packets_;
     ReplaySegmentStore* replayStore_ = nullptr;
+    EncodedFrontier encodedFrontier_;
     std::thread thread_;
     std::thread encodeThread_;
     mutable std::mutex submitMutex_;

@@ -1,5 +1,7 @@
 #include "clipture/EncoderWorker.hpp"
 #include "clipture/EncoderPipelinePolicy.hpp"
+#include "clipture/FreshConversionPolicy.hpp"
+#include "Nv12ConversionTarget.hpp"
 #include "clipture/CapturePipelinePolicy.hpp"
 #include "clipture/DeferredFramePreparation.hpp"
 #include "clipture/EncoderCadence.hpp"
@@ -7,6 +9,7 @@
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/H264PacketAnalyzer.hpp"
 #include "clipture/MediaClock.hpp"
+#include "clipture/NvencRateControl.hpp"
 #include "GpuFrameHandoff.hpp"
 #include "GpuStageProbe.hpp"
 #include "SharedTextureReader.hpp"
@@ -430,9 +433,22 @@ public:
             { legacyNvencPresetGuid(boundedPreset), NV_ENC_TUNING_INFO_UNDEFINED,
               kPreferObsStyleBufferedSyncNvenc, "legacy" },
         };
-        auto logInitAttemptFailure = [this](const InitAttempt& attempt, const std::string& reason) {
+        // Each preset path tries capped quality first; constant bitrate is the
+        // fallback for GPUs or drivers that reject it.
+        struct InitStep {
+            const InitAttempt* attempt;
+            NvencRateControl rateControl;
+        };
+        std::vector<InitStep> steps;
+        for (const auto& attempt : attempts) {
+            steps.push_back({ &attempt, NvencRateControl::CappedQuality });
+            steps.push_back({ &attempt, NvencRateControl::ConstantBitrate });
+        }
+        auto logInitAttemptFailure = [this](const InitStep& step, const std::string& reason) {
             if (initFailureLogged_) return;
+            const auto& attempt = *step.attempt;
             std::cerr << "[encoder] NVENC init attempt failed"
+                      << " rateControl=\"" << nvencRateControlName(step.rateControl) << "\""
                       << " presetFamily=" << attempt.presetFamily
                       << " tuning=" << nvencTuningName(attempt.tuningInfo)
                       << " async=" << (attempt.async ? "true" : "false")
@@ -441,7 +457,8 @@ public:
         };
 
         std::string lastFailure;
-        for (const auto& attempt : attempts) {
+        for (const auto& step : steps) {
+            const auto& attempt = *step.attempt;
             destroyEncoderResources();
             apiVersion_ = selectedApiVersion;
 
@@ -453,7 +470,7 @@ public:
             nvStatus = funcs_.nvEncOpenEncodeSessionEx(&openParams, &encoder_);
             if (nvStatus != NV_ENC_SUCCESS) {
                 lastFailure = "NvEncOpenEncodeSessionEx failed: " + statusDetails(nvStatus) + " " + apiSelection;
-                logInitAttemptFailure(attempt, lastFailure);
+                logInitAttemptFailure(step, lastFailure);
                 continue;
             }
 
@@ -464,7 +481,13 @@ public:
             const int asyncSupport = queryEncodeCap(NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT);
             if (attempt.async && asyncSupport == 0) {
                 lastFailure = "NVENC device reports async encode is unsupported.";
-                logInitAttemptFailure(attempt, lastFailure);
+                logInitAttemptFailure(step, lastFailure);
+                continue;
+            }
+            if (step.rateControl == NvencRateControl::CappedQuality &&
+                !nvencSupportsCappedQuality(queryEncodeCap(NV_ENC_CAPS_SUPPORTED_RATECONTROL_MODES))) {
+                lastFailure = "NVENC device does not report VBR rate control.";
+                logInitAttemptFailure(step, lastFailure);
                 continue;
             }
             const int capWidth = queryEncodeCap(NV_ENC_CAPS_WIDTH_MAX);
@@ -502,7 +525,7 @@ public:
             }
             if (nvStatus != NV_ENC_SUCCESS) {
                 lastFailure = "NvEncGetEncodePresetConfigEx failed: " + statusDetails(nvStatus);
-                logInitAttemptFailure(attempt, lastFailure);
+                logInitAttemptFailure(step, lastFailure);
                 continue;
             }
 
@@ -510,21 +533,8 @@ public:
             encodeConfig_.gopLength = static_cast<uint32_t>(std::max(1, fps) * 2);
             encodeConfig_.frameIntervalP = 1;
             encodeConfig_.frameFieldMode = NV_ENC_PARAMS_FRAME_FIELD_MODE_FRAME;
-            encodeConfig_.rcParams = {};
-            encodeConfig_.rcParams.version = nvencStructVersionForApi(1, apiVersion_);
-            encodeConfig_.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
-            encodeConfig_.rcParams.averageBitRate =
-                static_cast<uint32_t>(std::max(1, bitrateMbps) * 1'000'000);
-            encodeConfig_.rcParams.maxBitRate = encodeConfig_.rcParams.averageBitRate;
-            encodeConfig_.rcParams.vbvBufferSize = encodeConfig_.rcParams.averageBitRate;
-            encodeConfig_.rcParams.vbvInitialDelay = encodeConfig_.rcParams.vbvBufferSize;
-            encodeConfig_.rcParams.enableLookahead = 0;
-            encodeConfig_.rcParams.lookaheadDepth = 0;
-            encodeConfig_.rcParams.multiPass = NV_ENC_MULTI_PASS_DISABLED;
-            encodeConfig_.rcParams.enableAQ = 0;
-            encodeConfig_.rcParams.enableTemporalAQ = 0;
-            encodeConfig_.rcParams.aqStrength = 0;
-            encodeConfig_.rcParams.zeroReorderDelay = 1;
+            encodeConfig_.rcParams = nvencRateControlParams(
+                step.rateControl, bitrateMbps, nvencStructVersionForApi(1, apiVersion_));
             auto& h264Config = encodeConfig_.encodeCodecConfig.h264Config;
             h264Config.idrPeriod = encodeConfig_.gopLength;
             h264Config.repeatSPSPPS = 1;
@@ -566,13 +576,13 @@ public:
             nvStatus = funcs_.nvEncInitializeEncoder(encoder_, &initParams_);
             if (nvStatus != NV_ENC_SUCCESS) {
                 lastFailure = "NvEncInitializeEncoder failed: " + statusDetails(nvStatus);
-                logInitAttemptFailure(attempt, lastFailure);
+                logInitAttemptFailure(step, lastFailure);
                 continue;
             }
 
             if (!createOutputSlots(status)) {
                 lastFailure = status;
-                logInitAttemptFailure(attempt, lastFailure);
+                logInitAttemptFailure(step, lastFailure);
                 continue;
             }
 
@@ -613,7 +623,10 @@ public:
                     std::to_string(syncOutputDelay_) + " of " +
                     std::to_string(outputSlotCount_) + " slots.";
             }
-            status += " Single-pass low-resource rate control is active.";
+            status += step.rateControl == NvencRateControl::CappedQuality
+                ? " Single-pass capped-quality VBR (CQ " + std::to_string(kCappedQualityLevel) +
+                    ", at most " + std::to_string(bitrateMbps_) + " Mbps) is active."
+                : " Single-pass constant bitrate (" + std::to_string(bitrateMbps_) + " Mbps) is active.";
             if (attempt.presetFamily == std::string("legacy")) {
                 status += " Legacy preset fallback is active.";
             }
@@ -623,6 +636,7 @@ public:
                     " to " + std::to_string(width_) + "x" + std::to_string(height_) + ".";
             }
             (void)usedLegacyPresetConfigApi;
+            std::cerr << "[encoder] " << status << std::endl;
             return true;
         }
 
@@ -1072,6 +1086,7 @@ private:
         canonicalCaptureEpoch_ = 0;
         canonicalSourceFrameSequence_ = 0;
         canonicalScalerGeneration_ = 0;
+        freshConversion_ = {};
         encoderBridgeMutex_.Reset();
         captureBridgeMutex_.Reset();
         encoderBridgeTexture_.Reset();
@@ -1270,7 +1285,7 @@ private:
         return true;
     }
 
-    bool prepareCanonicalFrame(const CapturedFrame& frame, std::string& status) {
+    bool prepareCanonicalFrame(const CapturedFrame& frame, std::string& status, OutputSlot* directOutput = nullptr) {
         bool direct = false;
         Microsoft::WRL::ComPtr<ID3D11Texture2D> source;
         if (capturePipelinePolicy().directTextureRead && frame.gpuReadState && !directReadUnavailable_) {
@@ -1299,6 +1314,20 @@ private:
             canonicalTexture_.Reset();
             std::cerr << "[encoder-pipeline] NV12 canonical conversion unavailable; retaining isolated BGRA fallback.\n";
             if (!ensureCanonicalSurface(frame.width, frame.height, status)) return false;
+        }
+        D3D11_TEXTURE2D_DESC outputDesc {};
+        canonicalTexture_->GetDesc(&outputDesc);
+        const bool directOutputActive = directOutput && direct && canonicalOutputView_ &&
+            outputDesc.Format == DXGI_FORMAT_NV12;
+        if (directOutputActive) {
+            // Allocate/validate before arming the source fence. The slot is
+            // reserved and unmapped; no in-flight NVENC surface is overwritten.
+            if (!ensureEncoderInputSurface(*directOutput, status)) return false;
+            if (FAILED(nv12ConversionTarget(videoDevice_.Get(), videoProcessorEnumerator_.Get(),
+                    directOutput->scaledTexture.Get(), directOutput->scaledOutputView))) {
+                status = "NVENC direct conversion output view creation failed.";
+                return false;
+            }
         }
         const bool earlyRetire = direct && canonicalOutputView_ && capturePipelinePolicy().earlySourceRetire;
         if (earlyRetire) {
@@ -1331,7 +1360,7 @@ private:
                 stream.pInputSurface = inputView.Get();
                 auto sample = conversionProbe_.scope(context_.Get());
                 hr = videoContext_->VideoProcessorBlt(
-                    videoProcessor_.Get(), canonicalOutputView_.Get(), 0, 1, &stream);
+                    videoProcessor_.Get(), directOutputActive ? directOutput->scaledOutputView.Get() : canonicalOutputView_.Get(), 0, 1, &stream);
                 if (FAILED(hr)) {
                     std::ostringstream message;
                     message << "NVENC canonical conversion failed, HRESULT 0x" << std::hex << hr;
@@ -1352,6 +1381,17 @@ private:
         }
         if (!prepared) return false;
 
+        if (directOutputActive) {
+            directOutput->surfaceCaptureEpoch = frame.captureEpoch;
+            directOutput->surfaceSourceFrameSequence = frame.sequence;
+            freshConversion_.converted(frame.captureEpoch, frame.sequence);
+            if (!directFreshLogged_) {
+                std::cerr << "[encoder-pipeline] conversion=direct-fresh-nv12 repeatCache=lazy priorityUnchanged=true\n";
+                directFreshLogged_ = true;
+            }
+            return true; // Canonical pixels/identity were not updated.
+        }
+
         canonicalCaptureEpoch_ = frame.captureEpoch;
         canonicalSourceFrameSequence_ = frame.sequence;
         return true;
@@ -1369,7 +1409,7 @@ private:
             slot.scaledTexture->GetDesc(&existing);
             if (existing.Width == canonicalDesc.Width &&
                 existing.Height == canonicalDesc.Height &&
-                existing.Format == canonicalDesc.Format) {
+                existing.Format == canonicalDesc.Format && slot.scaledViewGeneration == canonicalScalerGeneration_) {
                 return true;
             }
             slot.scaledOutputView.Reset();
@@ -1399,6 +1439,19 @@ private:
         OutputSlot& slot,
         NvencFrameTimings::InputPath& inputPath,
         std::string& status) {
+        const bool directFresh = freshConversion_.direct(
+            capturePipelinePolicy().directFreshConversion && !capturePipelinePolicy().earlySourceRetire &&
+                preferNv12Input_ && supportsNv12Input_ &&
+                (canonicalCaptureEpoch_ != frame.captureEpoch || canonicalSourceFrameSequence_ != frame.sequence),
+            frame.captureEpoch, frame.sequence);
+        if (directFresh) {
+            if (!prepareCanonicalFrame(frame, status, &slot)) return nullptr;
+            if (slot.surfaceCaptureEpoch == frame.captureEpoch && slot.surfaceSourceFrameSequence == frame.sequence) {
+                inputPath = NvencFrameTimings::InputPath::VideoProcessor;
+                return slot.scaledTexture;
+            }
+            // Capability fallback prepared canonical pixels, not a direct slot.
+        }
         const bool canonicalChanged =
             !canonicalTexture_ ||
             canonicalCaptureEpoch_ != frame.captureEpoch ||
@@ -2484,6 +2537,8 @@ private:
     uint64_t canonicalCaptureEpoch_ = 0;
     uint64_t canonicalSourceFrameSequence_ = 0;
     uint64_t canonicalScalerGeneration_ = 0;
+    FreshConversionPolicy freshConversion_;
+    bool directFreshLogged_ = false;
     uint32_t frameIndex_ = 0;
     int64_t nextKeyframePts100ns_ = 0;
     std::size_t nextOutputSlot_ = 0;
@@ -2917,7 +2972,7 @@ void EncoderWorker::run() {
         schedulerDroppedFrames_.fetch_add(static_cast<int>(std::min<uint64_t>(tick.skipped, INT_MAX)));
 
         if constexpr (kEnableFrameDuplication) {
-            if (auto newest = frames_.consumeAllAndGetLatest()) {
+            if (auto newest = frames_.consumeAllAndGetLatest(tick.deadline100ns, fps)) {
                 heldFrame = std::move(newest);
             }
             if (!heldFrame) continue;
@@ -3118,6 +3173,7 @@ void EncoderWorker::encodeLoop() {
                 previousOutputSourceSequence = packet.sourceFrameSequence;
             }
 
+            const int64_t packetEnd100ns = packet.pts100ns + std::max<int64_t>(0, packet.duration100ns);
             if (replayStore_) {
                 replayStore_->push(packet);
                 EncodedPacket headerOnly = packet;
@@ -3127,6 +3183,7 @@ void EncoderWorker::encodeLoop() {
                 packets_.push(std::move(packet));
             }
             ++framesEncoded_;
+            encodedFrontier_.advance(packetEnd100ns);
         }
         packets.clear();
     };

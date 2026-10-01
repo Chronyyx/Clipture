@@ -2,7 +2,8 @@ use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 // Keep the total at six, reserving two for opening/releasing playback even
-// when thumbnails, media reads and diagnostic work saturate background slots.
+// when thumbnails, icons and diagnostic work saturate background slots. Media
+// range reads are admitted separately by `media::MediaAdmission`.
 pub struct Admission {
     total: Arc<Semaphore>,
     background: Arc<Semaphore>,

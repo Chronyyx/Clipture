@@ -97,7 +97,7 @@ pub fn handle_window_event(window: &Window, event: &WindowEvent) {
 
 fn release_main_media_sessions(app: &AppHandle) {
     if let Some(state) = app.try_state::<AppState>() {
-        state.media.release_owner(MAIN_WINDOW_LABEL);
+        state.media.release_ui(MAIN_WINDOW_LABEL);
         state.process_icons.clear();
         state.processes.invalidate();
     }

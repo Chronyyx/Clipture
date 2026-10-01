@@ -63,6 +63,9 @@ pub async fn invoke(
             .await?,
         ),
         "release_playback_cache" => encode(state.media.release_owner(&owner) > 0),
+        "get_clip_repair_status" => encode(commands::get_clip_repair_status(state)),
+        "check_clip_layouts" => encode(commands::check_clip_layouts(state).await?),
+        "fix_clip_layouts" => encode(commands::fix_clip_layouts(state)),
         "clip_thumbnail_url" => {
             encode(commands::clip_thumbnail_url(state, argument(&args, "filePath")?).await?)
         }
@@ -87,6 +90,55 @@ pub async fn invoke(
         "import_clip_sound" => encode(commands::import_clip_sound(app.clone(), state).await?),
         "reveal_sounds_folder" => encode(commands::reveal_sounds_folder(state)?),
         "reveal_clip" => encode(commands::reveal_clip(state, argument(&args, "filePath")?).await?),
+        "sharing_get_state" => encode(commands::sharing_get_state(state)),
+        "sharing_set_enabled" => {
+            encode(commands::sharing_set_enabled(state, argument(&args, "enabled")?)?)
+        }
+        "sharing_set_appear_offline" => encode(commands::sharing_set_appear_offline(
+            state,
+            argument(&args, "appearOffline")?,
+        )?),
+        "sharing_set_display_name" => {
+            encode(commands::sharing_set_display_name(state, argument(&args, "name")?)?)
+        }
+        "sharing_add_friend" => encode(commands::sharing_add_friend(
+            state,
+            argument(&args, "code")?,
+            argument(&args, "name")?,
+        )?),
+        "sharing_accept_invite" => encode(commands::sharing_accept_invite(state)?),
+        "sharing_dismiss_invite" => encode(commands::sharing_dismiss_invite(state)),
+        "sharing_accept_friend" => {
+            encode(commands::sharing_accept_friend(state, argument(&args, "friendId")?)?)
+        }
+        "sharing_remove_friend" => {
+            encode(commands::sharing_remove_friend(state, argument(&args, "friendId")?)?)
+        }
+        "sharing_share_clip" => encode(
+            commands::sharing_share_clip(
+                state,
+                argument(&args, "friendId")?,
+                argument(&args, "filePath")?,
+            )
+            .await?,
+        ),
+        "sharing_revoke_share" => {
+            encode(commands::sharing_revoke_share(state, argument(&args, "shareId")?)?)
+        }
+        "sharing_dismiss_clip" => {
+            encode(commands::sharing_dismiss_clip(state, argument(&args, "shareId")?)?)
+        }
+        "sharing_cancel_download" => {
+            encode(commands::sharing_cancel_download(state, argument(&args, "shareId")?)?)
+        }
+        "sharing_save_clip" => {
+            encode(commands::sharing_save_clip(state, argument(&args, "shareId")?)?)
+        }
+        "sharing_stream_url" => encode(commands::sharing_stream_url_for_owner(
+            &owner,
+            state,
+            argument(&args, "shareId")?,
+        )?),
         "hide_notification" => encode(commands::hide_notification(state)?),
         "open_theme_font_download" => encode(commands::open_theme_font_download(
             app.clone(),

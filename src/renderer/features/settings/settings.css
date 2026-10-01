@@ -1,43 +1,5 @@
-.settings-container {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
 .folder-picker-input {
   cursor: pointer;
-}
-
-.settings-tabs {
-  display: flex;
-  gap: 8px;
-  border-bottom: 1px solid #2a2d33;
-  padding-bottom: 8px;
-}
-
-.settings-tab {
-  border: 0;
-  background: transparent;
-  color: #a5adba;
-  font-size: 14px;
-  font-weight: 600;
-  padding: 8px 16px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  cursor: pointer;
-}
-
-.settings-tab:hover {
-  background: #1d2430;
-  color: #d8dee9;
-}
-
-.settings-tab.active {
-  background: #e2e8f0;
-  color: #171717;
 }
 
 .settings-group {
@@ -193,6 +155,84 @@
 
 .theme-preview.milate .theme-preview-button {
   background: #e1c675;
+}
+
+.theme-preview.maid-cafe {
+  position: relative;
+}
+
+.theme-preview.maid-cafe .theme-preview-sidebar {
+  background:
+    linear-gradient(90deg, rgb(255 182 206 / 35%) 50%, transparent 50%) 0 0 / 10px 10px,
+    linear-gradient(rgb(255 182 206 / 35%) 50%, transparent 50%) 0 0 / 10px 10px,
+    #fff4f8;
+}
+
+.theme-preview.maid-cafe .theme-preview-content {
+  padding-top: 20px;
+  background:
+    repeating-linear-gradient(90deg, #ffb3cb 0 10px, #fffafc 10px 20px) top / 100% 8px no-repeat,
+    #ffe3ec;
+}
+
+.theme-preview.maid-cafe .theme-preview-line {
+  width: 100%;
+  height: 22px;
+  color: #3f1937;
+  background: transparent;
+  opacity: 1;
+}
+
+.theme-preview.maid-cafe .theme-preview-line::before {
+  content: "Café ♡";
+  font: 800 17px/1 "M PLUS Rounded 1c", "Segoe UI", sans-serif;
+}
+
+.theme-preview.maid-cafe .theme-preview-button {
+  border-radius: 999px;
+  background: #d63b77;
+  box-shadow: 0 2px 0 #a8285b;
+}
+
+.theme-preview.maid-cafe .mc-mascot {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  width: 38px;
+}
+
+.theme-preview.halloween {
+  position: relative;
+}
+
+.theme-preview.halloween .theme-preview-sidebar {
+  background:
+    radial-gradient(circle at 62% 70%, #efe6cf 0 4px, rgb(239 230 207 / 12%) 5px 10px, transparent 11px),
+    linear-gradient(#15111f, #0e0b16);
+}
+
+.theme-preview.halloween .theme-preview-content {
+  padding-top: 20px;
+  background:
+    radial-gradient(circle, #ffd79a 0 1.5px, transparent 2px) 6px 3px / 18px 8px repeat-x,
+    linear-gradient(#17132a, #110e1b);
+}
+
+.theme-preview.halloween .theme-preview-line {
+  background: #3b3357;
+}
+
+.theme-preview.halloween .theme-preview-button {
+  border-radius: 5px;
+  background: linear-gradient(#eea062, #dd8440);
+  box-shadow: 0 4px 10px -4px rgb(232 144 74 / 70%);
+}
+
+.theme-preview.halloween .hw-mascot {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  width: 20px;
 }
 
 .theme-preview.custom .theme-preview-sidebar {

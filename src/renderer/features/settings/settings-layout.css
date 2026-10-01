@@ -1,0 +1,132 @@
+/* Settings: a section rail beside one surface of rows per section. Tokens
+   only, so every theme (including custom colors) styles it. */
+.settings-container {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+
+.settings-rail {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.settings-rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-muted);
+  background: transparent;
+  font: 500 13px/1 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-rail-item > :not(.settings-rail-indicator) { position: relative; z-index: 1; }
+.settings-rail-item:not(.active):hover { color: var(--text); background: var(--surface-hover); }
+.settings-rail-item.active { color: var(--text-strong); }
+.settings-rail-item.active svg { color: var(--accent); }
+
+.settings-rail-indicator {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: inherit;
+  background: var(--surface-control);
+  box-shadow: inset 2px 0 0 var(--accent), inset 0 1px 0 var(--inset-highlight);
+}
+
+.settings-content { min-width: 0; max-width: 860px; }
+
+.settings-section-header { margin-bottom: 14px; }
+.settings-section-header h2,
+.settings-content .audio-settings-heading h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+.settings-section-header p { margin: 4px 0 0; color: var(--text-muted); font-size: 13px; }
+
+.settings-rows {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 var(--inset-highlight);
+}
+
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 28px;
+  align-items: center;
+  min-height: 64px;
+  padding: 14px 18px;
+}
+
+.setting-row + .setting-row { border-top: 1px solid var(--border); }
+.setting-row-title { display: block; color: var(--text); font-size: 14px; font-weight: 550; }
+.setting-row-copy p { max-width: 62ch; margin: 3px 0 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.45; }
+.setting-row.disabled .setting-row-copy { opacity: 0.55; }
+.setting-row-control { display: flex; justify-content: flex-end; }
+.setting-row-control :is(select, .keybind-button) { width: 232px; height: 36px; }
+.setting-row-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.setting-row-buttons :is(.primary, .secondary-button) { height: 36px; }
+.setting-row-note { display: block; margin-top: 4px; }
+
+.input-with-unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.input-with-unit input { width: 84px; height: 36px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.control-skeleton { width: 232px; height: 36px; }
+.setting-path { font-family: var(--font-instrument, ui-monospace, monospace); font-size: 12px; overflow-wrap: anywhere; }
+
+.progress-track {
+  display: block;
+  max-width: 360px;
+  height: 4px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--surface-active);
+}
+.progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  transition: transform 0.3s ease-out;
+}
+
+/* Audio and Appearance keep their own panels; drop the outer box here. */
+.settings-content > .settings-group.single-column {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+@media (max-width: 860px) {
+  .settings-container { grid-template-columns: 1fr; gap: 16px; }
+  .settings-rail { position: static; grid-auto-flow: column; overflow-x: auto; }
+  .setting-row { grid-template-columns: 1fr; gap: 10px; }
+  .setting-row-control { justify-content: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill { transition: none; }
+}

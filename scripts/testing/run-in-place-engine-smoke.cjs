@@ -40,7 +40,7 @@ const request = (type, fields = {}) => new Promise((resolve, reject) => {
 });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const config = { fps: 30, bitrateMbps: 4, clipLengthSeconds: 5, targetWidth: 640, targetHeight: 360,
-  saveFolder: clips, saveInPlace: true, includeMixedAudio: false, includeSystemAudio: false,
+  saveFolder: clips, saveInPlace: true, saveInPlaceOverlap: false, includeMixedAudio: false, includeSystemAudio: false,
   includeMicrophoneAudio: false, captureGameAudio: false, captureForegroundSystemAudio: false };
 const results = [];
 const watchdog = setTimeout(() => child.kill(), 90000);
@@ -50,6 +50,9 @@ const watchdog = setTimeout(() => child.kill(), 90000);
     await delay(8000);
     const diagnostics = await request('getDiagnostics');
     assert.ok(diagnostics.bufferedVideoPackets > 0, 'hardware must produce encoded video');
+    const rateControl = /Single-pass ([^.]+(?:\.\d+)?[^.]*)\./.exec(logs);
+    assert.ok(rateControl, 'encoder must log its rate control');
+    console.log(JSON.stringify({ rateControl: rateControl[1] }));
     const save = async () => {
       const result = await request('saveClip', { durationSeconds: 5, saveFolder: clips, analyzeIo: true });
       assert.ok(result.ok && result.clip, JSON.stringify(result));

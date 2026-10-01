@@ -12,10 +12,26 @@ no Tauri, frontend, user-library or installer dependencies belong here.
   and appends missing/resident/foreign decoder-preroll samples one at a time. The
   path constructor and append API remain useful for standalone fixtures.
 - `ConsumedWindow.cpp`: pure visible-window selection and success-only consumption.
-  Keeps necessary keyframe preroll without showing already-saved footage.
+  Keeps necessary keyframe preroll without showing already-saved footage. Active
+  only when `saveInPlaceOverlap` is off.
+- Overlap backfill (`InPlacePacketArchive::rehome`, `ReplaySegmentStore` rehome
+  queue): after an in-place save, retained packets still leased from the saved
+  file are copied back into the new arena by the spill worker, only while no
+  live spill is pending, at background I/O priority. Chunks of about half a
+  second of pace (256 KiB-4 MiB) are taken newest-first, then read/written in
+  presentation order as one contiguous arena range. Expired entries are dropped
+  without I/O. A save that arrives before backfill finishes copies only the
+  remaining samples through the existing foreign-sample path; a full arena
+  leaves samples for that path too.
+- `BackfillPace.cpp`: backfill speed as a multiple of the measured incoming
+  footage rate. No drive-type detection: it starts at 1.1x (a passive trickle)
+  and, from the gap between recent saves, rises just enough to finish a window
+  W before 80% of the expected gap (W / (k + 1) when the oldest footage expires
+  meanwhile), capped at 8x.
 
-`saveInPlace` defaults to true. OFF restores overlapping saves and the existing
-hybrid RAM policy. ON spills video/AAC promptly into the configured save folder's
+`saveInPlace` defaults to true. OFF restores the existing hybrid RAM policy
+(always overlapping). `saveInPlaceOverlap` defaults to true; OFF consumes each
+saved window so the next save starts where the last one ended. ON spills video/AAC promptly into the configured save folder's
 `.clipture-replay` directory; PCM recovery remains separate. Unsupported/full/error
 storage uses the legacy spill fallback. See [milestone 6](../../../docs/replay-storage-progress.md)
 for lifecycle, copy/padding costs and verification limits.
@@ -88,8 +104,9 @@ The Windows backend owns file handles and rename; the mux module owns MP4 prefix
 layout. No capture, retention or library responsibilities are added to the packer.
 
 The archive, not this finalization session, owns retention and rolling reuse.
-Save detaches before zeroing expired free slots and sealing; new writes can proceed
-in another arena. Failed detached files are retained, but no recovery journal or
+Save detaches before trimming free space off the arena's end, zeroing the expired
+free slots left inside it (sparse, so they take no disk space) and sealing; new
+writes can proceed in another arena. Failed detached files are retained, but no recovery journal or
 power-loss recovery guarantee is implemented. A/V tests are in milestone 6.
 
 ## Clone integration (deferred)

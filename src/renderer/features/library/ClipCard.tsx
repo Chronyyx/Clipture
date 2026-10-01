@@ -4,6 +4,7 @@ import type { ClipRecord, ClipSettings } from "../../../shared/types";
 import { useNearViewport } from "../../shared/hooks/useNearViewport";
 import { clipSourceLabels, formatClipDate, formatClipTime, formatDuration, parseClipDate } from "../../shared/clips/clipMetadata";
 import { useClipIconUrl } from "../../shared/clips/useClipIconUrl";
+import { useClipThumbnail } from "../../shared/clips/useClipThumbnail";
 import { clipture } from "../../platform/cliptureClient";
 
 export function ClipCard({
@@ -25,28 +26,12 @@ export function ClipCard({
 }) {
   const createdAt = parseClipDate(clip.createdAt);
   const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
-  const [thumbnailUrl, setThumbnailUrl] = useState<string>("");
   const [cardRef, loadMedia] = useNearViewport<HTMLElement>();
+  const thumbnailUrl = useClipThumbnail(clip.filePath, loadMedia);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState(displayTitle);
   const sourceLabels = useMemo(() => clipSourceLabels(clip, settings), [clip, settings]);
   const iconUrl = useClipIconUrl(clip, sourceLabels, loadMedia);
-
-  useEffect(() => {
-    let active = true;
-    if (!loadMedia) {
-      setThumbnailUrl("");
-      return () => {
-        active = false;
-      };
-    }
-    clipture.clipThumbnailUrl(clip.filePath).then((url) => {
-      if (active && url) setThumbnailUrl(url);
-    });
-    return () => {
-      active = false;
-    };
-  }, [clip.filePath, loadMedia]);
 
   const handleRename = async () => {
     const newTitle = editTitle.trim() || "Clipture";

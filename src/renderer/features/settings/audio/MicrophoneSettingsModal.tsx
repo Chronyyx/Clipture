@@ -14,6 +14,7 @@ import {
 interface MicrophoneSettingsModalProps {
   source: AudioSourceRule;
   inputDevices: AudioInputDevice[];
+  loading?: boolean;
   onUpdate: (patch: Partial<AudioSourceRule>) => void;
   onClose: () => void;
 }
@@ -21,6 +22,7 @@ interface MicrophoneSettingsModalProps {
 export function MicrophoneSettingsModal({
   source,
   inputDevices,
+  loading = false,
   onUpdate,
   onClose
 }: MicrophoneSettingsModalProps) {
@@ -48,13 +50,13 @@ export function MicrophoneSettingsModal({
     <div className='modal-backdrop' onClick={onClose}>
       <div className='modal' onClick={(event) => event.stopPropagation()}>
         <div className='modal-header'>
-          <h2>Microphone Settings</h2>
+          <h2>Microphone</h2>
           <button className='icon-button' onClick={onClose}><X size={18} /></button>
         </div>
         <div className='modal-body microphone-modal-body'>
           <label>
             Input device
-            <select
+            {loading ? <span className='skeleton control-skeleton' aria-label='Loading microphones' /> : <select
               value={micDeviceId}
               onChange={(event) => {
                 const selectedId = event.target.value;
@@ -72,7 +74,7 @@ export function MicrophoneSettingsModal({
                   {device.name}{device.state === 'unavailable' ? ' (unplugged, using default)' : device.isDefault ? ' (default)' : ''}
                 </option>
               ))}
-            </select>
+            </select>}
           </label>
 
           <label>

@@ -20,6 +20,8 @@ int main(int argc, char** argv) {
             replay_tests::testCloneJob();
             replay_tests::testInPlace();
             replay_tests::testInPlaceArchive();
+            replay_tests::testInPlaceOverlap();
+            replay_tests::testInPlaceInterleave();
             replay_tests::testWindowsClone();
             std::cout << "Payload layout, bounded copy and overlapping extent pins passed.\n";
             std::cout << "MP4-ready packing, fallback, snapshot lifetime and mux parity passed.\n";

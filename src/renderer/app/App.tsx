@@ -1,22 +1,38 @@
-import { Activity, Download, Library, Save, SlidersHorizontal } from "lucide-react";
+import { Activity, Download, Library, Save, SlidersHorizontal, Users, type LucideIcon } from "lucide-react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 // @ts-ignore
 import logoUrl from "../../../assets/clipture-logo-ui.png";
 import type { ClipRecord, ClipSettings } from "../../shared/types";
 import { useCaptureActions } from "../features/capture";
-import { DiagnosticsView, useDiagnostics } from "../features/diagnostics";
+import { DiagnosticsView, RecorderStatus, useDiagnostics } from "../features/diagnostics";
 import { LibraryView, useClipLibrary } from "../features/library";
 import { SettingsView, useClipPreferences } from "../features/settings";
+import { FriendsSidebar, FriendsView, InviteDialog, ShareClipDialog, useSharing } from "../features/sharing";
 import { TitlebarUpdateControls, useUpdates } from "../features/updates";
+import { HalloweenAmbience, SpookyNoticePet, SpookySaveCheer } from "../shared/halloween";
+import { CafeNoticePet, CafeSaveCheer } from "../shared/maid-cafe";
 
-type Tab = "library" | "settings" | "diagnostics";
+type Tab = "library" | "friends" | "settings" | "diagnostics";
 type AppNotice = { message: string; tab?: Tab; durationMs: number };
+
+const tabs: Array<{ id: Tab; label: string; Icon: LucideIcon }> = [
+  { id: "library", label: "Library", Icon: Library },
+  { id: "friends", label: "Friends", Icon: Users },
+  { id: "settings", label: "Settings", Icon: SlidersHorizontal },
+  { id: "diagnostics", label: "Diagnostics", Icon: Activity }
+];
+
+// Short, interruptible responses to navigation; nothing animates on its own.
+const viewTransition = { duration: 0.16, ease: "easeOut" } as const;
 
 export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
   const [activeTab, setActiveTab] = useState<Tab>("library");
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState<AppNotice>();
   const [selectedClip, setSelectedClip] = useState<ClipRecord>();
+  const [clipToShare, setClipToShare] = useState<ClipRecord>();
+  const [focusFriendId, setFocusFriendId] = useState<string>();
   const libraryNotice = useCallback((message: string, durationMs = 4000) =>
     setNotice({ message, durationMs, tab: "library" }), []);
   const settingsNotice = useCallback((message: string, durationMs = 4000) =>
@@ -27,12 +43,18 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
     setNotice({ message, durationMs, tab: activeTab }), [activeTab]);
   const globalNotice = useCallback((message: string, durationMs = 4000) =>
     setNotice({ message, durationMs }), []);
-  const { clips, addClip, importVideos: importFolders } = useClipLibrary(libraryNotice);
+  const { clips, loaded: libraryLoaded, addClip, importVideos: importFolders } = useClipLibrary(libraryNotice);
   const { settings, clipSounds, updateSettings, previewClipSound, importClipSound,
     revealSounds, refreshPreferences } = useClipPreferences(settingsNotice, initialSettings);
   const { diagnostics, diagnosticsError, hasDiagnostics, exportDiagnostics, isExportingDiagnostics } = useDiagnostics(diagnosticsNotice);
   const { saveClip, isSavingClip, saveIoAnalyzer, toggleSaveIoAnalyzer } =
     useCaptureActions(settings, addClip, saveNotice, diagnosticsNotice);
+  const sharing = useSharing(globalNotice);
+  const friendRequests = sharing.snapshot?.friends.filter((friend) => friend.status === "incoming").length ?? 0;
+  const openFriends = (friendId?: string) => {
+    setFocusFriendId(friendId);
+    setActiveTab("friends");
+  };
   const { updateState, checkForUpdatesNow, downloadUpdate, installUpdate } = useUpdates(globalNotice);
   const updateControls = <TitlebarUpdateControls
     updateState={updateState}
@@ -55,8 +77,10 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
   }
 
   return (
+    <MotionConfig reducedMotion="user">
     <div className="app-shell">
       <div className="titlebar-drag-region" aria-hidden="true" />
+      <HalloweenAmbience />
       <aside className="sidebar">
         <div className="brand">
           <img src={logoUrl} alt="Clipture" className="mark" />
@@ -64,25 +88,32 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
             <strong>Clipture</strong>
           </div>
         </div>
-        <button className={activeTab === "library" ? "nav active" : "nav"} onClick={() => setActiveTab("library")}>
-          <Library size={18} /> Library
-        </button>
-        <button className={activeTab === "settings" ? "nav active" : "nav"} onClick={() => setActiveTab("settings")}>
-          <SlidersHorizontal size={18} /> Settings
-        </button>
-        <button className={activeTab === "diagnostics" ? "nav active" : "nav"} onClick={() => setActiveTab("diagnostics")}>
-          <Activity size={18} /> Diagnostics
-        </button>
-        <div className={`encoder${hasDiagnostics && diagnostics.degraded ? " degraded" : ""}${diagnosticsError ? " delayed" : ""}`} title={diagnosticsError}>
-          <span>Encoder</span>
-          <strong>{hasDiagnostics ? diagnostics.activeEncoder : diagnosticsError ? "Waiting for engine" : "Connecting…"}</strong>
-          {hasDiagnostics && <><small>{diagnostics.encoderMode}</small><small>{diagnostics.gpu}</small></>}
-          {diagnosticsError && <small className="encoder-refresh-status">{hasDiagnostics ? "Status delayed · last known details" : "Waiting for diagnostics"}</small>}
-        </div>
+        <nav className="nav-list" aria-label="Main">
+          {tabs.map(({ id, label, Icon }) => (
+            <button key={id} className={activeTab === id ? "nav active" : "nav"} aria-current={activeTab === id ? "page" : undefined}
+              onClick={() => (id === "friends" ? openFriends() : setActiveTab(id))}>
+              {activeTab === id && (
+                <motion.span layoutId="nav-active" className="nav-indicator"
+                  transition={{ type: "spring", bounce: 0, visualDuration: 0.25 }} />
+              )}
+              <Icon size={18} aria-hidden="true" /> {label}
+              {id === "friends" && friendRequests > 0 && (
+                <span className="nav-badge" aria-label={`${friendRequests} friend ${friendRequests === 1 ? "request" : "requests"}`}>{friendRequests}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+        <RecorderStatus
+          diagnostics={diagnostics}
+          hasDiagnostics={hasDiagnostics}
+          diagnosticsError={diagnosticsError}
+          clipLengthSeconds={settings?.clipLengthSeconds ?? 30}
+        />
+        <FriendsSidebar controller={sharing} onOpenFriend={openFriends} onOpenFriends={() => openFriends()} />
       </aside>
 
       <main className="workspace">
-        {activeTab !== "library" && (
+        {activeTab !== "library" && activeTab !== "friends" && (
           <header className="topbar">
             <div>
               <h1>{activeTab === "settings" ? "Settings" : "Diagnostics"}</h1>
@@ -93,6 +124,8 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
                 {updateControls}
                 <button className="primary" onClick={saveClip} disabled={isSavingClip}>
                   <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${settings?.clipLengthSeconds ?? 30}s`}
+                  <CafeSaveCheer saving={isSavingClip} />
+                  <SpookySaveCheer saving={isSavingClip} />
                 </button>
               </div>
               {activeTab === "diagnostics" && (
@@ -117,13 +150,31 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
           </header>
         )}
 
-        {notice && (!notice.tab || notice.tab === activeTab) && (
-          <div className="notice" role="status">{notice.message}</div>
-        )}
+        <AnimatePresence>
+          {notice && (!notice.tab || notice.tab === activeTab) && (
+            <motion.div key={notice.message} className="notice" role="status"
+              initial={{ opacity: 0, transform: "translateY(-6px)" }}
+              animate={{ opacity: 1, transform: "translateY(0px)" }}
+              exit={{ opacity: 0, transform: "translateY(-6px)" }}
+              transition={viewTransition}>
+              <CafeNoticePet />
+              <SpookyNoticePet />
+              {notice.message}
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <AnimatePresence mode="wait" initial={false}>
+        <motion.div key={activeTab} className="view"
+          initial={{ opacity: 0, transform: "translateY(4px)" }}
+          // A lingering transform would contain position:fixed dialogs.
+          animate={{ opacity: 1, transform: "translateY(0px)", transitionEnd: { transform: "none" } }}
+          exit={{ opacity: 0 }}
+          transition={viewTransition}>
         {activeTab === "library" && (
           <LibraryView
             headerControls={updateControls}
             clips={clips}
+            loading={!libraryLoaded}
             query={query}
             setQuery={setQuery}
             selectedClip={selectedClip}
@@ -133,7 +184,12 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
             onImportVideos={importVideos}
             isSavingClip={isSavingClip}
             clipLengthSeconds={settings?.clipLengthSeconds ?? 30}
+            onShareClip={setClipToShare}
           />
+        )}
+        {activeTab === "friends" && (
+          <FriendsView controller={sharing} headerControls={updateControls}
+            focusFriendId={focusFriendId} onClearFocus={() => setFocusFriendId(undefined)} />
         )}
         {activeTab === "settings" && settings && (
           <SettingsView
@@ -149,7 +205,28 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
           {diagnosticsError && <div className="notice" role="status">Diagnostics refresh delayed. {hasDiagnostics ? "Values below are the last received snapshot, not live readings." : "No snapshot received yet."} {diagnosticsError}</div>}
           <DiagnosticsView diagnostics={diagnostics} />
         </>}
+        </motion.div>
+        </AnimatePresence>
       </main>
+      {sharing.snapshot?.pendingInvite && (
+        <InviteDialog
+          key={sharing.snapshot.pendingInvite.code}
+          invite={sharing.snapshot.pendingInvite}
+          sharingEnabled={sharing.snapshot.enabled}
+          onAccept={() => sharing.acceptInvite(sharing.snapshot?.pendingInvite?.name ?? "")}
+          onDismiss={() => void sharing.dismissInvite()}
+        />
+      )}
+      {clipToShare && (
+        <ShareClipDialog
+          clip={clipToShare}
+          snapshot={sharing.snapshot}
+          onShare={(friendId, friendName) => sharing.shareClip(friendId, clipToShare.filePath, friendName)}
+          onClose={() => setClipToShare(undefined)}
+          onOpenFriends={() => openFriends()}
+        />
+      )}
     </div>
+    </MotionConfig>
   );
 }

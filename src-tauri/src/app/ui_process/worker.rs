@@ -113,7 +113,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .on_window_event(move |window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = close_client.output.try_send(Message::Closing {}.into());
+                // Delivered even when media replies fill the queue, so the
+                // controller never mistakes a user's close for a crash.
+                let _ = close_client.output.signal(Message::Closing {}.into());
                 close_window(window.app_handle());
             }
         })

@@ -1,6 +1,8 @@
+mod crash_log;
 mod frame_fields;
 mod frame_freshness;
 mod frame_recorder;
+pub use crash_log::{install_crash_log, record_incident};
 pub use frame_recorder::FrameDropRecorder;
 
 use std::{

@@ -32,6 +32,7 @@ src-tauri/src/
   updates/              signed, capture-aware updates
   notifications/        native overlay
   sounds/               native playback and sound library
+  sharing/              friend-to-friend P2P clip sharing (iroh; ADR 0011)
   platform/windows/     narrow Windows-specific implementations
 
 engine/                 native C++ capture/encode/mux engine

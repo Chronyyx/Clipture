@@ -30,6 +30,10 @@ pub fn encode_video(args: &mut Vec<OsString>, target: (u32, u32), bitrate: u32) 
         save_resolution::scale(target).into(),
         "-c:v".into(),
         "h264_nvenc".into(),
+        // Explicit: FFmpeg 7+ defaults NVENC H.264 to High, which costs about
+        // 25% more encoder time than the Main output Clipture has always made.
+        "-profile:v".into(),
+        "main".into(),
         "-preset".into(),
         "p5".into(),
         "-b:v".into(),
@@ -111,6 +115,10 @@ pub fn run_output(
                 args[index] = "veryfast".into();
             }
         }
+        // The software fallback keeps libx264's own default profile, as before.
+        if let Some(index) = args.iter().position(|arg| arg == "-profile:v") {
+            args.drain(index..index + 2);
+        }
         result = run(args)?;
     }
     if !result.success {
@@ -130,4 +138,36 @@ pub fn run_output(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::media::FfmpegOutput;
+    use std::sync::Mutex;
+
+    /// Fails the first (NVENC) attempt and records every job's arguments.
+    struct Recording(Mutex<Vec<Vec<String>>>);
+    impl FfmpegExecutor for Recording {
+        fn run(&self, job: FfmpegJob) -> AppResult<FfmpegOutput> {
+            let mut jobs = self.0.lock().unwrap();
+            jobs.push(job.args.iter().map(|arg| arg.to_string_lossy().into_owned()).collect());
+            Ok(FfmpegOutput { success: false, exit_code: Some(1), stdout: vec![], stderr: "no nvenc".into() })
+        }
+    }
+
+    #[test]
+    fn nvenc_encodes_main_profile_and_the_software_fallback_keeps_its_default() {
+        let mut args = input(Path::new(r"C:\clips\in.mp4"));
+        encode_video(&mut args, (1920, 1080), 40);
+        let executor = Recording(Mutex::new(Vec::new()));
+        assert!(run_output(&executor, args, Path::new(r"C:\clips\out.mp4"), true).is_err());
+        let jobs = executor.0.into_inner().unwrap();
+        assert_eq!(jobs.len(), 2, "NVENC attempt, then the software fallback");
+        let profile = |job: &[String]| job.iter().position(|arg| arg == "-profile:v").map(|index| job[index + 1].clone());
+        assert!(jobs[0].contains(&"h264_nvenc".to_string()));
+        assert_eq!(profile(&jobs[0]).as_deref(), Some("main"));
+        assert!(jobs[1].contains(&"libx264".to_string()));
+        assert_eq!(profile(&jobs[1]), None, "libx264 keeps its own default profile");
+    }
 }

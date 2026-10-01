@@ -27,16 +27,27 @@ pub fn start(app: AppHandle) {
             }
         });
     }
+    let health_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = configure_engine.configure_settings(&startup_settings).await {
-            tracing::error!(%error, "could not configure native engine at startup");
-            return;
-        }
+        let diagnostics = match configure_engine.configure_settings(&startup_settings).await {
+            Ok(diagnostics) => diagnostics,
+            Err(error) => {
+                tracing::error!(%error, "could not configure native engine at startup");
+                return;
+            }
+        };
         if let Err(error) = configure_engine
             .configure_hotkey(&startup_settings.hotkey)
             .await
         {
             tracing::error!(%error, "could not configure native hotkey at startup");
+            return;
+        }
+        if diagnostics.engine_running {
+            if let Err(error) = crate::updates::startup_health::engine_ready() {
+                tracing::error!(%error, "Runtime engine health acknowledgement failed");
+                super::request_exit(&health_app);
+            }
         }
     });
 

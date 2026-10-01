@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "source": "src/shared/sharing.ts#SharingApi",
+  "adr": "docs/adr/0011-p2p-clip-sharing.md",
+  "peerAlpn": "clipture/share/1",
+  "event": "sharing://changed",
+  "operations": [
+    { "method": "getState", "command": "sharing_get_state", "args": [] },
+    { "method": "setEnabled", "command": "sharing_set_enabled", "args": ["enabled"] },
+    { "method": "setAppearOffline", "command": "sharing_set_appear_offline", "args": ["appearOffline"] },
+    { "method": "setDisplayName", "command": "sharing_set_display_name", "args": ["name"] },
+    { "method": "addFriend", "command": "sharing_add_friend", "args": ["code", "name"] },
+    { "method": "acceptInvite", "command": "sharing_accept_invite", "args": [] },
+    { "method": "dismissInvite", "command": "sharing_dismiss_invite", "args": [] },
+    { "method": "acceptFriend", "command": "sharing_accept_friend", "args": ["friendId"] },
+    { "method": "removeFriend", "command": "sharing_remove_friend", "args": ["friendId"] },
+    { "method": "shareClip", "command": "sharing_share_clip", "args": ["friendId", "filePath"] },
+    { "method": "revokeShare", "command": "sharing_revoke_share", "args": ["shareId"] },
+    { "method": "dismissSharedClip", "command": "sharing_dismiss_clip", "args": ["shareId"] },
+    { "method": "saveSharedClip", "command": "sharing_save_clip", "args": ["shareId"] },
+    { "method": "cancelDownload", "command": "sharing_cancel_download", "args": ["shareId"] },
+    { "method": "streamUrl", "command": "sharing_stream_url", "args": ["shareId"], "ownerBound": true }
+  ],
+  "eventMethod": "onChanged"
+}

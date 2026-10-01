@@ -49,6 +49,12 @@ export function PlayerVideoSurface({
     // Capture the element: React clears object refs before passive cleanup.
     const video = videoRef.current;
     if (!video) return;
+    // React may run cleanup and this effect again on the same element (dev
+    // StrictMode); cleanup unloaded it, so reattach the source React won't.
+    if (video.getAttribute('src') !== sourceUrl) {
+      video.src = sourceUrl;
+      video.load();
+    }
     playbackRequestedRef.current = true;
     const stopPlayback = () => {
       playbackRequestedRef.current = false;
@@ -86,7 +92,7 @@ export function PlayerVideoSurface({
         autoPlay={!mixedEnabled}
         crossOrigin='anonymous'
         muted={mixedEnabled}
-        preload='metadata'
+        preload='auto'
         onClick={interactions.handleVideoClick}
         onDoubleClick={interactions.handleVideoDoubleClick}
         onPlay={() => {

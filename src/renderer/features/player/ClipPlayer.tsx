@@ -9,6 +9,11 @@ import { useMixedAudioPlayback } from './useMixedAudioPlayback';
 import { usePlayerInteractions } from './usePlayerInteractions';
 import { preparePlayback } from './preparePlayback';
 
+// Releasing playback frees every session this window owns. Opening the next
+// clip must wait for that release, or the release can land after the open and
+// kill the new session, leaving a black player until the clip is reopened.
+let pendingRelease: Promise<unknown> = Promise.resolve();
+
 interface ClipPlayerProps {
   clip: ClipRecord;
   onClose: () => void;
@@ -75,7 +80,7 @@ export function ClipPlayer({
     mixed.clear();
 
     const cancelPreparation = preparePlayback(
-      () => clipture.clipPlaybackUrl(clip.filePath, clip.audioTracks), (result) => {
+      () => pendingRelease.then(() => clipture.clipPlaybackUrl(clip.filePath, clip.audioTracks)), (result) => {
       setSourceUrl(result.url);
       setMessage(result.message);
       setMixedPlayback(result.mixed && Boolean(result.audioChunkUrl));
@@ -87,7 +92,7 @@ export function ClipPlayer({
 
     return () => {
       cancelPreparation();
-      void clipture.releasePlaybackCache().catch(error => console.warn('Playback release failed:', error));
+      pendingRelease = clipture.releasePlaybackCache().catch(error => console.warn('Playback release failed:', error));
     };
   }, [clip.audioTracks, clip.filePath]);
 

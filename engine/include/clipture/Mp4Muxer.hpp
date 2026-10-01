@@ -70,6 +70,9 @@ struct MuxResult {
     // Exact order of the audio streams actually written, after empty tracks
     // and failed PCM recovery have been removed.
     std::vector<std::string> audioTracks;
+    // Healthy adaptive rate reached by this save (0 if unmeasured); the caller
+    // passes it back as MuxWritePacing::learnedWriteBytesPerSecond next time.
+    uint64_t learnedWriteBytesPerSecond = 0;
 };
 
 enum class MuxPressureLevel {
@@ -96,6 +99,8 @@ struct MuxWritePacing {
     AdaptiveWritePacerConfig adaptiveRate;
     std::size_t burstBytes = 0;
     bool storageAwareRate = false;
+    // Previous save's learned rate for the same folder; 0 uses the storage default.
+    uint64_t learnedWriteBytesPerSecond = 0;
     bool analyzeIo = false;
     // Internal experiment only; zero retains the compact production layout.
     // Fully prepared disk video without audio is eligible. No cloning is enabled.

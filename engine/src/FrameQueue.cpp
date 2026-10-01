@@ -7,7 +7,7 @@
 namespace clipture {
 
 FrameQueue::FrameQueue(std::size_t capacity)
-    : capacity_(capacity) {}
+    : capacity_(capacity), selectionTrace_(static_cast<uint32_t>(capacity)) {}
 
 void FrameQueue::push(CapturedFrame frame) {
     if (frame.queuedAtSteady100ns <= 0) frame.queuedAtSteady100ns = monotonicNow100ns();
@@ -15,6 +15,13 @@ void FrameQueue::push(CapturedFrame frame) {
         std::lock_guard lock(mutex_);
         if (stopped_) return;
         ++stats_.pushedFrames;
+        const auto overflow = frames_.size() >= capacity_ ? frames_.size() - capacity_ + 1 : 0;
+        if (selectionTrace_.enabled()) {
+            const auto& anchor = detail::mediaClockAnchor();
+            selectionTrace_.record({'p', 0, frame.pts100ns - anchor.fileTime100ns + anchor.systemRelative100ns,
+                0, frame.captureEpoch, frame.sequence, static_cast<uint32_t>(frames_.size()), 0,
+                static_cast<uint32_t>(overflow)});
+        }
         while (frames_.size() >= capacity_) {
             frames_.pop_front();
             ++stats_.overflowDrops;
@@ -53,8 +60,15 @@ std::optional<CapturedFrame> FrameQueue::waitConsumeLatestUntil(
     return frame;
 }
 
-std::optional<CapturedFrame> FrameQueue::consumeAllAndGetLatest() {
+std::optional<CapturedFrame> FrameQueue::consumeAllAndGetLatest(int64_t deadline100ns, int fps) {
     std::lock_guard lock(mutex_);
+    if (selectionTrace_.enabled()) {
+        const auto* selected = frames_.empty() ? nullptr : &frames_.back();
+        selectionTrace_.record({deadline100ns ? 't' : 'u', 0, 0, deadline100ns,
+            selected ? selected->captureEpoch : 0, selected ? selected->sequence : 0,
+            static_cast<uint32_t>(frames_.size()), static_cast<uint32_t>(frames_.empty() ? 0 : frames_.size() - 1),
+            0, static_cast<uint32_t>(fps)});
+    }
     if (frames_.empty()) return std::nullopt;
     if (frames_.size() > 1) stats_.coalescedDrops += frames_.size() - 1;
     auto frame = std::move(frames_.back());
@@ -85,6 +99,7 @@ void FrameQueue::stop() {
 
 void FrameQueue::clear() {
     std::lock_guard lock(mutex_);
+    selectionTrace_.record({'c'});
     stats_.clearedFrames += frames_.size();
     frames_.clear();
 }

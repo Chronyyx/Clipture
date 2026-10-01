@@ -126,6 +126,8 @@ pub struct EngineConfigure {
     pub clip_length_seconds: u32,
     #[serde(default = "default_save_in_place")]
     pub save_in_place: bool,
+    #[serde(default = "default_save_in_place")]
+    pub save_in_place_overlap: bool,
     #[serde(default)]
     pub save_folder: String,
     pub monitor_id: String,
@@ -193,6 +195,7 @@ impl EngineConfigure {
             nvenc_preset: settings.nvenc_preset,
             clip_length_seconds: settings.clip_length_seconds,
             save_in_place: settings.save_in_place,
+            save_in_place_overlap: settings.save_in_place_overlap,
             save_folder: settings.save_folder.clone(),
             monitor_id: settings.monitor_id.clone(),
             target_width,
@@ -331,15 +334,19 @@ mod tests {
             &[],
         ))
         .unwrap();
-        assert_eq!(value["bitrateMbps"], 40);
+        // Fresh defaults: auto bitrate at 1080p60 (no display list) is 48 Mbps.
+        assert_eq!(value["bitrateMbps"], 48);
         assert_eq!(value["includeMixedAudio"], false);
         assert_eq!(value["saveInPlace"], true);
+        assert_eq!(value["saveInPlaceOverlap"], true);
         assert_eq!(value["saveFolder"], "");
         let mut settings = ClipSettings::default();
         settings.save_in_place = false;
+        settings.save_in_place_overlap = false;
         settings.save_folder = r"C:\fixture\clips".into();
         let configured = EngineConfigure::from_settings(&settings, &[]);
         assert!(!configured.save_in_place);
+        assert!(!configured.save_in_place_overlap);
         assert_eq!(configured.save_folder, settings.save_folder);
         assert!(value.get("noiseGateDebounceMs").is_some());
     }

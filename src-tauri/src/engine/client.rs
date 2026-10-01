@@ -40,6 +40,8 @@ struct RunningEngine {
     generation: u64,
     pid: u32,
     child: CommandChild,
+    /// Ends the engine with Clipture even if Clipture crashes or is killed.
+    _job: Option<crate::platform::windows::ChildJob>,
 }
 
 pub struct EngineClient {
@@ -170,6 +172,9 @@ impl EngineClient {
             .map_err(|error| AppError::Engine(format!("could not start native engine: {error}")))?;
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         let pid = child.pid();
+        let job = crate::platform::windows::ChildJob::attach_pid(pid)
+            .map_err(|error| tracing::warn!(%error, "native engine is not tied to Clipture's lifetime"))
+            .ok();
         *self
             .process
             .lock()
@@ -177,6 +182,7 @@ impl EngineClient {
             generation,
             pid,
             child,
+            _job: job,
         });
         self.emit_status(true, format!("Native engine started (pid {pid})."));
 

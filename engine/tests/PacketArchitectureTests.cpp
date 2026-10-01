@@ -294,6 +294,26 @@ bool testAdaptiveWriteRateController() {
         return false;
     }
 
+    for (const auto seekPenalty : {clipture::StorageSeekPenalty::Unknown, clipture::StorageSeekPenalty::Incurs}) {
+        const auto conservative = clipture::writePacerConfigForStorage({}, seekPenalty);
+        if (!require(
+                conservative.maximumLearnedBytesPerSecond == solidStateConfig.maximumLearnedBytesPerSecond &&
+                    conservative.initialBytesPerSecond < solidStateConfig.initialBytesPerSecond,
+                "storage class should only pick a cautious start, never cap measured throughput")) {
+            return false;
+        }
+    }
+    const auto seeded = clipture::seedWritePacerConfig(solidStateConfig, 200ULL * 1024ULL * 1024ULL);
+    if (!require(
+            seeded.initialBytesPerSecond == 200ULL * 1024ULL * 1024ULL &&
+                clipture::seedWritePacerConfig(solidStateConfig, 0).initialBytesPerSecond ==
+                    solidStateConfig.initialBytesPerSecond &&
+                clipture::seedWritePacerConfig(solidStateConfig, UINT64_MAX).initialBytesPerSecond ==
+                    solidStateConfig.maximumLearnedBytesPerSecond,
+            "a learned rate from the previous save should seed the next save within bounds")) {
+        return false;
+    }
+
     clipture::SustainedWritePressureGate pressureGate;
     if (!require(
             pressureGate.update(clipture::AdaptiveWritePressure::Elevated, 0) ==
@@ -394,16 +414,51 @@ bool testAdaptiveWriteRateController() {
     latencyConfig.latencyRecoveryBytes = static_cast<std::size_t>(2 * mib);
     clipture::AdaptiveWriteRateController latencyController(latencyConfig);
     latencyController.observeIoLatency(100'000);
+    if (!require(
+            latencyController.currentBytesPerSecond() == 128 * mib &&
+                latencyController.latencyBackoffs() == 0 &&
+                latencyController.ignoredLatencyStalls() == 1,
+            "a lone stall (cache flush, scanner) should not cut the rate")) {
+        return false;
+    }
+    latencyController.observeIoLatency(1'000);
+    latencyController.observeIoLatency(100'000);
+    if (!require(
+            latencyController.currentBytesPerSecond() == 128 * mib &&
+                latencyController.latencyBackoffs() == 0,
+            "a normal-speed operation should clear a pending stall")) {
+        return false;
+    }
+    latencyController.observeIoLatency(100'000);
     const uint64_t latencyBackoffRate = latencyController.currentBytesPerSecond();
     if (!require(
             latencyBackoffRate == 64 * mib && latencyController.latencyBackoffs() == 1,
-            "a severe read or write stall should halve the aggregate I/O rate")) {
+            "consecutive severe stalls should halve the aggregate I/O rate")) {
         return false;
     }
     latencyController.observeWrite(static_cast<std::size_t>(mib), 4'000);
+    if (!require(
+            latencyController.currentBytesPerSecond() == latencyBackoffRate,
+            "the rate should remain reduced while the latency recovery window drains")) {
+        return false;
+    }
+
+    // Repeated capture-pressure spikes (often GPU load, not disk) must not grind
+    // a fast drive down to the absolute floor.
+    auto floorConfig = config;
+    floorConfig.initialBytesPerSecond = 400 * mib;
+    floorConfig.maximumLearnedBytesPerSecond = 768 * mib;
+    clipture::AdaptiveWriteRateController floorController(floorConfig);
+    floorController.observeWrite(static_cast<std::size_t>(mib), 2'000); // ~500 MiB/s measured.
+    for (int i = 0; i < 10; ++i) {
+        floorController.observePressure(clipture::AdaptiveWritePressure::Critical);
+        floorController.observePressure(clipture::AdaptiveWritePressure::Healthy);
+    }
+    floorController.observePressure(clipture::AdaptiveWritePressure::Critical);
     return require(
-        latencyController.currentBytesPerSecond() == latencyBackoffRate,
-        "the rate should remain reduced while the latency recovery window drains");
+        floorController.currentBytesPerSecond() >= floorController.dynamicMinimumRate() &&
+            floorController.dynamicMinimumRate() > floorConfig.minimumBytesPerSecond,
+        "pressure backoffs should stop at a fraction of the measured drive speed");
 }
 
 bool testPcmContainerConversion() {

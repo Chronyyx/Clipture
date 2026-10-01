@@ -28,7 +28,12 @@ been replaced, restarted or edited by this work.
   Unused owned arenas are deleted after their last lease; detached failed-save
   files are retained. There is no new crash-recovery journal.
 - Expired free slots are zeroed when detaching, so free padding is not stale
-  footage. This costs writes and the final MP4 can be larger than compact output.
+  footage. Free space past the last retained sample (left over from a busier,
+  higher-bitrate stretch) is cut off the file instead; free slots inside it are
+  released with `FSCTL_SET_ZERO_DATA` on a file made sparse at that moment, so
+  they read as zeros but take no disk space (zeros are written where the volume
+  cannot). The MP4's reported size can still exceed compact output by those
+  interior gaps.
   Selected media already in the file is not rewritten. Final flush may still wait
   for prior buffered disk writes; this is not an unconditional instant-save claim.
 - Native error replies now escape Windows paths/quotes correctly rather than
@@ -58,7 +63,7 @@ at the time; their video-only/default-off limitations are superseded by this ent
 
 ## 2026-09-10: milestone 5 - in-place MP4 finalization proof
 
-Per the user's new direction, in-place finalization is now the priority. The
+In-place finalization is now the priority. The
 separate clone backend remains available for future fallback experiments; no
 ReFS volume or production clone integration is required for this proof.
 

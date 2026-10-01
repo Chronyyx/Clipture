@@ -1,0 +1,176 @@
+/* Mascots only mount under the maid-café theme. Their idle life is small and
+   compositor-only (transform/opacity): blinks, an ear flick, a slow breath. */
+.mc-mascot { display: block; width: 100%; height: auto; overflow: visible; }
+
+.mc-blinks { transform-box: fill-box; transform-origin: center; animation: mc-blink 5.3s infinite; }
+.mc-azuki .mc-blinks { animation-duration: 4.1s; }
+.mc-purin .mc-blinks { animation-duration: 6.7s; }
+.mc-pip .mc-blinks { animation-duration: 3.7s; }
+
+.mc-mochi .mc-ear-right { transform-box: fill-box; transform-origin: 50% 100%; animation: mc-ear-flick 7s ease-in-out infinite; }
+.mc-azuki .mc-ear-left { transform-box: fill-box; transform-origin: 50% 100%; animation: mc-ear-flick 5.5s ease-in-out 1.2s infinite; }
+
+/* --- Speech bubbles --- */
+.mc-bubble {
+  position: absolute;
+  z-index: 3;
+  width: max-content;
+  max-width: 190px;
+  padding: 7px 11px;
+  border: 2px solid var(--stitch, #ffb3cb);
+  border-radius: 14px;
+  color: var(--text-strong, #3f1937);
+  background: #fff;
+  box-shadow: 0 3px 0 var(--border, #f6c3d6);
+  font: 700 11.5px/1.35 var(--font-ui);
+  pointer-events: none;
+}
+.mc-bubble::after {
+  content: "";
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border: solid var(--stitch, #ffb3cb);
+  border-width: 0 2px 2px 0;
+  background: #fff;
+}
+.mc-bubble-side { left: calc(100% + 2px); top: 4px; transform-origin: 0 100%; }
+.mc-bubble-side::after { left: -6px; bottom: 12px; transform: rotate(135deg); }
+
+/* --- Zzz and hearts --- */
+.mc-zzz { position: absolute; top: 0; right: 0; pointer-events: none; }
+.mc-zzz i {
+  position: absolute;
+  color: var(--accent, #ff6f9f);
+  font: 800 13px/1 var(--font-ui);
+  font-style: normal;
+  opacity: 0;
+  animation: mc-zzz 3.6s ease-in-out infinite;
+}
+.mc-zzz i:nth-child(2) { font-size: 16px; animation-delay: 1.2s; }
+.mc-zzz i:nth-child(3) { font-size: 20px; animation-delay: 2.4s; }
+
+.mc-heart-burst { position: absolute; top: 40%; left: 50%; width: 0; height: 0; pointer-events: none; }
+.mc-heart-burst svg {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px;
+  opacity: 0;
+  --x: calc((var(--i) - 2) * 11px);
+  animation: mc-heart-rise 1.5s ease-out calc(var(--i) * 110ms) infinite;
+}
+
+/* --- Mochi on the recorder panel --- */
+.mc-recorder-pet { position: absolute; z-index: 2; top: -50px; right: 12px; width: 60px; }
+.mc-recorder-pet > .mc-mascot { transform-origin: 50% 100%; animation: mc-breathe 3.4s ease-in-out infinite; }
+.mc-recorder-pet .mc-zzz { top: 4px; right: -8px; }
+.mc-recorder-pet .mc-heart-burst { top: 10px; }
+/* Speaks into the gap left of Mochi, not over the navigation above. */
+.mc-recorder-pet .mc-bubble-left { right: calc(100% + 2px); top: -10px; max-width: 136px; transform-origin: 100% 60%; }
+.mc-recorder-pet .mc-bubble-left::after { right: -6px; top: 14px; transform: rotate(-45deg); }
+.mc-recorder-pet.mc-state-live .mc-mochi .mc-paw-right { transform-box: fill-box; transform-origin: 30% 80%; animation: mc-wave 4.8s ease-in-out infinite; }
+
+/* --- Azuki peeks over the preview's top edge --- */
+.mc-peek-anchor { position: relative; z-index: 1; height: 0; margin: 38px 0 -18px; }
+.mc-peek-anchor > .mc-peeker {
+  position: absolute;
+  right: 44px;
+  bottom: -9px;
+  width: 74px;
+  height: 66px;
+  overflow: hidden;
+  cursor: default;
+}
+.mc-peeker .mc-mascot {
+  position: absolute;
+  bottom: 0;
+  transition: transform 380ms cubic-bezier(0.3, 1.4, 0.5, 1);
+  /* backwards, not both: a held end state would override the shy duck. */
+  animation: mc-peek-in 900ms cubic-bezier(0.3, 1.4, 0.5, 1) backwards;
+}
+.mc-peeker.shy .mc-mascot { transform: translateY(34px) rotate(-6deg); }
+
+/* --- Empty library: Mochi serves an empty tray --- */
+.mc-empty-scene { position: relative; display: flex; align-items: flex-end; gap: 4px; margin-bottom: 10px; }
+.mc-empty-mochi { width: 116px; animation: mc-breathe 3.4s ease-in-out infinite; transform-origin: 50% 100%; }
+.mc-empty-pip { width: 46px; margin-bottom: 6px; animation: mc-hop 2.4s ease-in-out infinite; }
+.mc-tray {
+  position: absolute;
+  bottom: 22px;
+  left: 70px;
+  width: 58px;
+  height: 12px;
+  border: 2px solid #5b2a4e;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: inset 0 -3px 0 #ffd0df;
+}
+
+/* --- Purin naps on the loading preview --- */
+.mc-nap {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 118px;
+  transform: translate(-50%, -50%);
+}
+.mc-nap > .mc-mascot { transform-origin: 50% 100%; animation: mc-breathe 4.2s ease-in-out infinite; }
+.mc-nap .mc-zzz { top: 6px; right: 2px; }
+
+/* --- Pip in notices --- */
+.mc-notice-pet { position: relative; flex: 0 0 auto; width: 34px; margin: -8px 0; }
+.mc-notice-pet > .mc-mascot { animation: mc-hop-in 700ms cubic-bezier(0.3, 1.5, 0.5, 1) both; }
+.mc-notice-pet .mc-heart-burst svg { animation-iteration-count: 1; }
+
+/* --- Save hearts --- */
+.primary > .mc-heart-burst { top: 0; }
+
+/* --- Purin at the foot of the settings list --- */
+.mc-rail-pet { position: relative; width: 78px; margin: 22px 0 0 14px; }
+.mc-rail-pet .mc-zzz { top: 10px; right: -6px; }
+/* Speaks downward into the empty space below, never over the section list. */
+.mc-rail-pet .mc-bubble-down { top: calc(100% + 8px); left: -8px; max-width: 180px; transform-origin: 20% 0; }
+.mc-rail-pet .mc-bubble-down::after { top: -6px; left: 30px; transform: rotate(-135deg); }
+.mc-rail-pet:hover .mc-wobble { animation: mc-jiggle 600ms ease-in-out; }
+.mc-purin .mc-wobble { transform-box: fill-box; transform-origin: 50% 100%; }
+
+@keyframes mc-blink { 0%, 93%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+@keyframes mc-ear-flick { 0%, 78%, 100% { transform: rotate(0); } 82% { transform: rotate(14deg); } 86% { transform: rotate(-5deg); } 90% { transform: rotate(8deg); } }
+@keyframes mc-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.025, 0.97); } }
+@keyframes mc-wave { 0%, 70%, 100% { transform: rotate(0); } 76% { transform: rotate(-28deg); } 82% { transform: rotate(-8deg); } 88% { transform: rotate(-28deg); } 94% { transform: rotate(0); } }
+@keyframes mc-hop { 0%, 60%, 100% { transform: translateY(0); } 70% { transform: translateY(-9px) rotate(-6deg); } 80% { transform: translateY(0); } 88% { transform: translateY(-4px) rotate(4deg); } }
+@keyframes mc-hop-in { from { opacity: 0; transform: translateY(10px) scale(0.5) rotate(-20deg); } to { opacity: 1; transform: none; } }
+@keyframes mc-peek-in { from { transform: translateY(40px); } to { transform: translateY(0); } }
+@keyframes mc-jiggle { 0%, 100% { transform: scale(1, 1); } 25% { transform: scale(1.08, 0.92); } 50% { transform: scale(0.95, 1.06); } 75% { transform: scale(1.03, 0.97); } }
+@keyframes mc-zzz {
+  0% { opacity: 0; transform: translate(0, 0); }
+  25% { opacity: 1; }
+  100% { opacity: 0; transform: translate(12px, -26px); }
+}
+@keyframes mc-heart-rise {
+  0% { opacity: 0; transform: translate(var(--x), 6px) scale(0.4); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translate(calc(var(--x) * 1.7), -34px) scale(1); }
+}
+
+@media (max-width: 900px) {
+  .mc-recorder-pet { display: none; }
+  :root[data-theme="maid-cafe"] .recorder-status { margin-top: 0; }
+}
+@media (max-width: 860px) {
+  .mc-rail-pet { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-mascot,
+  .mc-mascot *,
+  .mc-mascot ~ .mc-heart-burst svg,
+  .mc-empty-pip,
+  .mc-empty-mochi { animation: none !important; }
+  .mc-peeker .mc-mascot { transition: none; }
+  .mc-zzz i { animation: none; opacity: 0.8; }
+  .mc-zzz i:nth-child(2) { transform: translate(6px, -12px); }
+  .mc-zzz i:nth-child(3) { transform: translate(12px, -26px); }
+  .mc-heart-burst { display: none; }
+}

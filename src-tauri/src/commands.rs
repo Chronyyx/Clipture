@@ -3,12 +3,14 @@ mod diagnostics;
 mod library;
 mod media;
 mod picker;
+mod sharing;
 mod system;
 
 pub use core::*;
 pub use diagnostics::*;
 pub use library::*;
 pub use media::*;
+pub use sharing::*;
 pub use system::*;
 
 use crate::error::AppResult;

@@ -142,9 +142,7 @@
 
 :root:is([data-theme="graphite"], [data-theme="light"]) :is(.library-tab, .settings-tab) {
   border-radius: 3px;
-  font: 11px/1.5 var(--font-instrument);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font: 600 12.5px/1.5 var(--font-ui);
 }
 
 :root:is([data-theme="graphite"], [data-theme="light"]) :is(.library-tab.active, .settings-tab.active) {
@@ -154,7 +152,7 @@
 }
 
 :root:is([data-theme="graphite"], [data-theme="light"]) :is(.library-search, .diagnostics-search) { border-radius: var(--field-radius); background: var(--surface-deep); }
-:root:is([data-theme="graphite"], [data-theme="light"]) .chip { border: 1px solid var(--border); border-radius: 3px; background: var(--surface-control); font: 11px/1.4 var(--font-instrument); }
+:root:is([data-theme="graphite"], [data-theme="light"]) .chip { border: 1px solid var(--border); border-radius: 3px; background: var(--surface-control); font: 500 12px/1.4 var(--font-ui); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .chip.active { border-color: var(--accent-border); color: var(--accent-text); background: var(--accent-soft); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .clip-card { padding: 10px; border-radius: 7px; background: var(--surface); box-shadow: inset 0 1px 0 var(--inset-highlight); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .clip-card:hover { background: var(--surface-hover); }
@@ -162,15 +160,16 @@
 :root:is([data-theme="graphite"], [data-theme="light"]) .thumbnail-button { border-radius: 3px; }
 :root:is([data-theme="graphite"], [data-theme="light"]) :is(.clip-card-footer .icon-button, .play-badge, .theme-option, .audio-source-icon) { border-radius: var(--field-radius); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .duration-badge { border: 1px solid #4d5147; border-radius: 2px; color: #e4e9dd; background: #111310; font: 11px/1.3 var(--font-instrument); }
-:root:is([data-theme="graphite"], [data-theme="light"]) :is(.clip-timestamp, .clip-card-footer, .library-player-side-meta, .clip-rail-heading, .diagnostics-count) { font: 11px/1.5 var(--font-instrument); }
+:root:is([data-theme="graphite"], [data-theme="light"]) :is(.clip-timestamp, .clip-card-footer, .library-player-side-meta, .diagnostics-count) { font: 11px/1.5 var(--font-instrument); }
+:root:is([data-theme="graphite"], [data-theme="light"]) .clip-rail-heading { font: 600 12px/1.5 var(--font-ui); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .library-player-side-title { font-size: 23px; font-weight: 500; letter-spacing: -0.5px; }
 
 :root:is([data-theme="graphite"], [data-theme="light"]) :is(.settings-group, .panel:not(.player), .audio-source-card, .modal, .selection-bar, .notice) { border-radius: 7px; }
 :root:is([data-theme="graphite"], [data-theme="light"]) .settings-group { padding: 24px; gap: 26px 24px; background: var(--surface); }
-:root:is([data-theme="graphite"], [data-theme="light"]) .settings-group > label { font: 12px/1.5 var(--font-instrument); color: var(--text-muted); }
+:root:is([data-theme="graphite"], [data-theme="light"]) .settings-group > label { font: 500 12.5px/1.5 var(--font-ui); color: var(--text-muted); }
 :root:is([data-theme="graphite"], [data-theme="light"]) :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]), select, textarea) { border-radius: 4px; font-family: var(--font-ui); }
 :root:is([data-theme="graphite"], [data-theme="light"]) :is(.audio-settings-heading h2, .audio-section-copy h3, .modal-header h2) { font-size: 16px; font-weight: 500; letter-spacing: -0.25px; }
-:root:is([data-theme="graphite"], [data-theme="light"]) .metric > span { font: 10px/1.5 var(--font-instrument); text-transform: uppercase; letter-spacing: 0.06em; }
+:root:is([data-theme="graphite"], [data-theme="light"]) .metric > span { font: 500 12px/1.5 var(--font-ui); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .metric > strong { font: 20px/1.4 var(--font-instrument); color: var(--text-strong); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .modal-footer { border-radius: 0 0 7px 7px; }
 :root:is([data-theme="graphite"], [data-theme="light"]) .modal-footer button { border-radius: var(--field-radius); }

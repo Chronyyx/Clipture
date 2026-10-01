@@ -93,6 +93,12 @@ struct AdaptiveWritePacerConfig {
     std::size_t latencyRecoveryBytes = 64u * 1024u * 1024u;
 };
 
+constexpr uint64_t kLearnedWriteCeilingBytesPerSecond = 768ULL * 1024ULL * 1024ULL;
+
+// The seek-penalty query only chooses a conservative starting rate and latency
+// thresholds. It is often Unknown or wrong for SSDs behind USB/RAID/some NVMe
+// drivers, so it never caps what measured throughput can learn: every class
+// shares one ceiling, and slow disks self-limit through observed service rate.
 constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
     AdaptiveWritePacerConfig config,
     StorageSeekPenalty seekPenalty) {
@@ -101,7 +107,7 @@ constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
         config.initialBytesPerSecond = std::min(config.initialBytesPerSecond, 96ULL * mib);
         config.maximumLearnedBytesPerSecond = std::min(
             config.maximumLearnedBytesPerSecond,
-            160ULL * mib);
+            kLearnedWriteCeilingBytesPerSecond);
         config.minimumMeasuredWriteUs = std::max<uint64_t>(
             config.minimumMeasuredWriteUs,
             2'000);
@@ -114,7 +120,7 @@ constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
         config.initialBytesPerSecond = std::min(config.initialBytesPerSecond, 128ULL * mib);
         config.maximumLearnedBytesPerSecond = std::min(
             config.maximumLearnedBytesPerSecond,
-            256ULL * mib);
+            kLearnedWriteCeilingBytesPerSecond);
         config.minimumMeasuredWriteUs = std::max<uint64_t>(
             config.minimumMeasuredWriteUs,
             1'500);
@@ -125,7 +131,7 @@ constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
     }
 
     constexpr uint64_t solidStateInitialRate = 640ULL * mib;
-    constexpr uint64_t solidStateMaximumRate = 768ULL * mib;
+    constexpr uint64_t solidStateMaximumRate = kLearnedWriteCeilingBytesPerSecond;
     constexpr std::size_t solidStateAdjustmentWindow = 128u * 1024u * 1024u;
     constexpr uint64_t solidStateLatencyBackoffUs = 16'000;
     constexpr uint64_t solidStateSevereLatencyBackoffUs = 100'000;
@@ -152,6 +158,20 @@ constexpr AdaptiveWritePacerConfig writePacerConfigForStorage(
     config.minimumMeasuredWriteUs = std::max<uint64_t>(
         config.minimumMeasuredWriteUs,
         1'000);
+    return config;
+}
+
+// A previous save's learned healthy rate is a better start than a class default:
+// it was sustained without capture pressure, so the next save does not have to
+// overshoot and cause a hitch before it backs off again.
+constexpr AdaptiveWritePacerConfig seedWritePacerConfig(
+    AdaptiveWritePacerConfig config,
+    uint64_t learnedBytesPerSecond) {
+    if (learnedBytesPerSecond == 0) return config;
+    config.initialBytesPerSecond = std::clamp(
+        learnedBytesPerSecond,
+        config.minimumBytesPerSecond,
+        std::max(config.minimumBytesPerSecond, config.maximumLearnedBytesPerSecond));
     return config;
 }
 
@@ -258,14 +278,17 @@ public:
         pressure_ = pressure;
         healthyBytes_ = 0;
 
+        // Capture pressure is often GPU/CPU load rather than disk contention, so
+        // backoffs stop at a fraction of the drive's measured speed instead of
+        // collapsing to the absolute floor on repeated transitions.
         if (pressure == AdaptiveWritePressure::Critical) {
-            setRate(std::max(config_.minimumBytesPerSecond, currentBytesPerSecond_ / 2));
+            setRate(std::max(dynamicMinimumBytesPerSecond(), currentBytesPerSecond_ / 2));
             ++pressureBackoffs_;
         } else if (
             pressure == AdaptiveWritePressure::Elevated &&
             previousPressure == AdaptiveWritePressure::Healthy) {
             setRate(std::max(
-                config_.minimumBytesPerSecond,
+                dynamicMinimumBytesPerSecond(),
                 currentBytesPerSecond_ - currentBytesPerSecond_ / 4));
             ++pressureBackoffs_;
         } else if (
@@ -344,11 +367,24 @@ public:
     std::size_t rateAdjustments() const { return rateAdjustments_; }
     std::size_t pressureBackoffs() const { return pressureBackoffs_; }
     std::size_t latencyBackoffs() const { return latencyBackoffs_; }
+    std::size_t ignoredLatencyStalls() const { return ignoredLatencyStalls_; }
     std::size_t measuredWrites() const { return measuredWrites_; }
 
 private:
     void applyLatencyBackoff(uint64_t durationUs) {
-        if (durationUs < config_.writeLatencyBackoffUs) return;
+        if (durationUs < config_.writeLatencyBackoffUs) {
+            slowOperationPending_ = false;
+            return;
+        }
+        // A lone stall is usually Windows flushing its write cache or a scanner
+        // touching the file. If we are really saturating the disk, the next
+        // operation stalls too, one chunk later, and then we back off.
+        if (!slowOperationPending_) {
+            slowOperationPending_ = true;
+            ++ignoredLatencyStalls_;
+            return;
+        }
+        slowOperationPending_ = false;
 
         const uint64_t reducedRate =
             durationUs >= config_.severeWriteLatencyBackoffUs
@@ -392,6 +428,8 @@ private:
     std::size_t rateAdjustments_ = 0;
     std::size_t pressureBackoffs_ = 0;
     std::size_t latencyBackoffs_ = 0;
+    std::size_t ignoredLatencyStalls_ = 0;
+    bool slowOperationPending_ = false;
     std::size_t latencyRecoveryBytesRemaining_ = 0;
     std::size_t measuredWrites_ = 0;
 };

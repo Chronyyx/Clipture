@@ -207,7 +207,7 @@ audio/mixer and MP4/replay tests pass. Host-contract tests and cadence-summary
 regressions pass. Read-only artifact inventory completed without errors.
 No renderer/host wire contract was changed.
 
-Staged and relaunched the tested sidecar with the user's approval at
+Staged and relaunched the tested sidecar at
 2026-09-13 07:56 UTC. Engine SHA256:
 `096E0851CC37148B0625E847491526EF1025BD710622D1F47A7009E4893DE446`.
 Both `build/engine/Release` and `release/tauri-unpacked` match. Running controller
@@ -305,7 +305,7 @@ settings or running recorder were changed for this analysis.
 
 ### September 12 evening: single-recorder comparison completed
 
-After the user closed the installed recorder and approved switching to the test
+After closing the installed recorder and switching to the test
 build, verified no Clipture process remained. Ran the isolated matrix with only
 one engine at a time, then launched the staged app normally with the existing
 profile. UTC measurement times were September 13 02:32-02:36 (September 12 EDT).
@@ -364,7 +364,7 @@ content as unique 240 FPS motion, or desktop success as game-load verification.
 
 ### September 12: longer probes and an intermittent high-FPS stall
 
-The reported player screenshot came from the released build, as the user later
+The reported player screenshot came from the released build, as later
 confirmed. Read-only process inspection found controller 28072, UI worker 18304,
 and engine 28232 under `C:\Program Files\Clipture`. The released engine hash is
 `4822269A0006F4E8C5AE39327E128A365425676C33B952E5FCA337EC9466488B`;
@@ -434,9 +434,9 @@ settings were modified.
 #### Next improvements to investigate, in priority order
 
 1. Run a **single-recorder**, controlled-motion comparison with the test build,
-   synchronized GPU sampling and a fresh diagnostics export. Closing the user's
-   installed recorder would discard its replay window, so it was not done
-   without new approval. Multiple recorder sessions are a material confound at
+   synchronized GPU sampling and a fresh diagnostics export. Closing the
+   installed recorder would discard its replay window, so it was left
+   running. Multiple recorder sessions are a material confound at
    210/240 and should be removed before selecting another production change.
 2. Instrument actual GPU preparation work rather than treating CPU submission
    times as GPU execution times. A small, opt-in GPU timestamp module should
@@ -462,7 +462,7 @@ for the next experiment, not a claim that CS2 at 210/240 is now stable.
 
 ### Implemented and launched: pacing and playback fixes
 
-After explicit user authorization to fix the issues, implemented:
+Fixes implemented:
 
 - `EncoderCadence.hpp`: rational, monotonic-clock-anchored output deadlines.
   Late wakes skip expired ticks instead of issuing back-to-back catch-up ticks
@@ -498,7 +498,7 @@ a repeat without compilation showed only 116.19 output FPS at 120 and 123.44 at
 144, with 159 queue drops in the 144 trial. This is an observed regression;
 shared-device serialization is the working explanation, not proven by GPUView.
 Artifacts: `.cache/cs2-perf/cadence-probe-u5QN9m` (first run overlapped compilation)
-and `cadence-probe-4YXPsh` (repeat). **That candidate was not launched for the user.**
+and `cadence-probe-4YXPsh` (repeat). **That candidate was never launched for gameplay.**
 
 The final candidate restores zero-timeout acquisition and waits outside the
 graphics call. Microsoft documents zero-timeout acquisition as an immediate
@@ -531,7 +531,7 @@ playback capacity, full-cap rejection, permit recovery). TypeScript checking,
 host contract, real adapter tests, player lifetime and deterministic playback
 retry/cancellation tests passed. Tauri release compiled successfully.
 
-With the user's restart approval, stopped only the verified development process
+For the restart, stopped only the verified development process
 tree, staged the final runtime and relaunched normally. Windows briefly retained
 an engine file lock; staging succeeded on retry before launch. Controller PID
 15940, UI-worker PID 6572, engine PID 32332; startup log confirms DXGI HDR and
@@ -559,14 +559,14 @@ investigation status refers to the earlier measurement phase.
 
 Investigation only. No capture, encoder, buffering, priority, HDR, or game
 settings have been changed by this investigation. After finding the recorder
-absent in Wingman A, the user authorized launching the installed controller
+absent in Wingman A, the installed controller was launched
 hidden with the local audio-mixer-fix engine for Wingman B.
 Performance-analysis methodology was used to separate measured results from
 source-level suspects. No extra profiling package was installed.
 
-User reports CS2 itself stays smooth while Clipture loses recording smoothness,
-especially in smoke. No saved example existed at the start. The user uses
-private Wingman rounds to make transition problems repeatable. Actual smoke and
+Symptom: CS2 itself stays smooth while Clipture loses recording smoothness,
+especially in smoke. No saved example existed at the start. Private
+Wingman rounds are used to make transition problems repeatable. Actual smoke and
 round-transition telemetry is still needed before selecting an engine change.
 
 ## Supplied 120 FPS diagnostics: September 11 follow-up
@@ -649,7 +649,7 @@ frame at realtime speed. Source identity comes from the matched engine cadence
 metadata, not pixel hashing. Static scenes legitimately repeat; nevertheless,
 the opening gameplay interval also has measurable repeated-source output.
 The whole-clip 85.05 distinct-FPS average should **not** be described as the
-normal combat FPS. The user's impression that 120 looks good is compatible with
+normal combat FPS. The subjective impression that 120 looks good is compatible with
 this evidence, but a stable 120-distinct-frame claim is not yet demonstrated.
 
 Priority for further investigation: distinguish normal source sampling/cadence
@@ -673,7 +673,7 @@ playback operation. Which six requests were active is not recorded in this
 export, so thumbnail/media traffic is a candidate, not a confirmed occupant.
 
 `ClipPlayer.tsx` displays the failure without retry; selecting the clip again
-issues another request, consistent with the user's successful second attempt.
+issues another request, consistent with the second attempt succeeding.
 `HostCapabilityError` appends command-registration advice to every error; that
 advice is misleading for this explicit busy response. This particular failure
 is not evidence of a corrupt recording or a missing registered command.
@@ -748,7 +748,7 @@ Raw results: `.cache/cs2-perf/desktop-gpu-20260911.json`.
 
 02:52:27–02:53:57 EDT, 177 samples. GPU utilization median 35%, maximum 94%
 (only one sample at or above 90%); encoder median 28%, maximum 31%; VRAM
-7608–7800 MiB. The user was arranging a local Wingman match and no smoke/round
+7608–7800 MiB. A local Wingman match was being set up and no smoke/round
 timestamps were supplied for this window. Therefore the isolated GPU peak is
 **not** evidence that a particular smoke caused saturation or a capture drop.
 
@@ -757,10 +757,10 @@ required once the user is loaded into Wingman.
 
 ## Wingman A — recorder missing, not a valid capture trial
 
-After the user confirmed they were in the map, a 90-second sample was started
+Once in the map, a 90-second sample was started
 (`.cache/cs2-perf/wingman-A-20260911.json`, 176 samples). During this window both
 ordinary process enumeration and an elevated CIM check found CS2 PID 40704 but
-**no Clipture controller or engine**. The user was notified. These spot checks
+**no Clipture controller or engine**. These spot checks
 do not establish recorder state for every instant, but this run cannot be used
 as evidence of Clipture's capture performance or a comparison against it.
 
@@ -774,8 +774,8 @@ and the diagnostic export is required. No app was automatically relaunched.
 
 ### Updated objective: sustained high-FPS recording
 
-The user subsequently reported mostly stable smoke recordings with Reflex +
-Boost enabled and particle detail reduced to Low. These are user-reported game
+Later sessions gave mostly stable smoke recordings with Reflex +
+Boost enabled and particle detail reduced to Low. These are game-setting
 changes, not controlled independent trials: neither change can be assigned the
 improvement from this evidence. The actual objective is stable **120, 144, and
 210 FPS recording**, rather than only maintaining 60 FPS in smoke.
@@ -804,7 +804,7 @@ stage. Do not treat the FFmpeg benchmark as Clipture's native throughput ceiling
 
 ### Wingman B: recorder verified at start
 
-With user approval, launched `C:\Program Files\Clipture\clipture.exe --hidden`
+Launched `C:\Program Files\Clipture\clipture.exe --hidden`
 with the local engine override `build/engine/audio-mixer-fix/clipture_engine.exe`.
 Verified controller PID 35632, engine PID 31600 and CS2 PID 40704. Startup logs
 confirmed HDR DXGI capture and CS2 detection. No profile or installed binaries
@@ -899,7 +899,12 @@ Do **not** blindly throttle acquisition to 60 Hz or increase buffers as a first 
 
 ## Tool checks
 
-Latest follow-up: [ADR 0008](adr/0008-early-source-retirement-experiment.md)
+Latest follow-up: [ADR 0010](adr/0010-direct-fresh-nv12-conversion-experiment.md)
+tests direct fresh-frame conversion into reserved NVENC NV12 slots, without
+priority increases or game changes. Compatibility validation passed; matched
+CS2 freshness/game-impact validation remains pending. Early retirement is off.
+
+Historical follow-up: [ADR 0008](adr/0008-early-source-retirement-experiment.md)
 adds an opt-in private-copy / early-source-retirement experiment after the
 timestamp-corrected WGC smoke trial. Current measurements, compatibility results
 and candidate launch instructions are in the final sections of
@@ -918,4 +923,4 @@ results below remain historical, not a description of the current source.
   timing, reset/transition exclusions, missing-data rejection and empty history.
 - Node syntax checks and `git diff --check` passed.
 - No production source/configuration changes or game control performed. The
-  user-approved background launch for Wingman B is documented above.
+  background launch for Wingman B is documented above.

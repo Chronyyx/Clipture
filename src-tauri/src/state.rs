@@ -12,13 +12,14 @@ use crate::{
     diagnostics::{ApplicationInfo, DiagnosticsBuilder},
     engine::EngineClient,
     library::{ImportedScanner, LibraryService},
-    media::{AlwaysReady, CommandFfmpeg, MediaService, MediaSessionRegistry},
+    media::{AlwaysReady, ClipLayoutRepair, CommandFfmpeg, MediaService, MediaSessionRegistry},
     notifications::{NotificationService, NotificationSink},
     paths::AppPaths,
     platform::HostSystemInfo,
     processes::{IconSource, ProcessIconService, ProcessService, TasklistProvider},
     save::{SaveCoordinator, SaveIoAnalyzer},
     settings::SettingsStore,
+    sharing::{ClipLibrary, Network, SharingEvents, SharingService},
     sounds::{
         BundledSound, DecodedSoundPlayer, SilentSoundPlayer, SoundLibrary, SoundPlayer,
         SoundService,
@@ -33,12 +34,14 @@ pub struct AppState {
     pub clips: Arc<ClipService>,
     pub library: Arc<LibraryService>,
     pub media: Arc<MediaService>,
+    pub clip_repair: Arc<ClipLayoutRepair>,
     pub processes: Arc<ProcessService>,
     pub process_icons: Arc<ProcessIconService>,
     pub sounds: Arc<SoundLibrary>,
     pub notifications: Arc<NotificationService>,
     pub diagnostics: Arc<DiagnosticsBuilder>,
     pub save_io: Arc<SaveIoAnalyzer>,
+    pub sharing: Arc<SharingService>,
     exiting: AtomicBool,
 }
 
@@ -49,6 +52,8 @@ impl AppState {
         engine: Arc<EngineClient>,
         icon_source: Arc<dyn IconSource>,
         notification_sink: Arc<dyn NotificationSink>,
+        sharing_events: Box<dyn SharingEvents>,
+        runtime: tokio::runtime::Handle,
     ) -> Self {
         let repository = Arc::new(ClipRepository::new(paths.clips_file.clone()));
         let clips = Arc::new(ClipService::new(repository));
@@ -69,6 +74,13 @@ impl AppState {
             .expect("the built-in media endpoint must be valid"),
         );
         let media = Arc::new(MediaService::new(sessions, ffmpeg.clone()));
+        // Its own single FFmpeg slot: a long remux must never hold the slots
+        // playback audio and thumbnails use.
+        let clip_repair = Arc::new(ClipLayoutRepair::new(Arc::new(CommandFfmpeg::with_concurrency(
+            resolve_ffmpeg_path(&paths),
+            Arc::new(AlwaysReady),
+            1,
+        ))));
         let processes = Arc::new(ProcessService::new(Arc::new(TasklistProvider)));
         let process_icons = Arc::new(ProcessIconService::new(processes.clone(), icon_source));
         let sounds = Arc::new(SoundLibrary::new(
@@ -101,6 +113,22 @@ impl AppState {
             save_io.clone(),
             Arc::new(crate::media::MediaSaveProcessor::new(ffmpeg)),
         ));
+        let sharing = SharingService::new(
+            paths.data_dir.join("sharing"),
+            sharing_events,
+            Arc::new(SharedClipLibrary {
+                settings: settings.clone(),
+                clips: clips.clone(),
+                media: media.clone(),
+            }),
+            runtime,
+            if paths.test_mode {
+                Network::Disabled
+            } else {
+                Network::Internet
+            },
+        );
+        media.set_remote_source(sharing.clone());
         let diagnostics = Arc::new(DiagnosticsBuilder::new(
             ApplicationInfo {
                 name: "Clipture".into(),
@@ -118,12 +146,14 @@ impl AppState {
             clips,
             library,
             media,
+            clip_repair,
             processes,
             process_icons,
             sounds,
             notifications,
             diagnostics,
             save_io,
+            sharing,
             exiting: AtomicBool::new(false),
         }
     }
@@ -160,6 +190,8 @@ impl AppState {
                 "lazy-disposable-webview",
                 "single-instance",
                 "autostart",
+                "sharing",
+                "sharing://changed",
             ],
         }
     }
@@ -173,19 +205,59 @@ impl AppState {
     }
 }
 
+/// Kept clips from friends go under the user's save folder and join the
+/// saved-clip library like any recorded clip.
+struct SharedClipLibrary {
+    settings: Arc<SettingsStore>,
+    clips: Arc<ClipService>,
+    media: Arc<MediaService>,
+}
+
+impl ClipLibrary for SharedClipLibrary {
+    fn shared_clips_folder(&self) -> PathBuf {
+        PathBuf::from(self.settings.get().save_folder).join("Shared")
+    }
+
+    fn publish(&self, record: crate::contracts::ClipRecord) -> crate::error::AppResult<()> {
+        self.clips.append_saved(record)
+    }
+
+    /// Hidden (dot) folders are skipped by the library scan.
+    fn outgoing_copies_folder(&self) -> PathBuf {
+        PathBuf::from(self.settings.get().save_folder).join(".clipture-sharing")
+    }
+
+    fn write_stream_copy(
+        &self,
+        source: &std::path::Path,
+        destination: &std::path::Path,
+    ) -> crate::error::AppResult<bool> {
+        self.media.write_stream_copy(source, destination)
+    }
+}
+
 fn resolve_ffmpeg_path(paths: &AppPaths) -> PathBuf {
+    if !cfg!(debug_assertions) {
+        return std::env::current_exe().expect("current executable is available")
+            .parent().expect("executable parent is available").join("ffmpeg.exe");
+    }
     if let Some(path) = &paths.ffmpeg_override {
         return path.clone();
     }
     let executable_sibling = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.join("ffmpeg.exe")));
-    let development = std::env::current_dir()
-        .ok()
-        .map(|root| root.join("node_modules/ffmpeg-static/ffmpeg.exe"));
+    // Prefer the staged, hash-verified sidecar (scripts/fetch-ffmpeg.cjs) over
+    // the older npm copy kept only for the legacy Electron build.
+    let development = std::env::current_dir().ok().map(|root| {
+        [
+            root.join("src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe"),
+            root.join("node_modules/ffmpeg-static/ffmpeg.exe"),
+        ]
+    });
     executable_sibling
         .into_iter()
-        .chain(development)
+        .chain(development.into_iter().flatten())
         .find(|candidate| candidate.is_file())
         .unwrap_or_else(|| PathBuf::from("ffmpeg.exe"))
 }

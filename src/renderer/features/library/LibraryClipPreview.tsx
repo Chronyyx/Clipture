@@ -1,9 +1,8 @@
 import { Play } from "lucide-react";
-import { useEffect, useState } from "react";
 import type { ClipRecord, ClipSettings } from "../../../shared/types";
 import { formatDuration } from "../../shared/clips/clipMetadata";
+import { useClipThumbnail } from "../../shared/clips/useClipThumbnail";
 import { LibraryPlayerSidebar } from "./LibraryPlayerSidebar";
-import { clipture } from "../../platform/cliptureClient";
 
 export function LibraryClipPreview({
   clip,
@@ -13,7 +12,8 @@ export function LibraryClipPreview({
   onSelectClip,
   onToggleSelected,
   selectedClipIds,
-  selectionMode
+  selectionMode,
+  onShare
 }: {
   clip: ClipRecord;
   railClips: ClipRecord[];
@@ -23,19 +23,9 @@ export function LibraryClipPreview({
   onToggleSelected: (clipId: string) => void;
   selectedClipIds: ReadonlySet<string>;
   selectionMode: boolean;
+  onShare?: (clip: ClipRecord) => void;
 }) {
-  const [thumbnailUrl, setThumbnailUrl] = useState("");
-
-  useEffect(() => {
-    let mounted = true;
-    setThumbnailUrl("");
-    void clipture.clipThumbnailUrl(clip.filePath).then((url) => {
-      if (mounted) setThumbnailUrl(url || "");
-    });
-    return () => {
-      mounted = false;
-    };
-  }, [clip.filePath]);
+  const thumbnailUrl = useClipThumbnail(clip.filePath);
 
   return (
     <section className="player panel library-player library-player-preview">
@@ -56,6 +46,7 @@ export function LibraryClipPreview({
         onToggleSelected={onToggleSelected}
         selectedClipIds={selectedClipIds}
         selectionMode={selectionMode}
+        onShare={onShare}
       />
     </section>
   );

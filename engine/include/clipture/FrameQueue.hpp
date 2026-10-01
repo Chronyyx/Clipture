@@ -1,4 +1,5 @@
 #pragma once
+#include "clipture/FrameSelectionTrace.hpp"
 
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -48,7 +49,7 @@ public:
     std::optional<CapturedFrame> waitPopFor(std::chrono::milliseconds timeout);
     std::optional<CapturedFrame> waitConsumeLatestUntil(
         std::chrono::steady_clock::time_point deadline);
-    std::optional<CapturedFrame> consumeAllAndGetLatest();
+    std::optional<CapturedFrame> consumeAllAndGetLatest(int64_t deadline100ns = 0, int fps = 0);
     std::optional<CapturedFrame> consumeLatestAtOrBefore(int64_t pts100ns);
     void stop();
     void clear();
@@ -65,6 +66,7 @@ private:
     std::deque<CapturedFrame> frames_;
     bool stopped_ = false;
     FrameQueueStats stats_;
+    FrameSelectionTrace selectionTrace_;
 };
 
 }  // namespace clipture

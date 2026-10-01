@@ -12,7 +12,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::{base64, FfmpegExecutor, FfmpegJob};
+use super::{base64, library_input, FfmpegExecutor, FfmpegJob};
 
 const THUMBNAIL_WIDTH: u32 = 480;
 const THUMBNAIL_HEIGHT: u32 = 270;
@@ -39,7 +39,7 @@ pub struct ThumbnailService {
 
 impl ThumbnailService {
     pub fn new(executor: Arc<dyn FfmpegExecutor>) -> Self {
-        Self::with_capacity(executor, 64)
+        Self::with_capacity(executor, 128)
     }
 
     pub fn with_capacity(executor: Arc<dyn FfmpegExecutor>, capacity: usize) -> Self {
@@ -144,19 +144,19 @@ impl ThumbnailService {
 }
 
 fn thumbnail_job(path: &Path) -> FfmpegJob {
+    let head = [
+        OsString::from("-nostdin"),
+        OsString::from("-hide_banner"),
+        OsString::from("-loglevel"),
+        OsString::from("error"),
+        OsString::from("-threads"),
+        OsString::from("1"),
+        OsString::from("-ss"),
+        OsString::from("0.1"),
+    ];
     let mut job = FfmpegJob::new(
         "thumbnail extraction",
-        [
-            OsString::from("-nostdin"),
-            OsString::from("-hide_banner"),
-            OsString::from("-loglevel"),
-            OsString::from("error"),
-            OsString::from("-threads"),
-            OsString::from("1"),
-            OsString::from("-ss"),
-            OsString::from("0.1"),
-            OsString::from("-i"),
-            path.as_os_str().to_owned(),
+        head.into_iter().chain(library_input(path)).chain([
             OsString::from("-map"),
             OsString::from("0:v:0"),
             OsString::from("-frames:v"),
@@ -175,7 +175,7 @@ fn thumbnail_job(path: &Path) -> FfmpegJob {
             OsString::from("-f"),
             OsString::from("image2pipe"),
             OsString::from("pipe:1"),
-        ],
+        ]),
     );
     job.timeout = Duration::from_secs(15);
     job.maximum_stdout_bytes = MAXIMUM_JPEG_BYTES;

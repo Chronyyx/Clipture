@@ -67,8 +67,8 @@ impl UiController {
             path: webview_directory.clone(),
             source,
         })?;
-        let executable =
-            std::env::current_exe().map_err(|error| AppError::Integration(error.to_string()))?;
+        let executable = crate::updates::activation::ui_executable()
+            .map_err(|error| AppError::Integration(error.to_string()))?;
         let mut command = Command::new(&executable);
         command
             .arg("--ui-worker")

@@ -56,7 +56,9 @@
   letter-spacing: 0;
 }
 
-.library-heading-glitten {
+.library-heading-glitten,
+.library-heading-cafe,
+.library-heading-halloween {
   display: none;
 }
 
@@ -107,6 +109,15 @@
   padding: 0 14px;
   color: #cfd6e2;
   background: #0f1115;
+}
+
+:root .library-search:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+:root .library-search:focus-within input:focus-visible {
+  outline: none;
 }
 
 .library-search svg {
@@ -227,6 +238,9 @@
   background: var(--surface-video);
 }
 
+/* Still a video frame, but visibly loading rather than a black box. */
+.library-preview-main > .thumbnail-skeleton { background: var(--surface-deep); }
+
 .library-preview-main .library-preview-play {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1);
@@ -335,20 +349,23 @@
 
 .library-player-title-copy {
   min-width: 0;
-  display: block;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
   flex: 1;
 }
 
 .library-player-title-copy > span {
-  display: inline;
+  flex: 1;
 }
 
 .icon-button.library-player-title-edit-button {
   width: 28px;
   height: 28px;
   display: inline-grid;
+  flex: 0 0 auto;
   place-items: center;
-  margin-left: 7px;
   border: 1px solid var(--border-strong);
   border-radius: 3px;
   color: var(--icon);
@@ -382,11 +399,20 @@
 
 .library-player-side-meta {
   display: grid;
-  gap: 3px;
-  color: var(--text-muted);
+  gap: 4px;
+  margin: 2px 0 0;
+  color: var(--text);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+
+.library-player-side-meta > div { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; }
+.library-player-side-meta dt { color: var(--text-subtle); font-family: var(--font-ui); }
+.library-player-side-meta dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+
+.library-filter-row { display: flex; align-items: center; gap: 12px; }
+.library-filter-row .library-tabs { flex: 0 0 auto; }
+.library-filter-row .library-search { flex: 1; min-width: 0; }
 
 .clip-rail-heading {
   display: flex;
@@ -420,10 +446,11 @@
 }
 
 .clip-rail-item {
+  position: relative;
   width: 100%;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 6px;
   scroll-snap-align: start;
@@ -454,8 +481,13 @@
 }
 
 .clip-rail-folder-button {
-  width: 32px;
-  height: 32px;
+  position: absolute;
+  top: 14px;
+  left: 74px;
+  width: 28px;
+  height: 28px;
+  opacity: 0;
+  transition: opacity 120ms ease;
   display: grid;
   place-items: center;
   border: 1px solid var(--border-strong);
@@ -472,6 +504,9 @@
 .clip-rail-item:hover {
   background: var(--surface-hover);
 }
+
+.clip-rail-item:is(:hover, :focus-within) .clip-rail-folder-button { opacity: 1; }
+.clip-rail-item.active .clip-rail-folder-button { left: 83px; }
 
 .clip-rail-item.active {
   padding-left: 9px;
@@ -527,12 +562,13 @@
 }
 
 .clip-rail-copy strong {
+  display: -webkit-box;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 14px;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 13.5px;
+  line-height: 1.2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .clip-rail-copy > span {

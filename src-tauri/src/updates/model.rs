@@ -83,7 +83,7 @@ impl UpdateState {
     pub(crate) fn ready(version: String, checked_at: String) -> Self {
         Self {
             status: UpdateStatus::Ready,
-            message: Some(format!("Clipture {version} is ready to install.")),
+            message: Some(format!("Clipture {version} is staged for the next full launch. Apply now restarts recording and discards unsaved replay.")),
             version: Some(version),
             checked_at: Some(checked_at),
         }

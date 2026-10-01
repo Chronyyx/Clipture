@@ -45,12 +45,18 @@ async function run() {
   const tauri = load('src/renderer/platform/tauri-adapter.ts', stubs).createTauriAdapter();
   for (const adapter of [electron, tauri]) {
     for (const fps of fixture.captureFpsOptions) {
-      const input = { fps, saveInPlace: false, clipLengthSeconds: 120 };
+      const input = { fps, saveInPlace: false, saveInPlaceOverlap: false, clipLengthSeconds: 120 };
       assert.deepEqual(await adapter.saveSettings(input), input);
       assert.equal(stored.fps, fps, 'Host receives the selected target unchanged');
       assert.deepEqual(await adapter.getSettings(), input);
     }
-    assert.equal((await adapter.saveSettings({ fps: 999 })).fps, 30);
+    for (const fps of [144, 210, 240, 999]) {
+      stored = { fps, saveInPlace: false };
+      assert.equal((await adapter.getSettings()).fps, 30);
+      assert.equal((await adapter.saveSettings({ fps, saveInPlace: false })).fps, 30);
+      assert.equal(stored.fps, 30);
+      assert.equal(stored.saveInPlace, false);
+    }
   }
   console.log('FPS adapters: every choice survives both real adapter save/get paths.');
 }

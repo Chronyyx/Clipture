@@ -14,6 +14,7 @@ mod platform;
 mod processes;
 mod save;
 mod settings;
+mod sharing;
 mod sounds;
 mod state;
 mod updates;
@@ -36,6 +37,26 @@ pub fn run() {
                 .unwrap_or_else(|_| "clipture=info,warn".into()),
         )
         .try_init();
+    if let Ok(paths) = paths::AppPaths::discover() {
+        diagnostics::install_crash_log(&paths.data_dir);
+    }
+    #[cfg(windows)]
+    match updates::activation::run_supervisor() {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            tracing::error!(%error, "Runtime supervisor refused");
+            std::process::exit(1);
+        }
+    }
+    match updates::activation::startup() {
+        Ok(false) => {}
+        Ok(true) => return,
+        Err(error) => {
+            tracing::error!(%error, "Runtime activation refused");
+            std::process::exit(1);
+        }
+    }
     if app::ui_process::run_if_worker() {
         return;
     }
@@ -85,11 +106,29 @@ pub fn run() {
             commands::clip_thumbnail_url,
             commands::clip_playback_url,
             commands::release_playback_cache,
+            commands::get_clip_repair_status,
+            commands::check_clip_layouts,
+            commands::fix_clip_layouts,
             commands::list_active_processes,
             commands::list_clip_sounds,
             commands::import_clip_sound,
             commands::reveal_sounds_folder,
             commands::reveal_clip,
+            commands::sharing_get_state,
+            commands::sharing_set_enabled,
+            commands::sharing_set_appear_offline,
+            commands::sharing_set_display_name,
+            commands::sharing_add_friend,
+            commands::sharing_accept_friend,
+            commands::sharing_accept_invite,
+            commands::sharing_dismiss_invite,
+            commands::sharing_remove_friend,
+            commands::sharing_share_clip,
+            commands::sharing_revoke_share,
+            commands::sharing_dismiss_clip,
+            commands::sharing_save_clip,
+            commands::sharing_cancel_download,
+            commands::sharing_stream_url,
             updates::commands::get_update_state,
             updates::commands::check_for_updates,
             updates::commands::download_update,
@@ -102,6 +141,9 @@ pub fn run() {
             commands::exit_app,
         ])
         .setup(|application| {
+            if updates::activation::activate_at_launch()? {
+                std::process::exit(0);
+            }
             app::setup(application)?;
             Ok(())
         })
@@ -110,6 +152,12 @@ pub fn run() {
         .expect("failed to build the Clipture Tauri host");
 
     application.run(|app_handle, event| match event {
+        RunEvent::Ready => {
+            if let Err(error) = updates::startup_health::host_ready() {
+                tracing::error!(%error, "Runtime health acknowledgement failed");
+                app::request_exit(app_handle);
+            }
+        }
         RunEvent::ExitRequested { api, .. } => {
             let exiting = app_handle
                 .try_state::<state::AppState>()
@@ -121,6 +169,7 @@ pub fn run() {
         RunEvent::Exit => {
             app::ui_process::shutdown(app_handle);
             if let Some(state) = app_handle.try_state::<state::AppState>() {
+                state.sharing.shutdown();
                 state.engine.shutdown();
             }
         }

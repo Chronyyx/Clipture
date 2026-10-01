@@ -24,6 +24,24 @@ impl WorkScheduler for AlwaysReady {
     }
 }
 
+/// Demuxers for the library's video extensions (mp4/m4v/mov, mkv/webm, avi).
+const LIBRARY_DEMUXERS: &str = "mov,matroska,webm,avi";
+
+/// `-i <path>` for a library video. FFmpeg picks the demuxer from the file's
+/// contents, not its name, so an imported ".mp4" that is really a playlist
+/// could otherwise fetch URLs or read other local files into the output.
+/// Every job that reads a library video must build its input with this.
+pub(crate) fn library_input(path: &Path) -> [OsString; 6] {
+    [
+        OsString::from("-protocol_whitelist"),
+        OsString::from("file"),
+        OsString::from("-format_whitelist"),
+        OsString::from(LIBRARY_DEMUXERS),
+        OsString::from("-i"),
+        path.as_os_str().to_owned(),
+    ]
+}
+
 #[derive(Clone, Debug)]
 pub struct FfmpegJob {
     pub label: &'static str,
@@ -300,5 +318,53 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("output limit"));
+    }
+
+    #[test]
+    fn library_input_limits_protocols_and_demuxers_before_the_path() {
+        let args = library_input(Path::new("C:\\clips\\a.mp4"));
+        let text: Vec<_> = args.iter().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        assert_eq!(text[..4], ["-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm,avi"]);
+        assert_eq!(text[4..], ["-i", "C:\\clips\\a.mp4"]);
+    }
+
+    /// Jobs that read library videos must never build a bare `-i`.
+    #[test]
+    fn library_video_jobs_use_the_hardened_input() {
+        for (name, source) in [
+            ("thumbnails.rs", include_str!("thumbnails.rs")),
+            ("playback.rs", include_str!("playback.rs")),
+            ("layout_repair.rs", include_str!("layout_repair.rs")),
+        ] {
+            assert!(!source.contains("OsString::from(\"-i\")"), "{name} builds a bare -i");
+            assert!(source.contains("library_input("), "{name} must use library_input");
+        }
+    }
+
+    /// A concat script disguised as an ".mp4" makes plain FFmpeg open another
+    /// local file; the hardened input refuses the demuxer before that.
+    /// CLIPTURE_TEST_FFMPEG=<ffmpeg.exe> cargo test -- --ignored disguised_script
+    #[test]
+    #[ignore = "needs a real FFmpeg"]
+    fn disguised_script_cannot_open_other_files() {
+        let ffmpeg = PathBuf::from(std::env::var_os("CLIPTURE_TEST_FFMPEG").expect("set CLIPTURE_TEST_FFMPEG"));
+        let root = tempfile::tempdir().unwrap();
+        let bait = root.path().join("holiday.mp4");
+        std::fs::write(&bait, "ffconcat version 1.0
+file private.mp4
+").unwrap();
+        std::fs::write(root.path().join("private.mp4"), "not for you").unwrap();
+        let executor = CommandFfmpeg::new(&ffmpeg, Arc::new(AlwaysReady));
+        let run = |input: Vec<OsString>| {
+            let args = [OsString::from("-nostdin"), OsString::from("-loglevel"), OsString::from("debug")]
+                .into_iter().chain(input)
+                .chain(["-f", "null", "-"].map(OsString::from));
+            executor.run(FfmpegJob::new("script probe", args)).unwrap().stderr
+        };
+        let plain = run(vec![OsString::from("-i"), bait.clone().into_os_string()]);
+        assert!(plain.contains("private.mp4"), "plain FFmpeg should follow the script: {plain}");
+        let hardened = run(library_input(&bait).into());
+        assert!(hardened.contains("not on whitelist"), "{hardened}");
+        assert!(!hardened.contains("private.mp4"), "hardened input must not open other files: {hardened}");
     }
 }

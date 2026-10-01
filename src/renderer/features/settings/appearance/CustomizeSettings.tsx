@@ -1,8 +1,10 @@
-import { Check, ExternalLink, Feather, Leaf, Moon, Palette, RefreshCw, Sun } from 'lucide-react';
+import { Check, ExternalLink, Feather, Ghost, Heart, Leaf, Moon, Palette, RefreshCw, Sun } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { ClipSettings, ThemeFontId } from '../../../../shared/types';
 import { clipture } from '../../../platform';
+import { SpookyMascot } from '../../../shared/halloween';
+import { Mascot } from '../../../shared/maid-cafe';
 import { applyUiTheme, refreshLocalThemeFont } from '../../../theme';
 import { ThemeColorField } from './ThemeColorField';
 
@@ -16,6 +18,8 @@ const themes = [
   { id: 'light', label: 'Light', Icon: Sun },
   { id: 'glitten', label: 'Glitten', Icon: Feather },
   { id: 'milate', label: 'Milate', Icon: Leaf },
+  { id: 'maid-cafe', label: 'Maid café', Icon: Heart },
+  { id: 'halloween', label: 'Halloween', Icon: Ghost },
   { id: 'custom', label: 'Custom', Icon: Palette }
 ] as const;
 
@@ -65,7 +69,7 @@ export function CustomizeSettings({ settings, onChange }: CustomizeSettingsProps
   return (
     <div className='settings-group single-column customize-settings-group'>
       <div className='customize-settings-panel'>
-        <div className='audio-settings-heading'><h2>Appearance</h2></div>
+        <div className='audio-settings-heading'><h2>Appearance</h2><p>Themes apply instantly and are saved with your settings.</p></div>
         <div className='theme-options' role='radiogroup' aria-label='Interface theme'>
           {themes.map(({ id, label, Icon }) => (
             <button
@@ -82,6 +86,8 @@ export function CustomizeSettings({ settings, onChange }: CustomizeSettingsProps
                   <span className='theme-preview-line' />
                   <span className='theme-preview-button' />
                 </span>
+                {id === 'maid-cafe' && <Mascot character='mochi' mood='wink' />}
+                {id === 'halloween' && <SpookyMascot character='jack' mood='wink' />}
               </span>
               <span className='theme-option-label'><Icon size={17} /> {label}</span>
               {settings.uiTheme === id && <Check className='theme-option-check' size={17} aria-hidden='true' />}

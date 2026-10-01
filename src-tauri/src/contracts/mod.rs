@@ -1,5 +1,8 @@
+mod clip_repair;
 mod engine;
 mod settings;
+
+pub use clip_repair::{ClipRepairPhase, ClipRepairStatus};
 
 pub use engine::{
     AudioInputDevice, CapturePressure, ClipRecord, DisplayDevice, EngineConfigure,

@@ -5,9 +5,9 @@ use tauri::{State, WebviewWindow};
 use crate::{
     clips::PathAuthorizer,
     commands::{blocking, CommandResult},
-    contracts::ClipRecord,
+    contracts::{ClipRecord, ClipRepairStatus},
     error::{AppError, AppResult},
-    media::PlaybackDescriptor,
+    media::{PlaybackDescriptor, RepairCandidate},
     processes::ActiveProcess,
     state::AppState,
 };
@@ -77,6 +77,39 @@ pub(crate) async fn clip_playback_for_owner(
         media.open_playback(&authority, &id, &audio_tracks, &owner)
     })
     .await
+}
+
+#[tauri::command]
+pub fn get_clip_repair_status(state: State<'_, AppState>) -> ClipRepairStatus {
+    state.clip_repair.status()
+}
+
+/// Only Clipture's own clips are candidates; imported videos are never rewritten.
+#[tauri::command]
+pub async fn check_clip_layouts(state: State<'_, AppState>) -> CommandResult<ClipRepairStatus> {
+    let library = state.library.clone();
+    let repair = state.clip_repair.clone();
+    let settings = state.settings.get();
+    blocking(move || {
+        let candidates = library
+            .list_refreshed(&settings)?
+            .into_iter()
+            .filter(|clip| clip.library_source.as_deref() != Some("imported"))
+            .filter(|clip| clip.segment_files.as_ref().is_none_or(|files| files.is_empty()))
+            .map(|clip| RepairCandidate {
+                title: clip.title,
+                path: PathBuf::from(clip.file_path),
+            })
+            .filter(|candidate| candidate.path.is_file())
+            .collect();
+        Ok(repair.check(candidates))
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn fix_clip_layouts(state: State<'_, AppState>) -> ClipRepairStatus {
+    state.clip_repair.repair()
 }
 
 #[tauri::command]

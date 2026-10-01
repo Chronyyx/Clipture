@@ -88,9 +88,10 @@
   position: relative;
   min-height: 86px;
   display: grid;
-  align-content: center;
+  /* Labels share one baseline across a row; values vary in length. */
+  align-content: start;
   gap: 6px;
-  padding: 14px 44px 14px 14px;
+  padding: 16px 44px 14px 14px;
   background: #111318;
 }
 

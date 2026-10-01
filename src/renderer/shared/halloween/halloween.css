@@ -1,0 +1,306 @@
+@import '@fontsource/cormorant-garamond/latin-500-italic.css';
+@import '@fontsource/cormorant-garamond/latin-600.css';
+
+/* Halloween: the app after dark. Near-black indigo, moonlight and a little
+   candle amber, a cinematic serif for titles, and the same clean panels as
+   every other theme. Atmosphere lives in the background, not on the controls.
+   Everything here is scoped to the theme. */
+:root[data-theme="halloween"] {
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --app-bg: #14111f;
+  --sidebar-bg: #100d19;
+  --surface: #1a1627;
+  --surface-deep: #120f1c;
+  --surface-row: #181424;
+  --surface-control: #211c33;
+  --surface-hover: #282240;
+  --surface-active: #2f2849;
+  --surface-video: #09070f;
+  --border: #2a2440;
+  --border-strong: #3b3357;
+  --text: #ece6f3;
+  --text-strong: #faf6ff;
+  --text-muted: #a89fbc;
+  --text-subtle: #8a819f;
+  --icon: #cfc6e2;
+  --accent: #e8904a;
+  --accent-hover: #f0a25f;
+  --accent-soft: #261c28;
+  --accent-border: #6b4a36;
+  --accent-text: #f0a868;
+  --on-accent: #1c1008;
+  --primary-bg: #e8904a;
+  --primary-text: #1c1008;
+  --selection: #e8904a;
+  --selection-ring: rgb(232 144 74 / 40%);
+  --toggle-on: #c9793d;
+  --scrollbar: #342d4a;
+  --scrollbar-hover: #463d62;
+  --scrollbar-active: #5a4f7c;
+  --shadow: rgb(3 2 8 / 60%);
+  --inset-highlight: rgb(255 244 220 / 4%);
+  --tally: #f0a868;
+  --moon: #efe6cf;
+  color-scheme: dark;
+}
+
+:root[data-theme="halloween"] :is(h1, h2, .brand strong) { font-weight: 600; letter-spacing: 0.01em; }
+
+/* --- The night: moonlight from the top right, a faint field of stars, and
+   the room left transparent so the ambient layer shows between panels. --- */
+:root[data-theme="halloween"] .app-shell {
+  isolation: isolate;
+  background:
+    radial-gradient(ellipse 55% 45% at 78% -12%, rgb(239 230 207 / 7%), transparent 70%),
+    radial-gradient(ellipse 80% 60% at 50% 120%, rgb(92 70 150 / 12%), transparent 70%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cg fill='%23efe6cf'%3E%3Ccircle cx='18' cy='24' r='.6' opacity='.35'/%3E%3Ccircle cx='110' cy='14' r='.5' opacity='.3'/%3E%3Ccircle cx='70' cy='84' r='.7' opacity='.25'/%3E%3Ccircle cx='138' cy='106' r='.5' opacity='.3'/%3E%3Ccircle cx='38' cy='132' r='.5' opacity='.25'/%3E%3C/g%3E%3C/svg%3E") 0 0 / 160px 160px,
+    linear-gradient(#17132a, #110e1b);
+}
+:root[data-theme="halloween"] .workspace { background: transparent; }
+
+/* The sidebar: a small moon over a quiet silhouette of a house and bare trees. */
+:root[data-theme="halloween"] .sidebar {
+  border-right: 1px solid #221d33;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 248 120'%3E%3Cg stroke='%23090611' stroke-linecap='round' fill='none'%3E%3Cpath d='M32 104V72M32 82l-9-10M32 77l8-11M40 66l4 1M23 72l-4-1' stroke-width='2.2'/%3E%3Cpath d='M214 100V76M214 84l7-8M214 80l-6-7' stroke-width='1.8'/%3E%3C/g%3E%3Cg fill='%23090611'%3E%3Cpath d='M118 58L150 34 182 58z'/%3E%3Crect x='124' y='55' width='52' height='46'/%3E%3Crect x='131' y='38' width='14' height='20'/%3E%3Cpath d='M128 40L138 20 148 40z'/%3E%3C/g%3E%3Cg fill='%23e8b25a'%3E%3Crect x='134' y='67' width='6' height='8' opacity='.75'/%3E%3Crect x='160' y='67' width='6' height='8' opacity='.35'/%3E%3C/g%3E%3Cpath d='M0 120V104Q70 92 130 100T248 96V120z' fill='%23090611'/%3E%3C/svg%3E") bottom / 100% auto no-repeat,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3CradialGradient id='g'%3E%3Cstop offset='.35' stop-color='%23efe6cf' stop-opacity='.16'/%3E%3Cstop offset='1' stop-color='%23efe6cf' stop-opacity='0'/%3E%3C/radialGradient%3E%3Ccircle cx='30' cy='30' r='30' fill='url(%23g)'/%3E%3Ccircle cx='30' cy='30' r='9' fill='%23efe6cf'/%3E%3Ccircle cx='27' cy='28' r='1.8' fill='%23d9ceb2'/%3E%3Ccircle cx='33' cy='33' r='1.2' fill='%23d9ceb2'/%3E%3C/svg%3E") right 22px bottom 104px / 58px 58px no-repeat,
+    radial-gradient(ellipse 120% 110px at 55% 100%, rgb(92 70 150 / 22%), transparent 75%),
+    linear-gradient(#15111f, #0e0b16);
+}
+
+:root[data-theme="halloween"] .brand .mark { border-radius: 10px; box-shadow: 0 0 0 1px var(--border-strong); }
+:root[data-theme="halloween"] .brand strong { color: var(--text-strong); font-size: 23px; }
+
+/* --- Navigation: quiet, with a thread of candlelight on the chosen item. --- */
+:root[data-theme="halloween"] .nav { height: 42px; margin-bottom: 4px; border-radius: 10px; isolation: isolate; color: var(--text-muted); font-weight: 500; }
+:root[data-theme="halloween"] .nav:hover { color: var(--text); background: rgb(255 255 255 / 3%); }
+:root[data-theme="halloween"] .nav.active { background: transparent; color: var(--text-strong); }
+:root[data-theme="halloween"] .nav.active svg { color: var(--accent-text); }
+:root[data-theme="halloween"] .nav-indicator {
+  z-index: -1;
+  inset: 0;
+  width: auto;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-control);
+  box-shadow: inset 2px 0 0 var(--accent), -6px 0 16px -10px rgb(232 144 74 / 80%);
+}
+
+/* --- Titles: a cinematic serif, a crescent, and a candle on Settings. --- */
+:root[data-theme="halloween"] :is(.library-title h1, .topbar h1) {
+  color: #f4ecdf;
+  font-size: 36px;
+  line-height: 1;
+  text-shadow: 0 0 28px rgb(232 144 74 / 14%);
+}
+:root[data-theme="halloween"] .library-heading-default { display: none; }
+:root[data-theme="halloween"] .library-heading-halloween { display: inline; }
+:root[data-theme="halloween"] .library-title-icon { display: none; }
+:root[data-theme="halloween"] .library-title::before {
+  content: "";
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M13 2.5A8 8 0 1 0 17.5 15 6.5 6.5 0 0 1 13 2.5z' fill='%23efe6cf'/%3E%3C/svg%3E") center / contain no-repeat;
+  filter: drop-shadow(0 0 6px rgb(239 230 207 / 35%));
+}
+:root[data-theme="halloween"] .topbar h1::after {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 20px;
+  margin-left: 12px;
+  vertical-align: 2px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 20'%3E%3Cpath d='M4.5 8C1.8 6.2 2.3 3 4.5 0c2.2 3 2.7 6.2 0 8z' fill='%23f0a868'/%3E%3Cpath d='M4.5 7.2C3.4 6 3.6 4.4 4.5 3c.9 1.4 1.1 3 0 4.2z' fill='%23ffe3a8'/%3E%3Crect x='2' y='9' width='5' height='11' rx='1' fill='%23d9cfbb'/%3E%3C/svg%3E") center / contain no-repeat;
+  filter: drop-shadow(0 -2px 5px rgb(240 168 104 / 55%));
+  animation: hw-candle 3.4s ease-in-out infinite;
+}
+:root[data-theme="halloween"] :is(.settings-section-header h2, .settings-content .audio-settings-heading h2, .modal-header h2, .library-empty-state h2) {
+  color: #f4ecdf;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+}
+:root[data-theme="halloween"] .library-player-side-title { color: var(--text-strong); font-family: var(--font-display); font-size: 28px; font-weight: 600; }
+
+/* --- Buttons --- */
+:root[data-theme="halloween"] .primary {
+  position: relative;
+  border-radius: 10px;
+  padding: 0 18px;
+  color: var(--primary-text);
+  background: linear-gradient(#eea062, #dd8440);
+  box-shadow: inset 0 1px 0 rgb(255 226 190 / 45%), 0 10px 24px -12px rgb(232 144 74 / 70%);
+  font-weight: 700;
+  transition: box-shadow 200ms ease, transform 120ms ease;
+}
+:root[data-theme="halloween"] .primary:hover:not(:disabled) { box-shadow: inset 0 1px 0 rgb(255 226 190 / 55%), 0 10px 30px -10px rgb(232 144 74 / 90%); }
+:root[data-theme="halloween"] .primary:active:not(:disabled) { transform: translateY(1px); }
+
+:root[data-theme="halloween"] :is(.secondary-button, .modal-footer button:not(.primary), .danger-button) {
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: rgb(26 22 39 / 80%);
+  transition: border-color 160ms ease, background 160ms ease;
+}
+:root[data-theme="halloween"] :is(.secondary-button, .modal-footer button:not(.primary)):hover:not(:disabled) { border-color: #5c5087; background: var(--surface-control); }
+:root[data-theme="halloween"] .icon-button { border-radius: 9px; }
+
+:root[data-theme="halloween"] .chip { border: 1px solid var(--border-strong); color: var(--text-muted); background: rgb(26 22 39 / 80%); }
+:root[data-theme="halloween"] .chip:hover { border-color: #5c5087; color: var(--text); background: var(--surface-control); }
+:root[data-theme="halloween"] .chip.active { border-color: rgb(232 144 74 / 70%); color: var(--accent-text); background: rgb(232 144 74 / 10%); }
+
+/* --- Library header --- */
+:root[data-theme="halloween"] .library-top {
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(#17132a, #151124);
+  box-shadow: 0 16px 30px -22px rgb(0 0 0 / 90%);
+}
+:root[data-theme="halloween"] .library-tabs { gap: 4px; border-bottom: 0; }
+:root[data-theme="halloween"] .library-tab {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+:root[data-theme="halloween"] .library-tab:hover { color: var(--text); background: rgb(255 255 255 / 3%); }
+:root[data-theme="halloween"] .library-tab.active { border-color: var(--border-strong); color: var(--text-strong); background: var(--surface-control); box-shadow: inset 0 -2px 0 var(--accent); }
+:root[data-theme="halloween"] :is(.library-search, .diagnostics-search) { border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-deep); }
+:root[data-theme="halloween"] :is(.library-search, .diagnostics-search) svg { color: var(--text-muted); }
+
+/* --- Surfaces: the app's own panels, a touch deeper, one faint cobweb. --- */
+:root[data-theme="halloween"] .library-player {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 var(--inset-highlight), 0 24px 48px -26px rgb(0 0 0 / 90%);
+}
+:root[data-theme="halloween"] .library-player::before {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  left: 0;
+  width: 46px;
+  height: 46px;
+  pointer-events: none;
+  opacity: 0.55;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 70 70' fill='none' stroke='%23e6dcff' stroke-opacity='.3' stroke-width='.6'%3E%3Cpath d='M0 0L70 26M0 0L56 56M0 0L26 70'/%3E%3Cpath d='M0 14Q10 12 13 4M0 14Q8 16 12 11M8 21Q2 17 0 14'/%3E%3Cpath d='M0 30Q20 24 27 8M23 23Q26 30 17 38M17 38Q8 38 0 30'/%3E%3Cpath d='M0 48Q28 42 42 16M36 36Q40 46 28 56M28 56Q14 58 0 48'/%3E%3C/svg%3E") 0 0 / contain no-repeat;
+}
+:root[data-theme="halloween"] .library-player-sidebar { border-left: 1px solid var(--border); background: var(--surface-row); }
+:root[data-theme="halloween"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, var(--surface-row) 88%); }
+:root[data-theme="halloween"] .clip-rail-item { border-top: 0; border-radius: 10px; padding-left: 8px; }
+:root[data-theme="halloween"] .clip-rail-item:hover { background: var(--surface-control); }
+:root[data-theme="halloween"] .clip-rail-item.active { padding-left: 8px; background: rgb(232 144 74 / 7%); box-shadow: inset 0 0 0 1px rgb(232 144 74 / 32%); }
+:root[data-theme="halloween"] .clip-rail-thumbnail { border-radius: 7px; }
+
+:root[data-theme="halloween"] .settings-rows {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 var(--inset-highlight), 0 20px 40px -26px rgb(0 0 0 / 90%);
+}
+:root[data-theme="halloween"] .setting-row + .setting-row { border-top-color: var(--border); }
+:root[data-theme="halloween"] :is(input:not([type="range"], [type="checkbox"], [type="radio"], .library-search input, .diagnostics-search input), select, .keybind-button) {
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface-deep);
+}
+
+:root[data-theme="halloween"] .field-transport {
+  --transport-face: #171325;
+  --transport-key: #211c33;
+  --transport-edge: #3b3357;
+  --transport-ink: #ece6f3;
+  --transport-muted: #a89fbc;
+  --transport-track: #2f2849;
+  --transport-fill: #e8904a;
+  --transport-marker: #efe6cf;
+  --transport-highlight: rgb(255 244 220 / 4%);
+  --transport-display: #0e0b16;
+  --transport-display-ink: #f0a868;
+  border-radius: 12px;
+}
+
+/* --- Recorder: a candle flame for a tally light. --- */
+:root[data-theme="halloween"] .recorder-status {
+  position: relative;
+  margin-top: 40px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgb(26 22 39 / 88%);
+}
+:root[data-theme="halloween"] .recorder-tally {
+  width: 8px;
+  height: 12px;
+  border-radius: 0;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14'%3E%3Cpath d='M5 14C0 11 1 5 5 0c4 5 5 11 0 14z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14'%3E%3Cpath d='M5 14C0 11 1 5 5 0c4 5 5 11 0 14z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+:root[data-theme="halloween"] .recorder-status.live .recorder-tally {
+  box-shadow: none;
+  background: linear-gradient(#ffe3a8, #e8904a 70%);
+  transform-origin: 50% 100%;
+  animation: hw-flame-sway 2.2s ease-in-out infinite;
+}
+:root[data-theme="halloween"] .recorder-buffer-track {
+  background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), #1a1627 calc(25% - 1px) 25%),
+    linear-gradient(90deg, rgb(232 144 74 / 18%), var(--accent));
+}
+
+/* --- Settings rail --- */
+:root[data-theme="halloween"] .settings-rail-item { border-radius: 10px; color: var(--text-muted); }
+:root[data-theme="halloween"] .settings-rail-item.active { color: var(--text-strong); }
+:root[data-theme="halloween"] .settings-rail-item.active svg { color: var(--accent-text); }
+:root[data-theme="halloween"] .settings-rail-item:not(.active):hover { color: var(--text); background: rgb(255 255 255 / 3%); }
+:root[data-theme="halloween"] .settings-rail-indicator {
+  border-color: var(--border);
+  background: var(--surface-control);
+  box-shadow: inset 2px 0 0 var(--accent), -6px 0 16px -10px rgb(232 144 74 / 80%);
+}
+
+:root[data-theme="halloween"] input[type="checkbox"].toggle-switch { background: #2f2849; }
+:root[data-theme="halloween"] input[type="checkbox"].toggle-switch::after { background: #bdb3d4; box-shadow: none; }
+:root[data-theme="halloween"] input[type="checkbox"].toggle-switch:checked { background: var(--toggle-on); box-shadow: 0 0 14px -4px rgb(232 144 74 / 70%); }
+:root[data-theme="halloween"] input[type="checkbox"].toggle-switch:checked::after { background: #fff4e6; }
+
+/* --- Notices, dialogs, diagnostics --- */
+:root[data-theme="halloween"] .notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgb(232 144 74 / 40%);
+  border-radius: 12px;
+  padding: 9px 16px 9px 12px;
+  color: var(--text);
+  background: rgb(26 22 39 / 94%);
+  box-shadow: 0 12px 30px -18px rgb(232 144 74 / 60%);
+}
+:root[data-theme="halloween"] .workspace > .notice:first-child { margin-top: 36px; }
+:root[data-theme="halloween"] .modal {
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 var(--inset-highlight), 0 30px 70px -24px rgb(0 0 0 / 90%), 0 0 60px -30px rgb(139 123 216 / 45%);
+}
+:root[data-theme="halloween"] .modal-backdrop { background: rgb(6 4 12 / 66%); }
+:root[data-theme="halloween"] .metric { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-row); }
+:root[data-theme="halloween"] .metric strong { color: var(--accent-text); }
+
+:root[data-theme="halloween"] :is(.skeleton, .thumbnail-skeleton) { background: var(--surface-control); }
+:root[data-theme="halloween"] :is(.skeleton, .thumbnail-skeleton)::after { background: linear-gradient(100deg, transparent 20%, rgb(239 230 207 / 5%) 45%, transparent 70%); }
+:root[data-theme="halloween"] .library-preview-main > .thumbnail-skeleton { background: #120f1c; }
+:root[data-theme="halloween"] ::selection { color: #1c1008; background: #f0a868; }
+
+@keyframes hw-candle { 0%, 100% { opacity: 1; } 40% { opacity: 0.86; } 55% { opacity: 0.97; } 72% { opacity: 0.84; } }
+@keyframes hw-flame-sway { 0%, 100% { transform: scale(1, 1) rotate(0); } 35% { transform: scale(0.95, 1.05) rotate(-3deg); } 70% { transform: scale(1.03, 0.96) rotate(2deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="halloween"] .topbar h1::after,
+  :root[data-theme="halloween"] .recorder-status.live .recorder-tally { animation: none; }
+}

@@ -45,6 +45,10 @@ struct ReplaySegmentStoreStats {
     uint64_t spillCandidateInspections = 0;
     uint64_t writeFailures = 0;
     std::size_t maximumWriteBytes = 0;
+    std::size_t rehomeQueuedPackets = 0;
+    uint64_t rehomedPackets = 0;
+    uint64_t rehomedBytes = 0;
+    uint64_t rehomeBytesPerSecond = 0;
 };
 
 class ReplaySegmentStore {
@@ -61,12 +65,17 @@ public:
     void setResidentPayloadBudget(std::size_t bytes);
     void setInPlaceArchive(std::shared_ptr<replay::InPlacePacketArchive> archive);
     void push(const EncodedPacket& packet);
+    // After an in-place save, queue retained packets that now live in the saved
+    // clip so they are copied back newest-first in the background, at
+    // rateMultiplier x the rate this store's footage arrives (see BackfillPace).
+    void scheduleInPlaceRehome(double rateMultiplier);
     std::vector<EncodedPacket> selectWindow(int64_t startPts100ns, int64_t endPts100ns) const;
     std::vector<EncodedPacket> snapshot() const;
     void clear();
     std::size_t size() const;
     ReplaySegmentStoreStats stats() const;
     bool waitUntilIdle(std::chrono::milliseconds timeout) const;
+    bool waitUntilRehomed(std::chrono::milliseconds timeout) const;
 
 private:
     struct Impl;

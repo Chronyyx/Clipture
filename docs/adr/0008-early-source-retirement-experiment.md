@@ -68,8 +68,8 @@ Canonical-conversion timestamp duration remains unvalidated on this driver.
 The validated candidate (SHA-256 `944CA1E5...0313`) was launched via the
 verified staged package with tracing; the first export was discarded because
 the profile was still at 60 FPS, and the corrected 120 FPS run is the only
-trial analyzed. A passive read-only diagnostics monitor was left running for
-the user; no further sampling was started during gameplay.
+trial analyzed. A passive read-only diagnostics monitor was left
+running; no further sampling was started during gameplay.
 
 - Inputs: `Clipture diagnostics 2026-09-17T11-01-00-081Z.json`,
   `Counter-Strike 2/Clipture 2026-09-17 07-00-04 AM.mp4` (120 s, 2560x1440,

@@ -45,11 +45,13 @@ impl Output {
                 Message::Event { name, .. } if EVENTS.contains(&name.as_str()) => {
                     hints.events.insert(name.clone(), frame);
                 }
-                Message::Close {} => hints.control = Some(frame),
+                // Close (controller to window) and Closing (window to
+                // controller) end the session and are never displaced.
+                Message::Close {} | Message::Closing {} => hints.control = Some(frame),
                 Message::Focus {} => {
                     if !matches!(
                         hints.control.as_ref().map(|frame| &frame.message),
-                        Some(Message::Close {})
+                        Some(Message::Close {} | Message::Closing {})
                     ) {
                         hints.control = Some(frame);
                     }
@@ -64,7 +66,7 @@ impl Output {
     }
 }
 
-pub const EVENTS: [&str; 8] = [
+pub const EVENTS: [&str; 9] = [
     "host://ready",
     "settings://changed",
     "engine://hotkey",
@@ -73,9 +75,10 @@ pub const EVENTS: [&str; 8] = [
     "clip://save",
     "library://changed",
     "updates://state-changed",
+    "sharing://changed",
 ];
 
-/// No resident writer while the UI is absent. Two ordinary frames plus eight
+/// No resident writer while the UI is absent. Two ordinary frames plus nine
 /// coalesced state hints and one lifecycle signal bound queued work. Each batch
 /// drains hints even if the ordinary queue remains saturated.
 pub fn start(mut writer: impl Write + Send + 'static) -> Output {

@@ -176,3 +176,18 @@ h2 {
   border-radius: 8px;
   background: #15171c;
 }
+
+/* Pending friend requests on the Friends nav item. */
+.nav-badge {
+  min-width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}

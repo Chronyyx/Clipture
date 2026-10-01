@@ -1,11 +1,9 @@
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::{Arc, Condvar, Mutex},
     thread,
+    time::{Duration, Instant},
 };
 
 use tauri::{
@@ -22,7 +20,7 @@ use tauri::{
 
 use crate::error::{AppError, AppResult};
 
-use super::{apply_patches, ByteRange, MediaService, VideoStreamPlan};
+use super::{apply_patches, ByteRange, MediaService, RemoteVideoChunk, VideoStreamPlan};
 
 pub const URI_SCHEME: &str = "clipture-media";
 
@@ -30,7 +28,14 @@ const MAXIMUM_REQUEST_URI_BYTES: usize = 1_024;
 const MAXIMUM_RANGE_HEADER_BYTES: usize = 128;
 const MAXIMUM_VIDEO_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 const MAXIMUM_AUDIO_START_SECONDS: f64 = 24.0 * 60.0 * 60.0;
-const MAXIMUM_IN_FLIGHT_REQUESTS: usize = 6;
+// Video byte ranges and mixed-audio FFmpeg jobs get separate budgets: slow
+// audio extraction must never occupy the slots the video element needs, or
+// the player keeps playing audio over a black, stalled picture.
+const MAXIMUM_IN_FLIGHT_VIDEO_REQUESTS: usize = 6;
+const MAXIMUM_IN_FLIGHT_AUDIO_REQUESTS: usize = 2;
+// A media element treats a failed range request as a stall; briefly queueing
+// behind in-flight reads (each at most 4 MiB) is far cheaper than a 503.
+const VIDEO_REQUEST_QUEUE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Registers the opaque media transport without coupling the media domain to
 /// the application's composition state. The resolver is called only after
@@ -40,25 +45,55 @@ where
     R: Runtime,
     F: Fn(&AppHandle<R>) -> Option<Arc<MediaService>> + Send + Sync + 'static,
 {
-    let limiter = Arc::new(RequestLimiter::new(MAXIMUM_IN_FLIGHT_REQUESTS));
+    let admission = Arc::new(MediaAdmission::new());
     builder.register_asynchronous_uri_scheme_protocol(
         URI_SCHEME,
         move |context, request, responder| {
             let owner = context.webview_label().to_owned();
             let media = resolve(context.app_handle());
-            let Some(permit) = limiter.try_acquire() else {
-                responder.respond(text_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "media service is busy",
-                ));
-                return;
-            };
+            let admission = Arc::clone(&admission);
             thread::spawn(move || {
-                let _permit = permit;
+                let Some(_permit) = admission.admit(request.uri()) else {
+                    responder.respond(busy_response());
+                    return;
+                };
                 responder.respond(handle_request(media, &owner, request));
             });
         },
     )
+}
+
+/// Media request budgets, shared by the in-process protocol and the UI-process
+/// relay so both transports queue video reads instead of failing them.
+pub struct MediaAdmission {
+    video: Arc<RequestLimiter>,
+    audio: Arc<RequestLimiter>,
+}
+
+impl MediaAdmission {
+    pub fn new() -> Self {
+        Self {
+            video: Arc::new(RequestLimiter::new(MAXIMUM_IN_FLIGHT_VIDEO_REQUESTS)),
+            audio: Arc::new(RequestLimiter::new(MAXIMUM_IN_FLIGHT_AUDIO_REQUESTS)),
+        }
+    }
+
+    /// Blocks briefly for a video slot; the mixed-audio loader tolerates a
+    /// failed chunk and retries, so audio fails fast.
+    pub fn admit(&self, uri: &Uri) -> Option<RequestPermit> {
+        if matches!(
+            parse_route(uri),
+            Ok(Route::Audio { .. } | Route::RemoteAudio { .. })
+        ) {
+            self.audio.try_acquire()
+        } else {
+            self.video.acquire_within(VIDEO_REQUEST_QUEUE_TIMEOUT)
+        }
+    }
+}
+
+fn busy_response() -> Response<Vec<u8>> {
+    text_response(StatusCode::SERVICE_UNAVAILABLE, "media service is busy")
 }
 
 pub(crate) fn handle_request(
@@ -104,6 +139,35 @@ pub(crate) fn handle_request(
                 Err(error) => service_error_response(&error),
             }
         }
+        Route::Remote { stream_id } => {
+            if request.method() != Method::GET && request.method() != Method::HEAD {
+                return method_not_allowed("GET, HEAD, OPTIONS");
+            }
+            let range_header = match single_range_header(&request) {
+                Ok(value) => value,
+                Err(message) => return text_response(StatusCode::BAD_REQUEST, message),
+            };
+            match media.remote_video(stream_id, owner, range_header) {
+                Ok(chunk) => remote_video_response(chunk, request.method() == Method::HEAD),
+                Err(error) => service_error_response(&error),
+            }
+        }
+        Route::RemoteAudio {
+            stream_id,
+            start_seconds,
+            duration_seconds,
+        } => {
+            if request.method() != Method::GET && request.method() != Method::HEAD {
+                return method_not_allowed("GET, HEAD, OPTIONS");
+            }
+            if request.method() == Method::HEAD {
+                return binary_response(StatusCode::OK, "audio/wav", Vec::new());
+            }
+            match media.remote_mixed_audio_chunk(stream_id, owner, start_seconds, duration_seconds) {
+                Ok(bytes) => binary_response(StatusCode::OK, "audio/wav", bytes),
+                Err(error) => service_error_response(&error),
+            }
+        }
         Route::Audio {
             session_id,
             start_seconds,
@@ -128,6 +192,16 @@ enum Route<'a> {
     Video {
         session_id: &'a str,
     },
+    /// A clip streamed from a friend; the id is an opaque stream session.
+    Remote {
+        stream_id: &'a str,
+    },
+    /// Every audio track of a fully arrived stream, mixed.
+    RemoteAudio {
+        stream_id: &'a str,
+        start_seconds: f64,
+        duration_seconds: f64,
+    },
     Audio {
         session_id: &'a str,
         start_seconds: f64,
@@ -140,9 +214,27 @@ fn parse_route(uri: &Uri) -> Result<Route<'_>, &'static str> {
     if segments.len() != 5
         || segments[0] != ""
         || segments[1] != "v1"
-        || segments[2] != "session"
         || !valid_session_id(segments[3])
     {
+        return Err("invalid media route");
+    }
+    if segments[2] == "remote" {
+        return match segments[4] {
+            "video" if uri.query().is_none() => Ok(Route::Remote {
+                stream_id: segments[3],
+            }),
+            "audio" => {
+                let (start_seconds, duration_seconds) = parse_audio_query(uri.query())?;
+                Ok(Route::RemoteAudio {
+                    stream_id: segments[3],
+                    start_seconds,
+                    duration_seconds,
+                })
+            }
+            _ => Err("invalid media route"),
+        };
+    }
+    if segments[2] != "session" {
         return Err("invalid media route");
     }
     let session_id = segments[3];
@@ -262,6 +354,29 @@ fn video_response(
     response.body(body).unwrap_or_else(|_| fallback_response())
 }
 
+/// The source already bounded the chunk; always answer as a partial range so
+/// the media element keeps issuing range requests instead of one huge read.
+fn remote_video_response(mut chunk: RemoteVideoChunk, head_only: bool) -> Response<Vec<u8>> {
+    if chunk.bytes.len() as u64 != chunk.range.len() {
+        return text_response(StatusCode::INTERNAL_SERVER_ERROR, "could not read media");
+    }
+    // Same bound as local video: larger bodies cannot cross the UI pipe.
+    let range = capped_range(chunk.range, MAXIMUM_VIDEO_RESPONSE_BYTES);
+    chunk.bytes.truncate(range.len() as usize);
+    chunk.range = range;
+    let length = chunk.range.len();
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(CONTENT_TYPE, "video/mp4")
+        .header(CONTENT_LENGTH, length.to_string())
+        .header(CONTENT_RANGE, chunk.range.content_range())
+        .header(ACCEPT_RANGES, "bytes")
+        .header(CACHE_CONTROL, "no-store")
+        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(if head_only { Vec::new() } else { chunk.bytes })
+        .unwrap_or_else(|_| fallback_response())
+}
+
 fn capped_range(range: ByteRange, maximum_bytes: u64) -> ByteRange {
     if range.len() <= maximum_bytes {
         return range;
@@ -361,34 +476,57 @@ fn fallback_response() -> Response<Vec<u8>> {
 }
 
 struct RequestLimiter {
-    active: AtomicUsize,
+    active: Mutex<usize>,
+    freed: Condvar,
     maximum: usize,
 }
 
 impl RequestLimiter {
     fn new(maximum: usize) -> Self {
         Self {
-            active: AtomicUsize::new(0),
+            active: Mutex::new(0),
+            freed: Condvar::new(),
             maximum,
         }
     }
 
     fn try_acquire(self: &Arc<Self>) -> Option<RequestPermit> {
-        let acquired = self
+        self.acquire_within(Duration::ZERO)
+    }
+
+    fn acquire_within(self: &Arc<Self>, timeout: Duration) -> Option<RequestPermit> {
+        let deadline = Instant::now() + timeout;
+        let mut active = self
             .active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                (active < self.maximum).then_some(active + 1)
-            })
-            .is_ok();
-        acquired.then(|| RequestPermit(Arc::clone(self)))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while *active >= self.maximum {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            active = self
+                .freed
+                .wait_timeout(active, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .0;
+        }
+        *active += 1;
+        Some(RequestPermit(Arc::clone(self)))
     }
 }
 
-struct RequestPermit(Arc<RequestLimiter>);
+pub struct RequestPermit(Arc<RequestLimiter>);
 
 impl Drop for RequestPermit {
     fn drop(&mut self) {
-        self.0.active.fetch_sub(1, Ordering::AcqRel);
+        let mut active = self
+            .0
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *active = active.saturating_sub(1);
+        self.0.freed.notify_one();
     }
 }
 
@@ -439,6 +577,51 @@ mod tests {
     }
 
     #[test]
+    fn busy_video_requests_queue_for_a_slot_instead_of_failing() {
+        let limiter = Arc::new(RequestLimiter::new(1));
+        let held = limiter.try_acquire().unwrap();
+        assert!(limiter.try_acquire().is_none());
+        let waiting = {
+            let limiter = Arc::clone(&limiter);
+            thread::spawn(move || limiter.acquire_within(Duration::from_secs(5)).is_some())
+        };
+        thread::sleep(Duration::from_millis(50));
+        drop(held);
+        assert!(waiting.join().unwrap(), "a queued request gets the freed slot");
+        assert!(limiter
+            .acquire_within(Duration::from_millis(20))
+            .is_some());
+    }
+
+    #[test]
+    fn admission_queues_video_but_fails_busy_audio_fast() {
+        let token = "a".repeat(48);
+        let video: Uri = format!("clipture-media://localhost/v1/session/{token}/video")
+            .parse()
+            .unwrap();
+        let audio: Uri =
+            format!("clipture-media://localhost/v1/session/{token}/audio?start=0&duration=8")
+                .parse()
+                .unwrap();
+        let admission = Arc::new(MediaAdmission::new());
+        let held_audio: Vec<_> = (0..MAXIMUM_IN_FLIGHT_AUDIO_REQUESTS)
+            .map(|_| admission.admit(&audio).unwrap())
+            .collect();
+        assert!(admission.admit(&audio).is_none(), "busy audio fails fast");
+        let mut held_video: Vec<_> = (0..MAXIMUM_IN_FLIGHT_VIDEO_REQUESTS)
+            .map(|_| admission.admit(&video).unwrap())
+            .collect();
+        let waiting = {
+            let admission = Arc::clone(&admission);
+            thread::spawn(move || admission.admit(&video).is_some())
+        };
+        thread::sleep(Duration::from_millis(50));
+        held_video.pop();
+        assert!(waiting.join().unwrap(), "busy video waits for a freed slot");
+        drop(held_audio);
+    }
+
+    #[test]
     fn route_requires_an_opaque_token_and_bounded_audio_query() {
         let token = "a".repeat(48);
         let video: Uri = format!("clipture-media://localhost/v1/session/{token}/video")
@@ -459,6 +642,52 @@ mod tests {
         assert!(parse_route(&traversal).is_err());
         assert!(parse_audio_query(Some("start=0&start=1&duration=8")).is_err());
         assert!(parse_audio_query(Some("start=0&duration=21")).is_err());
+    }
+
+    #[test]
+    fn remote_replies_fit_through_the_ui_process_pipe() {
+        // A larger body closes the window process (it rejects the frame).
+        let total = 64 * 1024 * 1024;
+        let chunk = RemoteVideoChunk {
+            range: ByteRange {
+                start: 10,
+                end_inclusive: 10 + 8 * 1024 * 1024 - 1,
+                total,
+            },
+            bytes: vec![7; 8 * 1024 * 1024],
+        };
+        let response = remote_video_response(chunk, false);
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.body().len() as u64, MAXIMUM_VIDEO_RESPONSE_BYTES);
+        // The UI process transport carries at most 4 MiB of body per frame.
+        assert!(MAXIMUM_VIDEO_RESPONSE_BYTES <= 4 * 1024 * 1024);
+        assert_eq!(
+            response.headers()[CONTENT_RANGE],
+            format!("bytes 10-{}/{total}", 10 + MAXIMUM_VIDEO_RESPONSE_BYTES - 1)
+        );
+    }
+
+    #[test]
+    fn remote_streams_accept_only_opaque_video_and_audio_routes() {
+        let token = "b".repeat(48);
+        let remote: Uri = format!("clipture-media://localhost/v1/remote/{token}/video")
+            .parse()
+            .unwrap();
+        assert!(matches!(parse_route(&remote), Ok(Route::Remote { .. })));
+        let audio: Uri = format!("clipture-media://localhost/v1/remote/{token}/audio?start=0&duration=8")
+            .parse()
+            .unwrap();
+        assert!(matches!(parse_route(&audio), Ok(Route::RemoteAudio { .. })));
+        for rejected in [
+            format!("clipture-media://localhost/v1/remote/{token}/audio"),
+            format!("clipture-media://localhost/v1/remote/{token}/audio?start=0&duration=8&path=x"),
+            format!("clipture-media://localhost/v1/remote/{token}/video?path=C:/secret.mp4"),
+            "clipture-media://localhost/v1/remote/short/video".to_owned(),
+            format!("clipture-media://localhost/v1/other/{token}/video"),
+        ] {
+            let uri: Uri = rejected.parse().unwrap();
+            assert!(parse_route(&uri).is_err(), "{rejected}");
+        }
     }
 
     #[test]

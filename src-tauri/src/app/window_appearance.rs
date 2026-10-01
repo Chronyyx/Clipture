@@ -25,6 +25,8 @@ pub fn apply(window: &WebviewWindow, settings: &ClipSettings) {
             UiTheme::Light => 0xf1f1ed,
             UiTheme::Glitten => 0xe8decd,
             UiTheme::Milate => 0x4b4e24,
+            UiTheme::MaidCafe => 0xffe3ec,
+            UiTheme::Halloween => 0x1b1530,
             UiTheme::Custom => parse_color(&settings.custom_main_color).unwrap_or(0x111110),
             _ => 0x111110,
         };

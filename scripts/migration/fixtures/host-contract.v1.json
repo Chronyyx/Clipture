@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "settingsDefaults": { "saveInPlace": true },
-  "captureFpsOptions": [24, 30, 60, 120, 144, 210, 240],
+  "settingsDefaults": { "saveInPlace": true, "saveInPlaceOverlap": true },
+  "captureFpsOptions": [24, 30, 60, 120],
   "source": "src/shared/types.ts#CliptureApi",
   "operations": [
     { "method": "getDiagnostics", "transport": "invoke", "channel": "engine:getDiagnostics", "adapterFailure": "reject-without-fabricating-engine-state" },
@@ -20,6 +20,9 @@
     { "method": "clipThumbnailUrl", "transport": "invoke", "channel": "library:clipThumbnailUrl" },
     { "method": "clipPlaybackUrl", "transport": "invoke", "channel": "library:clipPlaybackUrl" },
     { "method": "releasePlaybackCache", "transport": "invoke", "channel": "library:releasePlaybackCache" },
+    { "method": "getClipRepairStatus", "transport": "invoke", "channel": "library:getClipRepairStatus" },
+    { "method": "checkClipLayouts", "transport": "invoke", "channel": "library:checkClipLayouts" },
+    { "method": "fixClipLayouts", "transport": "invoke", "channel": "library:fixClipLayouts" },
     { "method": "listActiveProcesses", "transport": "invoke", "channel": "processes:list" },
     { "method": "listAudioInputDevices", "transport": "invoke", "channel": "audio:listInputDevices" },
     { "method": "listDisplayDevices", "transport": "invoke", "channel": "displays:list" },

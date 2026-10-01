@@ -71,11 +71,12 @@ const defaultSettings: ClipSettings = {
   uiTheme: "graphite",
   customMainColor: "#101114",
   customAccentColor: "#c8a6ff",
-  clipLengthSeconds: 30,
+  clipLengthSeconds: 60,
   saveInPlace: true,
-  fps: 30,
+  saveInPlaceOverlap: true,
+  fps: 60,
   bitrateMbps: 40,
-  autoBitrate: false,
+  autoBitrate: true,
   maxAutoBitrateMbps: 80,
   nvencPreset: 3,
   resolutionPreset: "system",
@@ -233,7 +234,7 @@ function normalizeSettings(settings: ClipSettings): ClipSettings {
   const nvencPreset = [1, 2, 3, 4, 5].includes(Number(settings.nvencPreset)) ? Number(settings.nvencPreset) as ClipSettings["nvencPreset"] : defaultSettings.nvencPreset;
   const validResolutionPresets = new Set(["system", "144p", "360p", "720p", "1080p", "1440p", "4k"]);
   const resolutionPreset = validResolutionPresets.has(settings.resolutionPreset) ? settings.resolutionPreset : defaultSettings.resolutionPreset;
-  const uiTheme = settings.uiTheme === "light" || settings.uiTheme === "glitten" || settings.uiTheme === "milate" || settings.uiTheme === "custom"
+  const uiTheme = settings.uiTheme === "light" || settings.uiTheme === "glitten" || settings.uiTheme === "milate" || settings.uiTheme === "maid-cafe" || settings.uiTheme === "halloween" || settings.uiTheme === "custom"
     ? settings.uiTheme
     : "graphite";
   const importedVideoDirectories = Array.from(new Set((settings.importedVideoDirectories ?? [])
@@ -250,6 +251,7 @@ function normalizeSettings(settings: ClipSettings): ClipSettings {
     customAccentColor: normalizeHexColor(settings.customAccentColor, defaultSettings.customAccentColor),
     clipLengthSeconds: clampNumber(settings.clipLengthSeconds, defaultSettings.clipLengthSeconds, 5, 600),
     saveInPlace: settings.saveInPlace !== false,
+    saveInPlaceOverlap: settings.saveInPlaceOverlap !== false,
     fps,
     nvencPreset,
     bitrateMbps: clampNumber(settings.bitrateMbps, defaultSettings.bitrateMbps, 4, 120),
@@ -782,6 +784,7 @@ class EngineClient {
       nvencPreset: settings.nvencPreset,
       clipLengthSeconds: settings.clipLengthSeconds,
       saveInPlace: settings.saveInPlace,
+      saveInPlaceOverlap: settings.saveInPlaceOverlap,
       saveFolder: settings.saveFolder,
       monitorId: settings.monitorId,
       targetWidth: targetResolution.width,
@@ -2856,6 +2859,8 @@ function isLightHexColor(value: string): boolean {
 function windowAppearance(settings: ClipSettings): { backgroundColor: string; symbolColor: string } {
   const isGlitten = settings.uiTheme === "glitten";
   const isMilate = settings.uiTheme === "milate";
+  const isMaidCafe = settings.uiTheme === "maid-cafe";
+  const isHalloween = settings.uiTheme === "halloween";
   const isLight = settings.uiTheme === "light" || isGlitten || (settings.uiTheme === "custom" && isLightHexColor(settings.customMainColor));
   return {
     backgroundColor: settings.uiTheme === "light"
@@ -2864,10 +2869,14 @@ function windowAppearance(settings: ClipSettings): { backgroundColor: string; sy
         ? "#e8decd"
         : isMilate
           ? "#4b4e24"
+        : isMaidCafe
+          ? "#ffe3ec"
+        : isHalloween
+          ? "#1b1530"
         : settings.uiTheme === "custom"
           ? settings.customMainColor
           : "#101114",
-    symbolColor: isGlitten ? "#4d4035" : isMilate ? "#f3e6bd" : isLight ? "#465265" : "#a5adba"
+    symbolColor: isGlitten ? "#4d4035" : isMilate ? "#f3e6bd" : isMaidCafe ? "#7a3f63" : isHalloween ? "#f3ead8" : isLight ? "#465265" : "#a5adba"
   };
 }
 
@@ -2888,7 +2897,6 @@ function saveSettings(settings: ClipSettings): ClipSettings {
   if (!settingsFileExisted || previous.startOnLogin !== normalized.startOnLogin) {
     app.setLoginItemSettings({
       openAtLogin: normalized.startOnLogin,
-      openAsHidden: true,
       args: app.isPackaged ? ["--hidden"] : [app.getAppPath(), "--hidden"],
     });
   }
@@ -3731,7 +3739,31 @@ ipcMain.handle("engine:saveClip", async (_event, durationSeconds: number) => {
   return await saveClipAndRecord(durationSeconds);
 });
 ipcMain.handle("settings:get", () => readSettings());
-ipcMain.handle("settings:save", (_event, settings: ClipSettings) => saveSettings(settings));
+// The folder the native picker last returned; a renderer save may adopt it once.
+let grantedSaveFolder: string | undefined;
+
+/** Folder settings are host-owned, matching the Tauri host: import roots and
+ * titles change only through import/rename/delete, and the save folder only to
+ * one the native picker returned, so a compromised page cannot widen what the
+ * library may delete. */
+function settingsFromRenderer(incoming: ClipSettings): ClipSettings {
+  const current = readSettings();
+  const sameFolder = (a: string, b: string) =>
+    normalize(a || ".").replace(/[\\/]+$/, "").toLowerCase() === normalize(b || ".").replace(/[\\/]+$/, "").toLowerCase();
+  let saveFolder = current.saveFolder;
+  if (typeof incoming.saveFolder === "string" && !sameFolder(incoming.saveFolder, current.saveFolder)) {
+    if (grantedSaveFolder && sameFolder(grantedSaveFolder, incoming.saveFolder)) saveFolder = incoming.saveFolder;
+    grantedSaveFolder = undefined;
+  }
+  return {
+    ...incoming,
+    saveFolder,
+    importedVideoDirectories: current.importedVideoDirectories,
+    importedVideoTitles: current.importedVideoTitles
+  };
+}
+
+ipcMain.handle("settings:save", (_event, settings: ClipSettings) => saveSettings(settingsFromRenderer(settings)));
 ipcMain.handle("library:list", () => listLibraryClips());
 ipcMain.handle("library:delete", (_event, ids: string[]) => deleteClips(Array.isArray(ids) ? ids : []));
 ipcMain.handle("library:importVideoFolders", () => importVideoFolders());
@@ -3813,6 +3845,14 @@ ipcMain.handle("library:clipIconUrl", (_event, clip: ClipRecord, preferredLabels
 ipcMain.handle("library:clipThumbnailUrl", (_event, filePath: string) => clipThumbnailUrl(filePath));
 ipcMain.handle("library:clipPlaybackUrl", (_event, filePath: string, audioTracks: string[]) => clipPlaybackUrl(filePath, audioTracks));
 ipcMain.handle("library:releasePlaybackCache", () => releasePlaybackCache());
+// Clip layout repair is implemented only by the Tauri host.
+const legacyClipRepairStatus = () => ({
+  phase: "idle", checked: 0, total: 0, needsRepair: 0, needsRepairBytes: 0, repaired: 0, failed: 0,
+  message: "Fixing clips is only available in the current Clipture app."
+});
+ipcMain.handle("library:getClipRepairStatus", () => legacyClipRepairStatus());
+ipcMain.handle("library:checkClipLayouts", () => legacyClipRepairStatus());
+ipcMain.handle("library:fixClipLayouts", () => legacyClipRepairStatus());
 ipcMain.handle("updates:getState", () => updateState);
 ipcMain.handle("updates:check", () => performUpdateCheck());
 ipcMain.handle("updates:download", () => downloadAppUpdate());
@@ -3869,5 +3909,6 @@ ipcMain.handle("dialog:selectFolder", async (_event, currentPath: string) => {
   if (result.canceled || result.filePaths.length === 0) {
     return currentPath;
   }
+  grantedSaveFolder = result.filePaths[0];
   return result.filePaths[0];
 });

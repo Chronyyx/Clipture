@@ -92,6 +92,9 @@ std::string jsonEscape(const std::string& value) {
 using SaveTimingClock = std::chrono::steady_clock;
 constexpr int64_t kHotReplayRetention100ns = 12LL * 10'000'000LL;
 constexpr std::size_t kSaveWriteBurstBytes = 2u * 1024u * 1024u;
+// Longest a save waits for frames still in the encoder (normally a few frame
+// times); past it the last encoded frame is held to the save moment instead.
+constexpr std::chrono::milliseconds kSaveEncoderCatchUpLimit{250};
 constexpr uint64_t kMiB = 1024ULL * 1024ULL;
 
 struct ReplayMemoryBudgets {
@@ -1214,8 +1217,11 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     settings_.nvencPreset = std::clamp(settings.nvencPreset, 1, 5);
     settings_.clipLengthSeconds = std::clamp(settings.clipLengthSeconds, 5, 600);
     settings_.saveInPlace = settings.saveInPlace;
+    settings_.saveInPlaceOverlap = settings.saveInPlaceOverlap;
     settings_.saveFolder = settings.saveFolder;
-    consumedWindow_.enable(settings_.saveInPlace);
+    // Overlap presents the full window again; its bytes are backfilled from the
+    // previous clip after each save. Consumption only applies when opted out.
+    consumedWindow_.enable(settings_.saveInPlace && !settings_.saveInPlaceOverlap);
     settings_.monitorId = settings.monitorId.empty() ? "primary" : settings.monitorId;
     settings_.targetWidth = std::max(0, settings.targetWidth);
     settings_.targetHeight = std::max(0, settings.targetHeight);
@@ -1665,6 +1671,9 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     };
     savePacing.burstBytes = kSaveWriteBurstBytes;
     savePacing.storageAwareRate = true;
+    if (learnedSaveWriteFolder_ == request.saveFolder) {
+        savePacing.learnedWriteBytesPerSecond = learnedSaveWriteBytesPerSecond_;
+    }
     savePacing.analyzeIo = request.analyzeIo;
     logEngineSaveTiming(
         "stutter_baseline",
@@ -1695,6 +1704,14 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     }
 
     const int duration = std::clamp(request.durationSeconds, 5, 600);
+    // The clip ends now. Frames captured just before are usually still inside
+    // the encoder (a few frame times); wait for them so the clip ends on real
+    // frames rather than holding the last finished one until this moment.
+    const int64_t saveHorizon100ns = mediaNow100ns();
+    const auto catchUpStartedAt = SaveTimingClock::now();
+    const bool encoderCaughtUp = encoderWorker_->waitForEncodedThrough(saveHorizon100ns, kSaveEncoderCatchUpLimit);
+    logEngineSaveTiming("encoder_catch_up", catchUpStartedAt,
+        std::string("reached=") + (encoderCaughtUp ? "true" : "false"));
     const auto snapshotStartedAt = SaveTimingClock::now();
     auto videoSnapshot = videoReplayStore_
         ? videoReplayStore_->snapshot()
@@ -1715,12 +1732,15 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             " queuedBytes=" + std::to_string(videoArchiveStats.queuedBytes) +
             " residentBytes=" + std::to_string(videoArchiveStats.residentPayloadBytes) +
             " residentBudgetBytes=" + std::to_string(videoArchiveStats.residentPayloadBudgetBytes) +
-            " ramFallbackBytes=" + std::to_string(videoArchiveStats.ramFallbackBytes));
+            " ramFallbackBytes=" + std::to_string(videoArchiveStats.ramFallbackBytes) +
+            " rehomeQueued=" + std::to_string(videoArchiveStats.rehomeQueuedPackets) +
+            " rehomedBytes=" + std::to_string(videoArchiveStats.rehomedBytes) +
+            " rehomeBytesPerSecond=" + std::to_string(videoArchiveStats.rehomeBytesPerSecond));
 
     const auto videoSelectStartedAt = SaveTimingClock::now();
     auto clipPackets = settings_.saveInPlace
-        ? replay::selectReplayVideo(std::move(videoSnapshot), duration, mediaNow100ns(), consumedWindow_.start())
-        : selectVideoWindowForClip(std::move(videoSnapshot), duration, mediaNow100ns());
+        ? replay::selectReplayVideo(std::move(videoSnapshot), duration, saveHorizon100ns, consumedWindow_.start())
+        : selectVideoWindowForClip(std::move(videoSnapshot), duration, saveHorizon100ns);
     logEngineSaveTiming("video_select", videoSelectStartedAt, "clipPackets=" + std::to_string(clipPackets.size()));
     if (clipPackets.empty()) {
         result.message = "No complete keyframe-starting H.264 window is buffered yet. Wait about one second and try again.";
@@ -2089,6 +2109,13 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         savePacing.experimentalInPlace = inPlaceSave.get();
         clipPackets.reserve(clipPackets.size() + audioPackets.size());
         clipPackets.insert(clipPackets.end(), audioPackets.begin(), audioPackets.end());
+        if (inPlaceSave && clipEnd > clipStart) {
+            uint64_t clipBytes = 0;
+            for (const auto& packet : clipPackets) clipBytes += payloadSize(packet);
+            const auto footageBytesPerSecond = static_cast<double>(clipBytes) * 10'000'000.0 /
+                static_cast<double>(clipEnd - clipStart);
+            inPlaceSave->setCopyPace(static_cast<uint64_t>(footageBytesPerSecond * replay::BackfillPace::saveCopyMultiplier));
+        }
         const auto muxStartedAt = SaveTimingClock::now();
         const auto mux = muxH264ToMp4(
             clipPackets,
@@ -2099,6 +2126,22 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             diagnostics_.bitrateMbps,
             savePacing);
         rememberIoAnalysis(mux);
+        if (inPlaceSave) {
+            logEngineSaveTiming("in_place_copy", muxStartedAt,
+                "copiedBytes=" + std::to_string(inPlaceSave->copiedBytes()));
+        }
+        if (inPlaceSave && settings_.saveInPlaceOverlap) {
+            // Retained packets now live in the detached file (published or kept
+            // for recovery). Copy them back just above the live rate, faster only
+            // for people who re-save quickly, so the next save stays instant.
+            backfillPace_.recordSave(std::chrono::steady_clock::now());
+            const auto multiplier = backfillPace_.multiplier(settings_.clipLengthSeconds + 5.0);
+            if (videoReplayStore_) videoReplayStore_->scheduleInPlaceRehome(multiplier);
+            if (aacReplayStore_) aacReplayStore_->scheduleInPlaceRehome(multiplier);
+            logEngineSaveTiming("backfill_schedule", SaveTimingClock::now(),
+                "multiplier=" + std::to_string(multiplier) + " expectedIntervalMs=" +
+                    std::to_string(static_cast<int64_t>(backfillPace_.expectedIntervalSeconds().value_or(0) * 1000)));
+        }
         logEngineSaveTiming(
             "mux",
             muxStartedAt,
@@ -2114,6 +2157,10 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         }
         outputFilePath = mux.filePath;
         savedAudioTracks = mux.audioTracks;
+        if (mux.learnedWriteBytesPerSecond > 0) {
+            learnedSaveWriteFolder_ = request.saveFolder;
+            learnedSaveWriteBytesPerSecond_ = mux.learnedWriteBytesPerSecond;
+        }
         muxMessage = mux.message;
     }
 

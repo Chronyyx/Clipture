@@ -1,10 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Clipture",
-  "version": "1.5.4",
+  "version": "1.6.0",
   "identifier": "app.clipture.desktop",
   "plugins": {
-    "updater": { "pubkey": "", "endpoints": [] }
+    "updater": { "pubkey": "", "endpoints": [] },
+    "deep-link": { "desktop": { "schemes": ["clipture"] } }
   },
   "build": {
     "beforeDevCommand": "npm run dev:web",
@@ -15,7 +16,8 @@
     "windows": [],
     "security": {
       "assetProtocol": { "enable": true, "scope": [] },
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* clipture-media: http://clipture-media.localhost https://clipture-media.localhost; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob: http://127.0.0.1:* clipture-media: http://clipture-media.localhost https://clipture-media.localhost; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost clipture-media: http://clipture-media.localhost https://clipture-media.localhost; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob: clipture-media: http://clipture-media.localhost https://clipture-media.localhost; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'",
+      "devCsp": "default-src 'self'; connect-src 'self' ipc: http://127.0.0.1:5173 ws://127.0.0.1:5173 http://ipc.localhost clipture-media: http://clipture-media.localhost https://clipture-media.localhost; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob: clipture-media: http://clipture-media.localhost https://clipture-media.localhost; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     }
   },
   "bundle": {

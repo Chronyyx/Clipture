@@ -1,5 +1,5 @@
 // Keep host validation and the contract fixture in sync with these choices.
-export const CAPTURE_FPS_OPTIONS = [24, 30, 60, 120, 144, 210, 240] as const;
+export const CAPTURE_FPS_OPTIONS = [24, 30, 60, 120] as const;
 export type CaptureFps = typeof CAPTURE_FPS_OPTIONS[number];
 
 export function normalizeCaptureFps(value: unknown): CaptureFps {

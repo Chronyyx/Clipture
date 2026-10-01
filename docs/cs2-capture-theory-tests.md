@@ -114,7 +114,7 @@ Tests: `ctest --test-dir build/engine -C Release --output-on-failure` and
 first). It uses isolated profiles, 120 FPS, tracing off/on/yield/off-repeat and
 decodes every saved video; it does not edit the installed profile.
 
-## September 13 validation and approved relaunch
+## September 13 validation and relaunch
 
 Native suite: 10/10 passed, including trace enabled/disabled, GPU handoff,
 HDR/cursor pixel equivalence, rational cadence, audio and replay. Trace parser
@@ -153,7 +153,7 @@ producer/consumer wait maxima 0.793/0.687 ms. No retained health sample showed
 pending-query backlog or skipped queries. These are desktop observations, not
 evidence that those stages remain fast during the marked smoke scene.
 
-The approved development relaunch at approximately 18:47:58 UTC used controller
+The development relaunch at approximately 18:47:58 UTC used controller
 33232 and engine 33072, with no duplicate recorder. Normal profile hash stayed
 `D66707E173008E91B5ACB547C267675BA249D82DA6B19B3A7D89D6EC85F50ADA`.
 Test candidate staged only in `release/tauri-unpacked`; installed binaries and
@@ -282,7 +282,7 @@ Validation of engine SHA-256
   passed. Native tests also ran during part of the desktop compatibility suite;
   these trials are not controlled CPU/GPU performance comparisons.
 
-The approved development recorder was stopped and backed up as
+The development recorder was stopped and backed up as
 `.cache/cs2-perf/before-direct-reader-5AC54D3C.exe` (actual pre-replacement hash
 prefix, not the older timing-build hash). The tested engine was staged in
 `release/tauri-unpacked` and relaunched with `--hidden`, direct reads enabled and
@@ -370,7 +370,7 @@ but that launch was not gated by a complete eight-trial report. The harness now
 writes `complete:false`, the active trial and failure information as it runs,
 and sets `complete:true` only after all eight pass. A new complete run is required.
 
-The user-approved candidate launch at 02:16 UTC used WGC via a process-only
+The candidate launch at 02:16 UTC used WGC via a process-only
 override, not a saved backend setting. No new smoke export was found on
 resumption. The recorder had since been relaunched and the user had restored
 the target from 144 to 120 FPS; these settings changes were preserved. The
@@ -413,7 +413,7 @@ host-contract suite, syntax checks and whitespace checks also passed. The previo
 engine was retained as `before-wgc-bgra-fix-6BEAF75A.exe`. The complete-report
 and matching-binary checks now gate deployment in the launch command.
 
-At 09:22:58 UTC the approved candidate started as controller 36516 / engine
+At 09:22:58 UTC the candidate started as controller 36516 / engine
 28496, with WGC monitor capture, direct texture reads and process-only timing.
 Settings hash remained `D66707E173008E91B5ACB547C267675BA249D82DA6B19B3A7D89D6EC85F50ADA`
 (120 FPS). No installed application files were modified. The new trace is
@@ -476,7 +476,7 @@ on engine SHA-256
 WGC 120 output was 120.037 packets/s; WGC 144 was 144.042 packets/s.
 These desktop checks establish compatibility, not smoke freshness.
 
-After the user's reboot, no Clipture process was running. At 18:59:17 UTC on
+After a reboot, no Clipture process was running. At 18:59:17 UTC on
 September 14 the verified candidate was staged and launched as controller
 15972 with the existing 120 FPS / save-in-place profile, WGC and process-only
 pipeline tracing. The old staged engine is retained in
@@ -484,12 +484,12 @@ pipeline tracing. The old staged engine is retained in
 changed. Startup confirms WGC, isolated NVENC and direct texture reads.
 Trace: `wgc-timestamp-app-20260914-01.stderr.log`; GPU sampling destination:
 `wgc-timestamp-smoke-gpu-20260914-01.json`, under `.cache/cs2-perf/`.
-The user was asked to save a clear / smoke / clear run and export diagnostics.
+Next step: save a clear / smoke / clear run and export diagnostics.
 Results remain pending; do not treat the earlier provisional 88 FPS as verified.
 
 ### Timestamp-corrected user smoke results (18:59 UTC launch)
 
-Collected automatically after the user run:
+Collected automatically after the gameplay run:
 
 - Export: `Clipture diagnostics 2026-09-14T19-01-27-781Z.json` in Downloads.
 - Video: `Counter-Strike 2/Clipture 2026-09-14 03-01-17 PM.mp4`.
@@ -624,3 +624,36 @@ A passive read-only diagnostics monitor watches new exports in Downloads and
 appends summaries to
 `C:\Users\aidav\AppData\Local\Temp\kilo\clipture-diagnostics-watch-results.jsonl`
 (user-requested; no sampling, decoding or recorder changes).
+
+## September 19: direct fresh NV12 conversion candidate
+
+Latest experiment: [ADR 0010](adr/0010-direct-fresh-nv12-conversion-experiment.md).
+The later early-retirement and frame-ready-handshake CS2
+experiments regressed and were rolled back; the older next-step list above is
+historical. Neither behavior is enabled in this candidate.
+
+Game performance is a hard constraint. No priority increase, game cap, quality
+change, or buffer resizing is used. The new default-off flag converts a fresh
+selected image directly into an existing reserved NVENC NV12 slot, removing the
+canonical-to-slot copy for that image. Repeats use a lazy independent canonical
+cache; their first additional conversion is an explicit possible regression.
+
+Release build, 16/16 native tests (including real NV12 pixel equality), host
+contracts, and six hardware compatibility trials passed. Full report:
+`.cache/cs2-perf/fresh-conversion-AqText/report.json`. Trials sustained approximately
+120 output packets/s with zero measured slot/queue/scheduler drops and clean
+decoding; they are not matched game trials and establish no smoke improvement.
+
+Candidate was launched alone with the daily 120 FPS/P3/auto-bitrate/audio settings
+copied to `.cache/cs2-perf/fresh-conversion-app-VLBWD7/profile`; clips are private
+to that profile. Startup confirms direct conversion and unchanged +1 GPU priority.
+Real smoke comparison, synchronized GPU sampling, and game-impact acceptance
+remain pending. ADR 0010 contains exact control/candidate commands and criteria.
+
+First candidate gameplay run is now recorded in ADR 0010: the September 20 02:42:46
+export and aligned GPU samples show ~120 output packets/s, ~83–108 distinct/s in
+the analyzed ten-second bins, no slot/queue/scheduler drops, and short NVENC calls
+(maximum window p95 ~0.39 ms). Effective auto-bitrate was 50 Mbps. GPU reached
+99%; one 98%-median bin still encoded ~100 distinct/s. This is promising but is
+not a matched comparison; exact smoke boundaries/game frametimes are unverified.
+Subjectively a small improvement. Control and acceptance remain pending.

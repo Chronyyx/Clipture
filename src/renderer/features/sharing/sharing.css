@@ -1,0 +1,1074 @@
+/* Friends tab. Built only from theme tokens so every theme applies. The one
+   expressive element is the wire bar: which parts of a clip have arrived
+   from a friend's PC. Everything around it stays quiet. */
+
+.share-view {
+  display: grid;
+  gap: 18px;
+  container: share-view / inline-size;
+}
+
+.share-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 22px;
+  -webkit-app-region: drag;
+}
+
+.share-header :is(button, input, label) { -webkit-app-region: no-drag; }
+
+.share-header-title,
+.share-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.share-header h1 {
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.share-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.share-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-subtle);
+}
+
+.share-status.online .share-status-dot { background: var(--toggle-on); }
+.share-status.starting .share-status-dot { background: var(--accent); }
+.share-status.error { color: var(--text); }
+.share-status.hidden .share-status-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--text-subtle);
+}
+.share-status.error .share-status-dot { background: #ef4444; }
+
+.share-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.share-status-error,
+.share-download-error {
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid #ef4444;
+  border-radius: 6px;
+  background: var(--surface-row);
+  color: var(--text);
+}
+
+.share-hint {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Layout: shared clips beside the people column. */
+.share-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 18px;
+  align-items: start;
+}
+
+@container share-view (max-width: 900px) {
+  .share-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* The player and its clip list sit side by side while the player can stay
+   at least 420px wide; otherwise the list wraps underneath. */
+.share-stage {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.share-stage-main {
+  flex: 999 1 420px;
+  min-width: 0;
+}
+
+/* minmax(0, 1fr): a video's natural width must never widen the column. */
+.share-stage-player {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.share-screen {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: var(--surface-video);
+}
+
+/* Clipture's player fills the screen; its shell sizes from its container,
+   so it must be given the full width and height explicitly. */
+.share-screen .custom-video-shell {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border-radius: 0;
+}
+
+.share-screen video {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+  background: var(--surface-video);
+}
+
+.share-screen-connecting {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.share-screen-connecting span {
+  position: relative;
+  z-index: 1;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.share-screen-message {
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.share-screen-message p { max-width: 46ch; line-height: 1.5; }
+
+/* Before play: the clip is shown, nothing streams yet. */
+.share-play {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  padding: 0 0 0 4px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+
+.share-play:hover { transform: scale(1.06); }
+.share-play:active { transform: scale(0.97); }
+
+.share-play:focus-visible {
+  outline: 2px solid var(--selection);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .share-play { transition: none; }
+}
+
+.share-buffering {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 62%);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.share-stage-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  padding: 16px 18px 12px;
+}
+
+.share-stage-title {
+  display: grid;
+  flex: 1 1 220px;
+  gap: 5px;
+  min-width: 0;
+}
+
+.share-stage-title h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.share-stage-title p {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.share-stage-actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.share-stage-actions .icon-button,
+.share-row-actions .icon-button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-control);
+  color: var(--icon);
+}
+
+.share-stage-actions .icon-button:hover,
+.share-row-actions .icon-button:hover { background: var(--surface-hover); }
+
+.share-keep-rate {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.share-keep-cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.share-keep {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* The keep button doubles as its own progress bar while copying. */
+.share-keep-progress:disabled {
+  opacity: 1;
+  background:
+    linear-gradient(to right, var(--accent) var(--progress, 0%), transparent var(--progress, 0%)),
+    var(--surface-active);
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  transition: background-size 250ms linear;
+}
+
+.share-download-error { margin: 0 18px 12px; }
+
+/* The wire: arrived spans from the friend's PC, with the playhead. */
+.share-wire {
+  display: grid;
+  gap: 9px;
+  padding: 0 18px 18px;
+}
+
+.share-wire-track {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background:
+    repeating-linear-gradient(90deg, var(--border) 0 6px, transparent 6px 10px);
+}
+
+.share-wire-span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: left 200ms ease-out, width 200ms ease-out;
+}
+
+.share-wire-head {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-strong);
+}
+
+.share-wire p {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.share-wire strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.share-skeleton-button { width: 140px; height: 38px; border-radius: 6px; }
+.share-skeleton-wire { height: 6px; margin: 0 18px 18px; border-radius: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .share-wire-span,
+  .share-keep-progress:disabled { transition: none; }
+}
+
+/* Rail of shared clips. */
+.share-rail {
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  min-width: 0;
+  max-height: 560px;
+  /* Both edges: whichever one touches the player shows; the stage clips
+     the other. */
+  box-shadow: -1px 0 0 var(--border), 0 -1px 0 var(--border);
+  background: var(--surface-row);
+}
+
+.share-rail-head {
+  margin: 0;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.share-rail-head span {
+  margin-left: 4px;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+.share-rail-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  margin: 0;
+  padding: 8px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.share-rail-item {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  padding: 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.share-rail-item:hover { background: var(--surface-hover); }
+
+.share-rail-item.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.share-tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 5px;
+  background: var(--surface-active);
+}
+
+.share-tile-letter {
+  color: var(--text-subtle);
+  font-family: var(--font-display);
+  font-size: 22px;
+}
+
+.share-tile-duration {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgb(0 0 0 / 70%);
+  color: #fff;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.share-rail-copy {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.share-rail-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-rail-copy > span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-rail-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.share-empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  min-height: 320px;
+  padding: 32px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.share-empty svg { color: var(--text-subtle); }
+
+.share-empty h2 {
+  color: var(--text-strong);
+  font-size: 18px;
+}
+
+.share-empty p { max-width: 44ch; line-height: 1.5; }
+
+/* People column. */
+.share-people {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.share-people > section,
+.share-add-form {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.share-people h2 {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.share-people h2 span {
+  margin-left: 4px;
+  color: var(--text-subtle);
+  font-weight: 400;
+}
+
+.share-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.share-name-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+  padding: 4px 8px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.share-name-button:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.share-name-input { width: 60%; }
+
+/* The friend code: a key people read aloud, set in four-character groups. */
+.share-code {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  line-height: 1.45;
+  user-select: all;
+}
+
+.share-code-loading {
+  display: grid;
+  gap: 12px;
+}
+
+.share-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.share-add-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.share-add-form input { width: 100%; }
+
+.share-add-form .primary {
+  justify-content: center;
+  gap: 8px;
+}
+
+.share-friend-list {
+  display: grid;
+  gap: 2px;
+  margin: 0 -8px;
+  padding: 0;
+  list-style: none;
+}
+
+.share-friend-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.share-friend-row:hover { background: var(--surface-row); }
+
+.share-avatar {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.share-friend-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.share-friend-copy strong {
+  overflow: hidden;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-friend-copy > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.share-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.share-row-actions .icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+.share-row-actions .share-accept {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.share-danger {
+  min-height: 32px;
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.share-requests {
+  border-color: var(--accent-border) !important;
+}
+
+/* First run. */
+.share-intro {
+  display: grid;
+  justify-items: start;
+  gap: 16px;
+  max-width: 560px;
+  margin: 24px auto;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.share-intro > svg { color: var(--accent); }
+
+.share-intro h2 {
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.share-intro ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-intro li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.share-intro li svg {
+  margin-top: 1px;
+  color: var(--text-muted);
+}
+
+/* Share dialog. */
+.share-dialog {
+  max-width: 420px;
+  margin: auto;
+  padding: 22px;
+  gap: 14px;
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+  -webkit-app-region: no-drag;
+}
+
+.share-dialog:not([open]) { display: none; }
+
+.share-dialog::backdrop { background: rgb(0 0 0 / 60%); }
+
+.share-dialog h2 {
+  color: var(--text-strong);
+  font-size: 18px;
+}
+
+.share-dialog-clip {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-pick-list {
+  display: grid;
+  gap: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.share-pick {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-row);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.share-pick:hover { background: var(--surface-hover); }
+
+.share-pick.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.share-pick-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-pick-skeleton { height: 50px; border-radius: 8px; }
+
+.share-dialog-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 18px 8px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.share-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.share-dialog-actions .primary { gap: 8px; }
+
+:is(.share-view, .share-dialog) :is(button, input):focus-visible {
+  outline: 2px solid var(--selection);
+  outline-offset: 2px;
+}
+
+/* Presence: a dot on the avatar corner. Hollow means offline or unknown. */
+.share-presence-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--text-subtle);
+}
+
+.share-avatar .share-presence-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  border: 2px solid var(--sidebar-bg);
+  box-sizing: content-box;
+}
+
+.share-presence-dot.online {
+  background: var(--toggle-on);
+  box-shadow: none;
+}
+
+.share-presence-dot.unknown { opacity: 0.5; }
+
+.share-pick-name small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.share-rail-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.share-rail-filter .icon-button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  color: var(--icon);
+}
+
+/* Left sidebar: status switch and friends, under the recorder card. */
+.share-side {
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.share-side-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.share-side-head h2 {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.share-side-head span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.share-side-status {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-deep);
+}
+
+.share-side-status button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.share-side-status button:hover { color: var(--text); }
+
+.share-side-status button.active {
+  background: var(--surface-active);
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.share-side-status .share-presence-dot {
+  width: 8px;
+  height: 8px;
+}
+
+.share-side-note {
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.share-side-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-side-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.share-side-row:hover { background: var(--surface-hover); }
+
+.share-side-row :is(.share-avatar) {
+  font-weight: 700;
+}
+
+.share-side-row.offline .share-side-name,
+.share-side-row.pending .share-side-name { color: var(--text-muted); }
+
+.share-side-row.offline .share-avatar { opacity: 0.6; }
+
+.share-side-request {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  background: var(--surface-hover);
+}
+
+.share-side-request .share-side-row { flex: 1; min-width: 0; }
+.share-side-request .share-side-row:hover { background: transparent; }
+.share-side-request .share-side-name small { color: var(--text-muted); }
+.share-side-accept { flex: none; margin-right: 4px; }
+
+.share-side-name {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-side-name small {
+  color: var(--text-subtle);
+  font-size: 11.5px;
+}
+
+.share-side-invite {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.share-side-invite:hover {
+  border-style: solid;
+  color: var(--text);
+}
+
+.share-side :is(button):focus-visible {
+  outline: 2px solid var(--selection);
+  outline-offset: 2px;
+}
+
+:is(.share-people, .share-dialog) .share-avatar .share-presence-dot { border-color: var(--surface); }
+
+/* Invite card: the link is the main action; the raw code is a fallback. */
+.share-code-card .primary.share-copy-button { width: 100%; justify-content: center; }
+
+.share-disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  justify-self: start;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.share-disclosure:hover { color: var(--text); }
+.share-disclosure svg { transition: transform 150ms ease-out; }
+.share-disclosure[aria-expanded="true"] svg { transform: rotate(180deg); }
+
+.share-code-reveal {
+  display: grid;
+  gap: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .share-disclosure svg { transition: none; }
+}
+
+/* Invite confirmation. */
+.share-invite-who {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.share-invite-who h2 { line-height: 1.25; }
+
+.share-invite-code {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-row);
+  color: var(--text);
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+  text-align: center;
+}

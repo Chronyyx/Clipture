@@ -7,6 +7,8 @@ add_executable(clipture_replay_tests
   InPlaceAudioFixture.cpp
   InPlaceRollingFixture.cpp
   InPlaceArchiveTests.cpp
+  InPlaceOverlapTests.cpp
+  InPlaceInterleaveTests.cpp
   PayloadLayoutTests.cpp
   PayloadCopyTests.cpp
   ExtentStoreTests.cpp
@@ -28,6 +30,7 @@ add_executable(clipture_replay_tests
   ../../src/replay/InPlaceMediaBuffer.cpp
   ../../src/replay/InPlacePacketArchive.cpp
   ../../src/replay/ConsumedWindow.cpp
+  ../../src/replay/BackfillPace.cpp
   ../../src/platform/windows/InPlaceFile.cpp
   ../../src/H264PacketAnalyzer.cpp
   ../../src/ReplaySegmentStore.cpp

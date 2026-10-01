@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.6.0] - 2026-10-01
+
+### Friend Sharing, Smaller Clips & Signed Runtime Updates
+
+#### Friend-to-friend clip sharing (ADR 0011)
+
+- **Peer-to-peer sharing over iroh:** New opt-in Friends tab. Friends are added by invite link (`clipture.app/invite`) and clips go directly between the two PCs over QUIC, with no Clipture server in the path. LAN peers are found over mDNS and connect directly; a relay is used only when no direct path exists, and the UI says when it is.
+- **Click-to-play streaming:** A shared clip streams only after Play is pressed. Up to four fetch runways follow the playhead, fill the clip in playback order from its sample tables, and skip zero-filled ranges on the wire (sparse range replies). The stream is cached in a sparse temporary file, so seeking back is instant and every audio track can be mixed once the clip has arrived.
+- **Stream-ready copies:** Sharing makes a lossless, verified FFmpeg remux (`+faststart`, playback-ordered samples, no padding) under `<saveFolder>\.clipture-sharing`, capped at 10 GB / 30 days and removed with the share. Originals are never modified. A 719 MB clip over a 56 Mbit/s upload now shows its first frame in 1.6 s instead of 8.9 s.
+- **Resumable "Add to library":** Downloads run at the full speed of both connections, resume from a verified partial file after a drop (backoff of 1–30 s), show speed and relay state, and can be cancelled.
+- **All audio tracks:** Streams and library copies keep every track; streamed playback mixes the selected tracks through FFmpeg.
+
+#### Recording and saving
+
+- **Capped-quality rate control (ADR 0012):** NVENC now encodes VBR at CQ 21, using the configured bitrate as a one-second VBV ceiling, instead of constant bitrate. Measured on 1440p120 footage: 24–32% of the previous size at VMAF within 0.15, and under 1% more encoder time. Constant bitrate remains the automatic fallback for GPUs or drivers that reject it.
+- **No more padded clips:** Save trims unused arena space off the end of an in-place clip and releases free slots inside it as sparse ranges, instead of writing them out as zeros. Up to half of a clip could previously be padding.
+- **Exact frame rate:** A save now waits (bounded to 250 ms) for frames still inside the encoder, so clips end on real frames rather than holding the last one. Clips report exactly their capture rate (60, not 59.97).
+- **120 FPS capture:** Added as an experimental recording target.
+- **Overlapping in-place saves:** New default `saveInPlaceOverlap`. Footage retained after a save is copied back into the live arena in the background at low I/O priority, so consecutive saves can overlap like the legacy RAM path.
+- **Fix clips:** Settings can now losslessly repair clips with a poor sample layout or zero padding, after verification and without touching clips that do not need it.
+- **Replay-buffer cleanup:** Abandoned `.clipture-replay` buffers left by crashes or forced exits are removed on start.
+- **Default app tracks:** The default browser and Discord are added once as separate audio tracks and never re-added after removal.
+- **Fresh NV12 conversion (ADR 0010):** Opt-in experiment that converts the selected frame straight into the encoder's input surface.
+
+#### Updates and reliability
+
+- **Signed component runtimes (ADR 0009):** Updates stage a Minisign-signed runtime from the GitHub release, reusing unchanged files and 1 MiB blocks, and activate on the next launch or on Apply now. No installer or elevation is needed.
+- **Engine lifetime:** The capture engine is tied to the controller with a kill-on-close job object, so it can no longer be orphaned and block a reinstall.
+- **UI stability:** Media replies over the UI pipe's 4 MiB limit fail that request instead of closing the window, and closing the window is always delivered.
+- **Crash log:** Panics and unexpected UI-worker exits are written to `crash.log` in the data folder.
+
+#### Interface
+
+- **Settings redesign:** Recording, Storage, Audio and Notification sections, a hotkey field, and wording that says what each setting does ("Maximum bitrate").
+- **Library:** Loading skeletons, lazy thumbnail loading, and a recorder status panel.
+- **Themes:** New Maid café and Halloween themes.
+
+#### Build and release
+
+- **Pinned FFmpeg:** FFmpeg 9.0.2 is downloaded once and verified against pinned SHA-256 hashes.
+- **Optional Authenticode signing:** Configurable through `WINDOWS_SIGN_COMMAND`.
+- **Hardened workflows:** Actions are pinned to commit SHAs and maintained by Dependabot.
+- **clipture.app:** The site is rendered and deployed with each release.
+
 ## [1.5.4] - 2026-09-11
 
 ### Audio Mixer Quantization & 100 Hz Buzz Elimination

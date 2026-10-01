@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 interface DraftNumberInputProps {
+  id?: string;
   value: number;
   min: number;
   max: number;
@@ -8,7 +9,7 @@ interface DraftNumberInputProps {
   onCommit: (value: number) => void;
 }
 
-export function DraftNumberInput({ value, min, max, disabled = false, onCommit }: DraftNumberInputProps) {
+export function DraftNumberInput({ id, value, min, max, disabled = false, onCommit }: DraftNumberInputProps) {
   const [draft, setDraft] = useState(() => String(value));
   const cancelNextBlur = useRef(false);
 
@@ -27,6 +28,7 @@ export function DraftNumberInput({ value, min, max, disabled = false, onCommit }
 
   return (
     <input
+      id={id}
       type='text'
       inputMode='numeric'
       pattern='[0-9]*'

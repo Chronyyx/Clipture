@@ -17,9 +17,57 @@ The release workflow creates a draft first, validates all four assets, and only 
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the non-empty password for that key.
 - `GITHUB_TOKEN` is supplied automatically by Actions and receives `contents: write` only in the release workflow.
 
-The updater private key is not Windows Authenticode signing. Add certificate-based Windows code signing separately before a public production launch if SmartScreen reputation is required. Never commit, print, upload, or put the updater private key in a `.env` file. The developer key currently held outside this repository must remain outside this repository and must not be read by tests or migration scripts.
+The updater private key is not Windows Authenticode signing. Never commit, print, upload, or put the updater private key in a `.env` file. The developer key currently held outside this repository must remain outside this repository and must not be read by tests or migration scripts.
 
-The public verification key currently committed in `src-tauri/tauri.release.conf.json` belongs to a LOCAL DEVELOPMENT TEST key. It is not a production signing setup and must not be published as one. Before the first public Tauri release, configure the production public key and matching CI secrets. Tauri requires key content, not a filesystem path. After clients ship, rotation needs a staged plan and an ADR.
+Release CI rejects malformed public keys and the known local development key via
+`scripts/release/validate-production-key.cjs`. The current configured key passes
+that read-only guard; this does not prove that CI has its matching private key.
+Production signing requires that match. Tauri requires key content, not a
+filesystem path. After clients ship, rotation needs a staged plan and an ADR.
+
+## Bundled FFmpeg
+
+`npm run stage:tauri` stages the FFmpeg pinned in `scripts/fetch-ffmpeg.cjs`
+(gyan.dev essentials build, currently 9.0.2). The script downloads it once into
+`build/ffmpeg/<version>/`, checks the archive and the extracted `ffmpeg.exe`
+against pinned SHA-256 hashes, and fails on any mismatch; release CI re-checks
+the staged binary with `scripts/release/test-ffmpeg-pin.cjs`.
+`CLIPTURE_FFMPEG_PATH` still overrides the source for local experiments. To
+update, change the version, URL and both hashes together (verify the archive
+hash against gyan.dev's published `.sha256`), then run the real-FFmpeg tests:
+`CLIPTURE_TEST_FFMPEG=<path> cargo test -- --ignored`. The npm
+`ffmpeg-static` package remains only for the legacy Electron build and
+developer scripts.
+
+## Windows code signing (Authenticode)
+
+Signing is opt-in and off until configured; unsigned releases log a warning.
+It is separate from the updater key above: Authenticode lets Windows and
+SmartScreen verify the publisher of the installer and every executable.
+
+- Repository variable `WINDOWS_SIGN_COMMAND`: the command that signs one file,
+  with `%1` where the file path goes. Tauri runs it for the app and installer,
+  and the workflow runs it for the three standalone runtime binaries before
+  their manifest hashes are computed.
+- Repository variable `WINDOWS_SIGN_INSTALL` (optional): installs the signing
+  tool on the runner.
+- Secrets `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`: exposed
+  only to the build and runtime-publish steps.
+
+For Azure Artifact Signing (formerly Trusted Signing), following Tauri's
+documented invocation (confirm flags with the tool's `--help`):
+
+```text
+WINDOWS_SIGN_INSTALL = cargo install artifact-signing-cli --version 0.11.0 --locked
+WINDOWS_SIGN_COMMAND = artifact-signing-cli -e https://<region>.codesigning.azure.net -a <account> -c <certificate-profile> -d Clipture %1
+```
+
+When signing is configured, the release fails unless the installer and the
+runtime binaries all carry a valid Authenticode signature.
+
+Workflow actions are pinned to commit SHAs; `.github/dependabot.yml` proposes
+updates. Workflow scripts read the tag, titles and asset names from the
+environment rather than from expressions spliced into script text.
 
 ## Host integration status
 
@@ -47,6 +95,38 @@ The implementation under `src-tauri/src/updates/` is connected to the host:
 5. Host capabilities advertise the commands and `updates://state-changed`.
 
 The service publishes the renderer's existing state shape without a WebView.
+The native controller checks once, four seconds after startup, and automatically
+stages a signed runtime from the GitHub release. Reopening the UI does not check
+again. The runtime manifest and its Minisign signature authorize exactly five
+files, their sizes, SHA-256 digests and 1 MiB block maps. Manual checks remain
+retryable; the once-only policy belongs to the background scheduler, not the
+service. Unchanged whole files and matching blocks (including shifted blocks)
+are reused. Missing blocks use validated HTTP ranges; a server returning a full
+200 response falls back to a bounded, authenticated whole-file download. Release publishing
+signs and verifies `components-v1.json` with the existing updater key.
+
+Runtime files live under `%LOCALAPPDATA%\Clipture\runtime`; durable data and
+`saveFolder` remain unchanged. Activation occurs on the next full launch or by
+explicit Apply now confirmation. Native activation restarts the controller and
+engine and loses unsaved replay. Live engine-only replacement is not implemented.
+Compatible UI workers can use the staged executable without restarting capture;
+compatibility defaults to full restart when the compiled native identity differs.
+The original installed entrypoint forwards to verified newer runtimes without
+an installer or elevation. Previous versions are retained. The handoff supervisor
+waits for both the Tauri event loop and successful engine configuration/hotkey
+IPC with `engineRunning`, then observes five seconds of controller liveness.
+A window appearing alone is not a successful update. Failed startup kills the
+owned candidate tree and restarts the previous controller. The exact failed
+signed runtime is excluded from staging, activation and compatible UI refresh;
+later releases remain eligible. Failure to write the quarantine marker must not
+prevent attempting recovery. This is startup health, not capture-quality proof.
+Real signed process-handoff validation in a disposable Windows account/VM remains a release gate.
+Do not treat unit tests as evidence that activation succeeded in a real build.
+
+See [ADR 0009](../adr/0009-signed-component-runtime-updates.md) for the trust and
+activation boundaries and the remaining release checklist.
+
+The legacy NSIS path remains for older clients and the isolated installer smoke:
 New windows request the current snapshot. Downloads stream into temporary files
 with incremental Minisign verification, a 512 MiB payload cap and 512 KiB writes.
 Healthy/elevated/critical capture pressure sets transfer ceilings of 32/16/4 MiB/s;

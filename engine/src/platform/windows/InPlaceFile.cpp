@@ -3,6 +3,7 @@
 #include <array>
 #include <cstring>
 #include <vector>
+#include <winioctl.h>
 
 namespace clipture::platform::windows {
 std::shared_ptr<InPlaceFile> InPlaceFile::create(const std::filesystem::path& path) {
@@ -28,6 +29,14 @@ InPlaceFile::~InPlaceFile() {
 }
 void InPlaceFile::discardWhenUnused() { std::lock_guard lock(mutex_); discard_ = true; }
 void InPlaceFile::retainForRecovery() { std::lock_guard lock(mutex_); discard_ = false; }
+namespace {
+bool lowPriorityHint(HANDLE handle) {
+    FILE_IO_PRIORITY_HINT_INFO hint{};
+    hint.PriorityHint = IoPriorityHintLow;
+    return SetFileInformationByHandle(handle, FileIoPriorityHintInfo, &hint, sizeof(hint)) != FALSE;
+}
+}
+bool InPlaceFile::lowerIoPriority() { std::lock_guard lock(mutex_); return lowPriorityHint(handle_); }
 uint64_t InPlaceFile::size() const noexcept { std::lock_guard lock(mutex_); return end_; }
 InPlaceIo InPlaceFile::io() const { std::lock_guard lock(mutex_); return io_; }
 
@@ -73,6 +82,39 @@ bool InPlaceFile::writeSlot(uint64_t offset, std::span<const std::byte> bytes) {
     if (state_ != State::Appending || offset < mediaStart || bytes.empty()) return false;
     if (!writeAt(offset, bytes, io_.mediaWritten)) { state_ = State::Failed; return false; }
     end_ = std::max(end_, offset + bytes.size());
+    return true;
+}
+bool InPlaceFile::zeroSlot(uint64_t offset, uint64_t length) {
+    std::lock_guard lock(mutex_);
+    if (state_ != State::Appending || offset < mediaStart || offset > end_ || length > end_ - offset) return false;
+    if (length == 0) return true;
+    // A sparse range reads back as zeros without occupying disk space, so a
+    // clip does not keep the arena's free slots on disk. The attribute is only
+    // set here, at save, so recording writes are never affected by it.
+    if (!sparse_) {
+        DWORD ignored = 0;
+        sparse_ = DeviceIoControl(handle_, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &ignored, nullptr) != FALSE;
+    }
+    FILE_ZERO_DATA_INFORMATION range{};
+    range.FileOffset.QuadPart = static_cast<LONGLONG>(offset);
+    range.BeyondFinalZero.QuadPart = static_cast<LONGLONG>(offset + length);
+    DWORD ignored = 0;
+    if (DeviceIoControl(handle_, FSCTL_SET_ZERO_DATA, &range, sizeof(range), nullptr, 0, &ignored, nullptr)) return true;
+    static const std::vector<std::byte> zeros(512 * 1024);
+    for (uint64_t done = 0; done < length;) {
+        const auto bytes = static_cast<std::size_t>(std::min<uint64_t>(zeros.size(), length - done));
+        if (!writeAt(offset + done, std::span(zeros).first(bytes), io_.mediaWritten)) { state_ = State::Failed; return false; }
+        done += bytes;
+    }
+    return true;
+}
+bool InPlaceFile::trimEnd(uint64_t end) {
+    std::lock_guard lock(mutex_);
+    if (state_ != State::Appending || end < mediaStart || end > end_) return false;
+    FILE_END_OF_FILE_INFO info{};
+    info.EndOfFile.QuadPart = static_cast<LONGLONG>(end);
+    if (!SetFileInformationByHandle(handle_, FileEndOfFileInfo, &info, sizeof(info))) return false;
+    end_ = end;
     return true;
 }
 std::optional<uint64_t> InPlaceFile::appendFinalSample(std::span<const std::byte> bytes) {
@@ -124,6 +166,9 @@ bool InPlaceFile::publish(const std::filesystem::path& destination) {
     state_ = State::Published;
     CloseHandle(handle_);
     handle_ = reader;
+    // A published clip is only read again to copy overlapping footage forward
+    // (backfill or a quick re-save), both of which must yield to the game.
+    lowPriorityHint(handle_);
     return true; // Same file identity; no copy fallback hidden here.
 }
 } // namespace clipture::platform::windows

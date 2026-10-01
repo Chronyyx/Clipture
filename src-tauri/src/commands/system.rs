@@ -109,11 +109,11 @@ pub async fn select_folder(
         .await?
         .map(|path| path.into_path().map_err(|error| error.to_string()))
         .transpose()?;
-    Ok(Some(
-        selected
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or(current_path),
-    ))
+    let selected = selected.map(|path| path.to_string_lossy().into_owned());
+    if let Some(folder) = &selected {
+        state.settings.grant_save_folder(folder);
+    }
+    Ok(Some(selected.unwrap_or(current_path)))
 }
 
 fn reveal(path: &std::path::Path, select_file: bool) -> AppResult<()> {

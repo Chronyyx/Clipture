@@ -18,26 +18,30 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: "1"
+      # Scripts read values from the environment. An expression written inside
+      # `run:` is spliced into the script source, so a crafted tag or title
+      # could otherwise execute as PowerShell.
+      RELEASE_TAG: ${{ github.ref_name }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: x86_64-pc-windows-msvc
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> src-tauri/target
 
@@ -46,7 +50,7 @@ jobs:
 
       - name: Validate version and prepare release notes
         id: release_notes
-        run: node scripts/extract-release-notes.cjs "${{ github.ref_name }}" release-notes.md
+        run: node scripts/extract-release-notes.cjs "$env:RELEASE_TAG" release-notes.md
 
       - name: Export release notes for Tauri action
         id: release_body
@@ -60,7 +64,7 @@ jobs:
       - name: Validate all release versions
         shell: pwsh
         run: |
-          $tagVersion = "${{ github.ref_name }}".Substring(1)
+          $tagVersion = $env:RELEASE_TAG.Substring(1)
           $packageVersion = (Get-Content -Raw -LiteralPath package.json | ConvertFrom-Json).version
           $tauriVersion = (Get-Content -Raw -LiteralPath src-tauri/tauri.conf.json | ConvertFrom-Json).version
           $cargoText = Get-Content -Raw -LiteralPath src-tauri/Cargo.toml
@@ -80,6 +84,7 @@ jobs:
           node scripts/testing/test-library-snapshot.cjs
           node scripts/release/test-electron-bridge.cjs
           node scripts/release/test-production-key.cjs
+          node scripts/release/test-runtime-manifest.cjs
           node scripts/release/test-installer-template.cjs
           node scripts/release/test-windows-runtime-imports.cjs
 
@@ -98,6 +103,9 @@ jobs:
       - name: Stage Tauri sidecars
         run: npm run stage:tauri
 
+      - name: Verify pinned FFmpeg
+        run: node scripts/release/test-ffmpeg-pin.cjs
+
       - name: Test Rust host
         run: cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
 
@@ -114,17 +122,53 @@ jobs:
             throw "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is required."
           }
 
+      - name: Compute native compatibility identity
+        shell: pwsh
+        run: |
+          $identity = node scripts/release/native-identity.cjs
+          if ($LASTEXITCODE -ne 0 -or $identity -notmatch '^[a-f0-9]{64}$') { throw "Native identity generation failed" }
+          "CLIPTURE_NATIVE_ID=$identity" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # Authenticode signing is opt-in: set the WINDOWS_SIGN_COMMAND repository
+      # variable (with %1 for the file) and the credentials it needs. Without
+      # it the release proceeds unsigned, with a warning. See docs/migration/release.md.
+      - name: Configure Windows code signing
+        id: signing
+        shell: pwsh
+        env:
+          WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
+          WINDOWS_SIGN_INSTALL: ${{ vars.WINDOWS_SIGN_INSTALL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGN_COMMAND)) {
+            Write-Warning "WINDOWS_SIGN_COMMAND is not set; this release will not be Authenticode-signed."
+            "config_arg=" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            "enabled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            exit 0
+          }
+          if ($env:WINDOWS_SIGN_COMMAND -notmatch '%1') { throw "WINDOWS_SIGN_COMMAND must contain %1 for the file to sign." }
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGN_INSTALL)) {
+            Invoke-Expression $env:WINDOWS_SIGN_INSTALL
+            if ($LASTEXITCODE -ne 0) { throw "Signing tool installation failed." }
+          }
+          @{ bundle = @{ windows = @{ signCommand = $env:WINDOWS_SIGN_COMMAND } } } | ConvertTo-Json -Depth 4 |
+            Out-File -FilePath src-tauri/tauri.signing.conf.json -Encoding utf8
+          "config_arg=--config src-tauri/tauri.signing.conf.json" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Build signed Tauri NSIS release
         id: tauri_release
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         with:
           projectPath: .
           tauriScript: npm run tauri
-          args: --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.release.conf.json
+          args: --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.release.conf.json ${{ steps.signing.outputs.config_arg }}
           tagName: ${{ github.ref_name }}
           releaseName: ${{ steps.release_notes.outputs.release_title }}
           releaseBody: ${{ steps.release_body.outputs.body }}
@@ -160,15 +204,18 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NSIS_INSTALLER: ${{ steps.nsis.outputs.installer }}
+          NSIS_ASSET_NAME: ${{ steps.nsis.outputs.asset_name }}
+          NSIS_SIGNATURE: ${{ steps.nsis.outputs.signature }}
         run: |
           New-Item -ItemType Directory -Path release-bridge -Force | Out-Null
-          gh release download "${{ github.ref_name }}" --pattern latest.json --dir release-bridge --clobber
+          gh release download "$env:RELEASE_TAG" --pattern latest.json --dir release-bridge --clobber
           $releaseDate = (git show -s --format=%cI $env:GITHUB_SHA).Trim()
           node scripts/release/create-electron-bridge.cjs `
-            --version "${{ github.ref_name }}" `
-            --installer "${{ steps.nsis.outputs.installer }}" `
-            --asset-name "${{ steps.nsis.outputs.asset_name }}" `
-            --signature "${{ steps.nsis.outputs.signature }}" `
+            --version "$env:RELEASE_TAG" `
+            --installer "$env:NSIS_INSTALLER" `
+            --asset-name "$env:NSIS_ASSET_NAME" `
+            --signature "$env:NSIS_SIGNATURE" `
             --latest-json release-bridge/latest.json `
             --release-date $releaseDate `
             --output release-bridge/latest.yml
@@ -177,26 +224,83 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" release-bridge/latest.yml --clobber
+        run: gh release upload "$env:RELEASE_TAG" release-bridge/latest.yml --clobber
+
+      - name: Publish signed installer-free runtime
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SIGNING_ENABLED: ${{ steps.signing.outputs.enabled }}
+          WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          New-Item -ItemType Directory -Path release-runtime/assets -Force | Out-Null
+          Copy-Item src-tauri/target/x86_64-pc-windows-msvc/release/clipture.exe release-runtime/clipture.exe
+          Copy-Item src-tauri/binaries/clipture_engine-x86_64-pc-windows-msvc.exe release-runtime/clipture_engine.exe
+          Copy-Item src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe release-runtime/ffmpeg.exe
+          Copy-Item assets/default.mp3 release-runtime/assets/default.mp3
+          Copy-Item assets/option2.wav release-runtime/assets/option2.wav
+          $binaries = @("release-runtime/clipture.exe", "release-runtime/clipture_engine.exe", "release-runtime/ffmpeg.exe")
+          if ($env:SIGNING_ENABLED -eq "true") {
+            # Sign before the manifest hashes the files.
+            foreach ($binary in $binaries) {
+              $full = (Resolve-Path -LiteralPath $binary).Path
+              Invoke-Expression $env:WINDOWS_SIGN_COMMAND.Replace("%1", "`"$full`"")
+              if ($LASTEXITCODE -ne 0) { throw "Code signing failed for $binary" }
+            }
+          }
+          foreach ($binary in @($binaries) + @(Get-ChildItem -LiteralPath src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis -Filter *.exe | ForEach-Object FullName)) {
+            $status = (Get-AuthenticodeSignature -LiteralPath $binary).Status
+            if ($env:SIGNING_ENABLED -eq "true" -and $status -ne "Valid") { throw "$binary is not validly signed ($status)." }
+            Write-Host "$binary Authenticode: $status"
+          }
+          $version = $env:RELEASE_TAG.Substring(1)
+          node scripts/release/create-runtime-manifest.cjs release-runtime $version $env:CLIPTURE_NATIVE_ID dist/renderer release-runtime/components-v1.json
+          if ($LASTEXITCODE -ne 0) { throw "Runtime manifest creation failed" }
+          & ./node_modules/.bin/tauri.cmd signer sign release-runtime/components-v1.json
+          if ($LASTEXITCODE -ne 0) { throw "Runtime manifest signing failed" }
+          node scripts/release/verify-runtime-manifest.cjs release-runtime/components-v1.json src-tauri/tauri.release.conf.json
+          if ($LASTEXITCODE -ne 0) { throw "Runtime manifest verification failed" }
+          gh release upload "$env:RELEASE_TAG" release-runtime/components-v1.json release-runtime/components-v1.json.sig release-runtime/clipture.exe release-runtime/clipture_engine.exe release-runtime/ffmpeg.exe release-runtime/assets/default.mp3 release-runtime/assets/option2.wav --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Runtime asset upload failed" }
 
       - name: Verify release assets and publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NSIS_ASSET_NAME: ${{ steps.nsis.outputs.asset_name }}
+          RELEASE_TITLE: ${{ steps.release_notes.outputs.release_title }}
         run: |
-          $release = gh release view "${{ github.ref_name }}" --json assets | ConvertFrom-Json
+          $release = gh release view "$env:RELEASE_TAG" --json assets | ConvertFrom-Json
           $names = @($release.assets | ForEach-Object { $_.name })
           $required = @(
-            "${{ steps.nsis.outputs.asset_name }}",
-            "${{ steps.nsis.outputs.asset_name }}.sig",
+            $env:NSIS_ASSET_NAME,
+            "$env:NSIS_ASSET_NAME.sig",
             "latest.json",
-            "latest.yml"
+            "latest.yml",
+            "components-v1.json",
+            "components-v1.json.sig",
+            "clipture.exe",
+            "clipture_engine.exe",
+            "ffmpeg.exe",
+            "default.mp3",
+            "option2.wav"
           )
           foreach ($name in $required) {
             if ($name -notin $names) { throw "Release asset is missing: $name" }
           }
-          gh release edit "${{ github.ref_name }}" `
+          gh release edit "$env:RELEASE_TAG" `
             --draft=false `
             --latest `
-            --title "${{ steps.release_notes.outputs.release_title }}" `
+            --title "$env:RELEASE_TITLE" `
             --notes-file release-notes.md
+
+  # Refresh clipture.app download links for the version just published.
+  website:
+    needs: release-windows-x64
+    uses: ./.github/workflows/site.yml
+    secrets: inherit

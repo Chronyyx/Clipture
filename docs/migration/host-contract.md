@@ -37,24 +37,60 @@ During migration, keep the v1 facade stable. New optional functionality may be a
 
 The engine protocol fixture in `engine-protocol.v1.json` is separate because it is a private host-to-sidecar boundary. Its request IDs are controller-generated positive integers; stdout replies are either `{id,payload}` or `{id,error}`, and the native hotkey is an unsolicited event.
 
+## Friend sharing client
+
+Friend sharing is a separate, additive `SharingApi` (`src/shared/sharing.ts`),
+not part of the v1 `CliptureApi` facade, because only the Tauri host implements
+it (ADR 0011). `src/renderer/platform/sharing-client.ts` selects the Tauri
+adapter, the browser mock (`?preview`, `&sharing=off`), or an unsupported
+adapter that reports `supported: false`. `sharing://changed` is a payload-free
+hint relayed to the UI worker. `sharing_stream_url` takes its owner from the
+connection, like playback; the Tauri adapter returns `StreamUrls`, the video
+route and the mixed-audio route beside it (`/v1/remote/<id>/audio`, valid once
+`SharedClip.allAudioReady`). `SharedClip.streamed` carries the host's own record
+of streamed byte ranges, and `cancelDownload` stops an "Add to library" copy.
+Media replies relayed to the UI worker never exceed the pipe's 4 MiB body
+limit; an oversized reply fails that request instead of closing the window.
+`scripts/migration/fixtures/sharing-contract.v1.json`
+pins the method-to-command map, and `test-sharing-contract.cjs` (run by the host
+contract) checks the type, adapters, `lib.rs` registry, dispatcher arguments and
+event relay together.
+
 ## Contract-test expansion points
 
-`ClipSettings.fps` accepts 24, 30, 60, 120, 144, 210 and 240. Values above 60
+`ClipSettings.fps` accepts 24, 30, 60 and 120. Values above 60
 are exposed as experimental recording targets, not guaranteed unique-frame
 throughput. Both frontend adapters share the FPS normalizer; the Electron host
 and Rust settings normalization preserve the same choices. Unsupported values
-fall back to the unchanged 30 FPS default. `captureFpsOptions` in the host fixture
+fall back to a conservative 30 FPS. Fresh installs default to 60 FPS, a
+60-second clip length and automatic bitrate; stored profiles keep every value.
+`ClipSettings.defaultAppSourcesVersion` is host-managed: the Tauri host adds the
+default browser and Discord as separate app tracks once (never re-adding one
+the user removed) and raises the marker; adapters round-trip it untouched. `captureFpsOptions` in the host fixture
 pins the dropdown, normalization and Rust engine-config serialization; isolated
 settings-store tests verify higher values survive disk save/reload.
 
 `ClipSettings.saveInPlace` is additive and defaults to true when absent; explicit
-false restores overlapping replay saves. Both renderer adapters normalize it.
-Engine `configure` carries `saveInPlace` and `saveFolder`, so native background
-recording chooses storage without depending on a WebView. The engine consumes
+false restores the legacy RAM/spill replay path. `ClipSettings.saveInPlaceOverlap`
+is additive, defaults to true and only matters while `saveInPlace` is on: true
+keeps overlapping windows (retained footage is backfilled from the saved clip
+into the live arena in the background); explicit false consumes the window, so
+each save starts where the last successful engine save ended. Both renderer
+adapters normalize both fields. Engine `configure` carries `saveInPlace`,
+`saveInPlaceOverlap` and `saveFolder`, so native background recording chooses
+storage without depending on a WebView. With overlap off, the engine consumes
 the visible window only after engine save success; subsequent host processing
 failure preserves its source MP4 but does not roll that boundary back. Settings
-defaults and opt-out are pinned in the host fixture, adapter tests and Rust DTO
+defaults and opt-outs are pinned in the host fixture, adapter tests and Rust DTO
 tests; the configure fields are pinned in the separate engine fixture.
+
+Folder settings are host-owned in the Tauri host. `saveSettings` ignores
+`importedVideoDirectories` and `importedVideoTitles` from the renderer (they
+change only through import, rename and delete), and accepts a new `saveFolder`
+only when it equals the folder the native picker (`selectFolder`) just
+returned; that grant is single-use. A compromised page therefore cannot widen
+which files the library may list, rename or delete. The renderer already only
+changes these through those commands, so no adapter change was needed.
 
 The additive `ClipRecord.segmentAudioTracks` field describes each segment's
 actual audio stream order; `audioTracks` is their ordered union. Empty entries

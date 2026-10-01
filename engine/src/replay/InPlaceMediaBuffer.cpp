@@ -3,6 +3,7 @@
 #include "clipture/replay/InPlaceExtent.hpp"
 #include "clipture/platform/windows/InPlaceFile.hpp"
 #include <stdexcept>
+#include <thread>
 
 namespace clipture::replay {
 namespace {
@@ -53,6 +54,23 @@ InPlaceMediaBuffer::InPlaceMediaBuffer(std::shared_ptr<platform::windows::InPlac
     if (!file_ || !file_->seal()) throw std::runtime_error("In-place save requires a sealed file");
 }
 uint64_t InPlaceMediaBuffer::mediaEnd() const { return file_->size(); }
+void InPlaceMediaBuffer::setCopyPace(uint64_t bytesPerSecond) {
+    copyBytesPerSecond_ = bytesPerSecond;
+    if (bytesPerSecond > 0) file_->lowerIoPriority();
+}
+void InPlaceMediaBuffer::paceCopy(std::size_t bytes) {
+    using Clock = std::chrono::steady_clock;
+    if (copiedBytes_ == 0) copyStartedAt_ = Clock::now();
+    copiedBytes_ += bytes;
+    if (copyBytesPerSecond_ == 0) return;
+    // A quarter second of budget up front keeps small copies (decoder preroll,
+    // a short tail) instant; only a large leftover is spread out.
+    const auto burst = copyBytesPerSecond_ / 4;
+    if (copiedBytes_ <= burst) return;
+    const auto due = copyStartedAt_ + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(
+        static_cast<double>(copiedBytes_ - burst) / static_cast<double>(copyBytesPerSecond_)));
+    if (Clock::now() < due) std::this_thread::sleep_until(due);
+}
 std::optional<uint64_t> InPlaceMediaBuffer::placeSample(const PacketPayloadReaderPtr& reader,
     std::span<const std::byte> memory, std::size_t length) {
     if (!frozen_ || length == 0 || length > 64u * 1024u * 1024u) return std::nullopt;
@@ -72,22 +90,27 @@ std::optional<uint64_t> InPlaceMediaBuffer::placeSample(const PacketPayloadReade
         memory = scratch;
     }
     if (memory.size() != length) return std::nullopt;
+    paceCopy(length);
     return file_->appendFinalSample(memory);
+}
+uint64_t InPlaceMediaBuffer::mediaStart() const { return platform::windows::InPlaceFile::mediaStart; }
+std::optional<uint64_t> InPlaceMediaBuffer::placeVideo(const EncodedPacket& packet) {
+    if (!frozen_ || packet.kind != PacketKind::Video) return std::nullopt;
+    auto materialized = packet;
+    if (packet.codec != PacketCodec::H264Avcc && !packet.payload) {
+        if (payloadSize(packet) > 64u * 1024u * 1024u) return std::nullopt;
+        materialized.payload = std::make_shared<PacketPayload>(payloadSize(packet));
+        if (!readPayload(packet, 0, *materialized.payload)) return std::nullopt;
+    }
+    auto prepared = packet.codec == PacketCodec::H264Avcc ? std::optional<EncodedPacket>(packet) : packMp4VideoSample(materialized);
+    if (!prepared) return std::nullopt;
+    return placeSample(prepared->payloadReader, payloadBytes(*prepared), payloadSize(*prepared));
 }
 std::optional<InPlaceMediaLayout> InPlaceMediaBuffer::layout(std::span<const EncodedPacket* const> samples) {
     if (!frozen_ || samples.empty()) return std::nullopt;
-    InPlaceMediaLayout result{platform::windows::InPlaceFile::mediaStart, file_->size(), {}};
+    InPlaceMediaLayout result{mediaStart(), file_->size(), {}};
     for (const auto* packet : samples) {
-        if (!packet || packet->kind != PacketKind::Video) return std::nullopt;
-        auto materialized = *packet;
-        if (packet->codec != PacketCodec::H264Avcc && !packet->payload) {
-            if (payloadSize(*packet) > 64u * 1024u * 1024u) return std::nullopt;
-            materialized.payload = std::make_shared<PacketPayload>(payloadSize(*packet));
-            if (!readPayload(*packet, 0, *materialized.payload)) return std::nullopt;
-        }
-        auto prepared = packet->codec == PacketCodec::H264Avcc ? std::optional<EncodedPacket>(*packet) : packMp4VideoSample(materialized);
-        if (!prepared) return std::nullopt;
-        const auto offset = placeSample(prepared->payloadReader, payloadBytes(*prepared), payloadSize(*prepared));
+        const auto offset = packet ? placeVideo(*packet) : std::nullopt;
         if (!offset) return std::nullopt;
         result.sampleOffsets.push_back(*offset);
     }

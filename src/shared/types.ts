@@ -388,11 +388,15 @@ export interface EngineDiagnostics {
 }
 
 export interface ClipSettings {
-  uiTheme: "graphite" | "light" | ThemeFontId | "custom";
+  uiTheme: "graphite" | "light" | ThemeFontId | "maid-cafe" | "halloween" | "custom";
   customMainColor: string;
   customAccentColor: string;
   clipLengthSeconds: number;
   saveInPlace: boolean;
+  /** In-place saves keep overlapping replay windows; false starts each clip after the last save. */
+  saveInPlaceOverlap: boolean;
+  /** Host-managed: default browser/Discord tracks were offered once. */
+  defaultAppSourcesVersion?: number;
   fps: import('./capture-fps').CaptureFps;
   bitrateMbps: number;
   autoBitrate: boolean;
@@ -539,6 +543,22 @@ export interface SaveIoAnalyzerState {
   capturedAt?: string;
 }
 
+export type ClipRepairPhase = "idle" | "checking" | "checked" | "repairing" | "done";
+
+/** Host-owned "Fix clips" job: rewrites clips whose audio is stored far from
+ * their video into an interleaved layout (lossless remux, verified first). */
+export interface ClipRepairStatus {
+  phase: ClipRepairPhase;
+  checked: number;
+  total: number;
+  needsRepair: number;
+  needsRepairBytes: number;
+  repaired: number;
+  failed: number;
+  currentTitle?: string;
+  message?: string;
+}
+
 export interface SaveClipResult {
   ok: boolean;
   message: string;
@@ -580,6 +600,11 @@ export interface CliptureApi {
   clipThumbnailUrl(filePath: string): Promise<string>;
   clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise<{ url: string; mixed: boolean; message: string; audioChunkUrl?: string; audioChunkSeconds?: number }>;
   releasePlaybackCache(): Promise<boolean>;
+  getClipRepairStatus(): Promise<ClipRepairStatus>;
+  /** Reads each clip's index only; never modifies files. */
+  checkClipLayouts(): Promise<ClipRepairStatus>;
+  /** Repairs the clips found by the last check. */
+  fixClipLayouts(): Promise<ClipRepairStatus>;
   listActiveProcesses(): Promise<ActiveProcess[]>;
   listAudioInputDevices(): Promise<AudioInputDevice[]>;
   listDisplayDevices(): Promise<DisplayDevice[]>;

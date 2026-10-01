@@ -1832,6 +1832,9 @@ public:
     std::size_t latencyBackoffs() const {
         return adaptiveRateEnabled_ ? rateController_.latencyBackoffs() : 0;
     }
+    std::size_t ignoredLatencyStalls() const {
+        return adaptiveRateEnabled_ ? rateController_.ignoredLatencyStalls() : 0;
+    }
     std::size_t measuredWrites() const {
         return adaptiveRateEnabled_ ? rateController_.measuredWrites() : 0;
     }
@@ -2529,13 +2532,45 @@ MuxResult muxH264ToMp4(
     std::optional<replay::PayloadLayoutPlan> alignedVideo;
     std::optional<replay::InPlaceMediaLayout> inPlace;
     if (pacing.experimentalInPlace) {
-        std::vector<const EncodedPacket*> selected;
-        for (const auto& sample : videoSamples) selected.push_back(sample.packet);
-        inPlace = pacing.experimentalInPlace->layout(selected);
-        if (!inPlace) {
-            result.message = "In-place save could not place its video samples; buffered sources retained.";
-            return result; // Do not silently perform a copy or modify an unrelated file.
+        // Place every track in one time-ordered pass. Samples already in the
+        // recording keep their offsets; anything appended (a quick re-save's
+        // leftover, the live tail) is then interleaved, so a player reads each
+        // audio sample next to its video instead of seeking across the file.
+        auto& recording = *pacing.experimentalInPlace;
+        constexpr std::size_t kVideoTrack = SIZE_MAX;
+        struct Placement { int64_t time100ns; std::size_t track; std::size_t index; };
+        std::vector<Placement> order;
+        order.reserve(videoSamples.size());
+        for (std::size_t i = 0; i < videoSamples.size(); ++i) {
+            order.push_back({videoSamples[i].packet->dts100ns, kVideoTrack, i});
         }
+        for (std::size_t track = 0; track < audioTracks.size(); ++track) {
+            for (std::size_t i = 0; i < audioTracks[track].samples.size(); ++i) {
+                order.push_back({audioTracks[track].samples[i].pts100ns, track, i});
+            }
+        }
+        std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.time100ns < b.time100ns; });
+        replay::InPlaceMediaLayout placed{recording.mediaStart(), 0, std::vector<uint64_t>(videoSamples.size())};
+        for (const auto& item : order) {
+            if (item.track == kVideoTrack) {
+                const auto offset = recording.placeVideo(*videoSamples[item.index].packet);
+                if (!offset) {
+                    result.message = "In-place save could not place its video samples; buffered sources retained.";
+                    return result; // Do not silently perform a copy or modify an unrelated file.
+                }
+                placed.sampleOffsets[item.index] = *offset;
+                continue;
+            }
+            auto& sample = audioTracks[item.track].samples[item.index];
+            const auto offset = recording.placeSample(sample.payloadReader, samplePayload(sample), sample.info.size);
+            if (!offset) {
+                result.message = "In-place save could not place an audio sample; buffered sources retained.";
+                return result;
+            }
+            sample.info.fileOffset = *offset;
+        }
+        placed.mediaEnd = recording.mediaEnd();
+        inPlace = std::move(placed);
     }
     if (!inPlace && pacing.experimentalPayloadAlignment && audioTracks.empty()) {
         std::vector<const EncodedPacket*> selected;
@@ -2557,15 +2592,7 @@ MuxResult muxH264ToMp4(
     }
     for (auto& track : audioTracks) {
         for (auto& sample : track.samples) {
-            if (inPlace) {
-                const auto offset = pacing.experimentalInPlace->placeSample(
-                    sample.payloadReader, samplePayload(sample), sample.info.size);
-                if (!offset) {
-                    result.message = "In-place save could not place an audio sample; buffered sources retained.";
-                    return result;
-                }
-                nextOffset = *offset;
-            }
+            if (inPlace) continue; // Placed above, interleaved with video.
             sample.info.fileOffset = nextOffset;
             nextOffset += sample.info.size;
         }
@@ -2650,9 +2677,9 @@ MuxResult muxH264ToMp4(
     const bool adaptiveWritePacing = shouldUseAdaptiveWritePacing(
         pacing.storageAwareRate,
         out.storageSeekPenalty());
-    const auto adaptiveRateConfig = writePacerConfigForStorage(
-        pacing.adaptiveRate,
-        out.storageSeekPenalty());
+    const auto adaptiveRateConfig = seedWritePacerConfig(
+        writePacerConfigForStorage(pacing.adaptiveRate, out.storageSeekPenalty()),
+        pacing.learnedWriteBytesPerSecond);
     ioRecorder.setFileContext(
         storageSeekPenaltyName(out.storageSeekPenalty()),
         ioPriorityName(out.ioPriorityHint()),
@@ -2763,6 +2790,8 @@ MuxResult muxH264ToMp4(
             " rateAdjustments=" + std::to_string(bufferedOut.rateAdjustments()) +
             " pressureBackoffs=" + std::to_string(bufferedOut.pressureBackoffs()) +
             " latencyBackoffs=" + std::to_string(bufferedOut.latencyBackoffs()) +
+            " ignoredLatencyStalls=" + std::to_string(bufferedOut.ignoredLatencyStalls()) +
+            " seededRateMiBps=" + std::to_string(pacing.learnedWriteBytesPerSecond / (1024ULL * 1024ULL)) +
             " rateLimitSleeps=" + std::to_string(bufferedOut.rateLimitSleepCount()) +
             " rateLimitSleepMs=" + std::to_string(bufferedOut.rateLimitSleepMs()) +
             " paceYields=" + std::to_string(bufferedOut.yieldCount()) +
@@ -2867,6 +2896,9 @@ MuxResult muxH264ToMp4(
     result.filePath = narrow(path);
     for (const auto& track : audioTracks) result.audioTracks.push_back(track.sourceId);
     result.message = "Saved MP4 clip.";
+    if (bufferedOut.adaptiveRateEnabled() && bufferedOut.measuredWrites() > 0) {
+        result.learnedWriteBytesPerSecond = bufferedOut.rateLimitBytesPerSecond();
+    }
     logMuxSaveTiming(
         "total",
         totalStartedAt,

@@ -2,12 +2,13 @@ import type { CliptureApi } from '../../shared/types';
 import { createElectronAdapter, hasElectronBridge } from './electron-adapter';
 import type { HostKind } from './hostError';
 import { createMockCliptureAdapter } from './mock-adapter';
+import { mockPreviewSeed } from './mockPreview';
 import { createTauriAdapter, hasTauriRuntime } from './tauri-adapter';
 
 function selectHost(): { kind: HostKind; client: CliptureApi } {
   if (hasTauriRuntime()) return { kind: 'tauri', client: createTauriAdapter() };
   if (hasElectronBridge()) return { kind: 'electron', client: createElectronAdapter() };
-  return { kind: 'mock', client: createMockCliptureAdapter() };
+  return { kind: 'mock', client: createMockCliptureAdapter(mockPreviewSeed(window.location.search)) };
 }
 
 const selected = selectHost();

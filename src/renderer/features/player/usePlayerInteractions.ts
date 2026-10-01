@@ -61,6 +61,8 @@ export function usePlayerInteractions({
       return;
     }
     playbackRequestedRef.current = true;
+    // A failed source never recovers by itself; its session is still valid.
+    if (video.error) video.load();
     void mixed.playWhenReady();
   }
 

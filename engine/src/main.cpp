@@ -4,6 +4,7 @@
 #include <mmsystem.h>
 
 #include "clipture/RawInputHotkey.hpp"
+#include "clipture/protocol/JsonFields.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -17,87 +18,26 @@ namespace {
 
 std::mutex outputMutex;
 
-int extractId(const std::string& line) {
-    const auto marker = line.find("\"id\"");
-    if (marker == std::string::npos) return 0;
-    const auto colon = line.find(':', marker);
-    if (colon == std::string::npos) return 0;
-    return std::stoi(line.substr(colon + 1));
+using clipture::protocol::JsonFields;
+
+int extractDuration(const JsonFields& request) {
+    return static_cast<int>(request.integer("durationSeconds").value_or(30));
 }
 
-int extractDuration(const std::string& line) {
-    const auto marker = line.find("\"durationSeconds\"");
-    if (marker == std::string::npos) return 30;
-    const auto colon = line.find(':', marker);
-    if (colon == std::string::npos) return 30;
-    return std::stoi(line.substr(colon + 1));
+int extractInt(const JsonFields& request, const std::string& field, int fallback) {
+    return static_cast<int>(request.integer(field).value_or(fallback));
 }
 
-int extractInt(const std::string& line, const std::string& field, int fallback) {
-    const auto marker = line.find("\"" + field + "\"");
-    if (marker == std::string::npos) return fallback;
-    const auto colon = line.find(':', marker);
-    if (colon == std::string::npos) return fallback;
-    return std::stoi(line.substr(colon + 1));
+bool extractBool(const JsonFields& request, const std::string& field, bool fallback) {
+    return request.boolean(field).value_or(fallback);
 }
 
-bool extractBool(const std::string& line, const std::string& field, bool fallback) {
-    const auto marker = line.find("\"" + field + "\"");
-    if (marker == std::string::npos) return fallback;
-    const auto colon = line.find(':', marker);
-    if (colon == std::string::npos) return fallback;
-    const auto valueStart = line.find_first_not_of(" \t\r\n", colon + 1);
-    if (valueStart == std::string::npos) return fallback;
-    if (line.compare(valueStart, 4, "true") == 0) return true;
-    if (line.compare(valueStart, 5, "false") == 0) return false;
-    return fallback;
+std::string extractString(const JsonFields& request, const std::string& field) {
+    return request.string(field).value_or(std::string{});
 }
 
-std::string extractString(const std::string& line, const std::string& field) {
-    const auto marker = line.find("\"" + field + "\"");
-    if (marker == std::string::npos) return {};
-    const auto colon = line.find(':', marker);
-    if (colon == std::string::npos) return {};
-    const auto firstQuote = line.find('"', colon + 1);
-    if (firstQuote == std::string::npos) return {};
-    std::string result;
-    bool escaped = false;
-    for (auto i = firstQuote + 1; i < line.size(); ++i) {
-        const char ch = line[i];
-        if (escaped) {
-            switch (ch) {
-                case '\\': result.push_back('\\'); break;
-                case '"': result.push_back('"'); break;
-                case 'n': result.push_back('\n'); break;
-                case 'r': result.push_back('\r'); break;
-                case 't': result.push_back('\t'); break;
-                default: result.push_back(ch); break;
-            }
-            escaped = false;
-            continue;
-        }
-        if (ch == '\\') {
-            escaped = true;
-            continue;
-        }
-        if (ch == '"') break;
-        result.push_back(ch);
-    }
-    return result;
-}
-
-float extractFloat(const std::string& line, const std::string& field, float fallback) {
-    const auto marker = line.find("\"" + field + "\"");
-    if (marker == std::string::npos) return fallback;
-    const auto colon = line.find(':', marker);
-    if (colon == std::string::npos) return fallback;
-    const auto valueStart = line.find_first_not_of(" \t\r\n", colon + 1);
-    if (valueStart == std::string::npos) return fallback;
-    try {
-        return std::stof(line.substr(valueStart));
-    } catch (...) {
-        return fallback;
-    }
+float extractFloat(const JsonFields& request, const std::string& field, float fallback) {
+    return static_cast<float>(request.number(field).value_or(fallback));
 }
 
 std::vector<std::string> splitList(const std::string& value) {
@@ -198,15 +138,24 @@ int main() {
     std::string line;
 
     while (std::getline(std::cin, line)) {
-        const int id = extractId(line);
+        // One real parse per request: fields are looked up, never searched for,
+        // so text inside a value cannot pose as another field or command.
+        const auto parsed = JsonFields::parse(line);
+        const int id = parsed ? static_cast<int>(parsed->integer("id").value_or(0)) : 0;
+        if (!parsed) {
+            respondError(id, "Malformed engine request.");
+            continue;
+        }
+        const JsonFields& request = *parsed;
+        const std::string type = request.string("type").value_or(std::string{});
         try {
-            if (line.find("\"getDiagnostics\"") != std::string::npos) {
+            if (type == "getDiagnostics") {
                 respond(id, clipture::toJson(engine.diagnostics()));
                 continue;
             }
 
-            if (line.find("\"configureHotkey\"") != std::string::npos) {
-                const bool armed = hotkey.configure(extractString(line, "hotkey"));
+            if (type == "configureHotkey") {
+                const bool armed = hotkey.configure(extractString(request, "hotkey"));
                 std::ostringstream payload;
                 payload << "{\"ready\":" << (hotkey.ready() ? "true" : "false")
                         << ",\"armed\":" << (armed ? "true" : "false")
@@ -215,68 +164,69 @@ int main() {
                 continue;
             }
 
-            if (line.find("\"listAudioInputDevices\"") != std::string::npos) {
+            if (type == "listAudioInputDevices") {
                 respond(id, clipture::audioInputDevicesJson());
                 continue;
             }
 
-            if (line.find("\"listDisplayDevices\"") != std::string::npos) {
+            if (type == "listDisplayDevices") {
                 respond(id, clipture::displayDevicesJson());
                 continue;
             }
 
-            if (line.find("\"listRunningProcesses\"") != std::string::npos) {
-                respond(id, engine.runningProcessesJson(extractBool(line, "includeExecutablePaths", false)));
+            if (type == "listRunningProcesses") {
+                respond(id, engine.runningProcessesJson(extractBool(request, "includeExecutablePaths", false)));
                 continue;
             }
 
-            if (line.find("\"getProcessExecutablePath\"") != std::string::npos) {
+            if (type == "getProcessExecutablePath") {
                 respond(id, engine.processExecutablePathJson(
-                    static_cast<uint32_t>(std::max(0, extractInt(line, "processId", 0)))));
+                    static_cast<uint32_t>(std::max(0, extractInt(request, "processId", 0)))));
                 continue;
             }
 
-            if (line.find("\"configure\"") != std::string::npos) {
+            if (type == "configure") {
                 const clipture::EngineSettings settings {
-                    extractInt(line, "fps", 30),
-                    extractInt(line, "bitrateMbps", 40),
-                    extractInt(line, "nvencPreset", 3),
-                    extractInt(line, "clipLengthSeconds", 30),
-                    extractString(line, "monitorId").empty() ? "primary" : extractString(line, "monitorId"),
-                    extractInt(line, "targetWidth", 0),
-                    extractInt(line, "targetHeight", 0),
-                    extractBool(line, "includeMixedAudio", true),
-                    extractBool(line, "includeSystemAudio", true),
-                    extractBool(line, "includeMicrophoneAudio", true),
-                    extractBool(line, "captureGameAudio", false),
-                    extractBool(line, "captureForegroundSystemAudio", false),
-                    extractFloat(line, "micVolume", 1.0f),
-                    extractBool(line, "micIsolation", false),
-                    extractFloat(line, "micIsolationWeight", 1.0f),
-                    extractBool(line, "noiseGateEnabled", true),
-                    extractBool(line, "autoNoiseGate", true),
-                    extractFloat(line, "noiseGateThreshold", 0.05f),
-                    extractInt(line, "noiseGateDebounceMs", 180),
-                    extractString(line, "micDeviceId"),
-                    extractString(line, "micDeviceMatchKey"),
-                    extractString(line, "micDeviceName"),
-                    splitList(extractString(line, "appAudioProcesses")),
-                    splitList(extractString(line, "systemAudioProcesses")),
-                    extractBool(line, "saveInPlace", true),
-                    extractString(line, "saveFolder")
+                    extractInt(request, "fps", 30),
+                    extractInt(request, "bitrateMbps", 40),
+                    extractInt(request, "nvencPreset", 3),
+                    extractInt(request, "clipLengthSeconds", 30),
+                    extractString(request, "monitorId").empty() ? "primary" : extractString(request, "monitorId"),
+                    extractInt(request, "targetWidth", 0),
+                    extractInt(request, "targetHeight", 0),
+                    extractBool(request, "includeMixedAudio", true),
+                    extractBool(request, "includeSystemAudio", true),
+                    extractBool(request, "includeMicrophoneAudio", true),
+                    extractBool(request, "captureGameAudio", false),
+                    extractBool(request, "captureForegroundSystemAudio", false),
+                    extractFloat(request, "micVolume", 1.0f),
+                    extractBool(request, "micIsolation", false),
+                    extractFloat(request, "micIsolationWeight", 1.0f),
+                    extractBool(request, "noiseGateEnabled", true),
+                    extractBool(request, "autoNoiseGate", true),
+                    extractFloat(request, "noiseGateThreshold", 0.05f),
+                    extractInt(request, "noiseGateDebounceMs", 180),
+                    extractString(request, "micDeviceId"),
+                    extractString(request, "micDeviceMatchKey"),
+                    extractString(request, "micDeviceName"),
+                    splitList(extractString(request, "appAudioProcesses")),
+                    splitList(extractString(request, "systemAudioProcesses")),
+                    extractBool(request, "saveInPlace", true),
+                    extractBool(request, "saveInPlaceOverlap", true),
+                    extractString(request, "saveFolder")
                 };
                 respond(id, clipture::toJson(engine.configure(settings)));
                 continue;
             }
 
-            if (line.find("\"saveClip\"") != std::string::npos) {
+            if (type == "saveClip") {
                 clipture::SaveClipResult result;
                 {
                     SavePriorityGuard savePriority;
                     result = engine.saveClip({
-                        extractDuration(line),
-                        extractString(line, "saveFolder"),
-                        extractBool(line, "analyzeIo", false)
+                        extractDuration(request),
+                        extractString(request, "saveFolder"),
+                        extractBool(request, "analyzeIo", false)
                     });
                 }
                 std::ostringstream payload;

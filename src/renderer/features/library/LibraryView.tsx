@@ -2,15 +2,19 @@ import { Check, Clapperboard, Save, Search, Trash2, Upload } from "lucide-react"
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ClipRecord, ClipSettings } from "../../../shared/types";
 import { ClipPlayer } from "../player";
+import { SpookyPerch, SpookySaveCheer, WatchingEye } from "../../shared/halloween";
+import { CafePeeker, CafeSaveCheer } from "../../shared/maid-cafe";
 import { clipSourceLabels } from "../../shared/clips/clipMetadata";
 import { LibraryPlayerSidebar } from "./LibraryPlayerSidebar";
 import { LibraryClipPreview } from "./LibraryClipPreview";
 import { LibraryEmptyState } from "./LibraryEmptyState";
+import { LibrarySkeleton } from "./LibrarySkeleton";
 import { clipture } from "../../platform/cliptureClient";
 
 export function LibraryView({
   headerControls,
   clips,
+  loading = false,
   query,
   setQuery,
   selectedClip,
@@ -19,10 +23,12 @@ export function LibraryView({
   onSaveClip,
   onImportVideos,
   isSavingClip,
-  clipLengthSeconds
+  clipLengthSeconds,
+  onShareClip
 }: {
   headerControls?: ReactNode;
   clips: ClipRecord[];
+  loading?: boolean;
   query: string;
   setQuery: (value: string) => void;
   selectedClip: ClipRecord | undefined;
@@ -32,6 +38,8 @@ export function LibraryView({
   onImportVideos: () => Promise<void>;
   isSavingClip: boolean;
   clipLengthSeconds: number;
+  /** Provided by the app when friend sharing is available. */
+  onShareClip?: (clip: ClipRecord) => void;
 }) {
   const [libraryTab, setLibraryTab] = useState<"clips" | "imported">("clips");
   const [folderFilter, setFolderFilter] = useState("");
@@ -161,16 +169,24 @@ export function LibraryView({
               <h1>
                 <span className="library-heading-default">Clip Library</span>
                 <span className="library-heading-glitten">Clips</span>
+                <span className="library-heading-cafe">Clip menu</span>
+                <span className="library-heading-halloween">
+                  <span aria-hidden="true">Cl<span className="hw-i">ı<WatchingEye /></span>p</span>
+                  <span className="hw-sr">Clip</span>
+                </span>
               </h1>
             </div>
             <div className="save-actions">
               {headerControls}
               <button className="primary library-save-button" onClick={onSaveClip} disabled={isSavingClip}>
                 <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${clipLengthSeconds}s`}
+                <CafeSaveCheer saving={isSavingClip} />
+                <SpookySaveCheer saving={isSavingClip} />
               </button>
             </div>
           </div>
 
+          <div className="library-filter-row">
           <div className="library-tabs" role="tablist" aria-label="Library sections">
             <button
               className={libraryTab === "clips" ? "library-tab active" : "library-tab"}
@@ -184,14 +200,15 @@ export function LibraryView({
               type="button"
               onClick={() => setLibraryTab("imported")}
             >
-              Imported Videos
+              Imported videos
             </button>
           </div>
 
           <label className="library-search">
-            <Search size={22} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by game, app, track, or title" />
+            <Search size={20} aria-hidden="true" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by game, app, track or title" aria-label="Search clips" />
           </label>
+          </div>
 
           <div className="library-actions-row">
             <div className="chip-row">
@@ -241,16 +258,21 @@ export function LibraryView({
           </div>
         </div>
 
-        {filteredClips.length === 0 ? (
+        {loading && tabClips.length === 0 ? (
+          <LibrarySkeleton />
+        ) : filteredClips.length === 0 ? (
           <LibraryEmptyState
             title={emptyTitle}
             copy={emptyCopy}
             detail={emptyDetail}
             actionLabel={libraryTab === "clips" ? "Save your first clip" : "Import videos"}
+            imported={libraryTab === "imported"}
             onAction={libraryTab === "clips" ? onSaveClip : handleImportVideos}
           />
-        ) : editorialPreviewClip ? (
-          selectedClip ? (
+        ) : editorialPreviewClip ? (<>
+          <CafePeeker />
+          <SpookyPerch />
+          {selectedClip ? (
             <ClipPlayer
               clip={selectedClip}
               onClose={() => {
@@ -265,6 +287,7 @@ export function LibraryView({
                 railClips={filteredClips}
                 selectedClipIds={selectedClipIds}
                 selectionMode={selectionMode}
+                onShare={onShareClip}
               />}
               settings={settings}
             />
@@ -278,9 +301,10 @@ export function LibraryView({
               onToggleSelected={toggleClipSelection}
               selectedClipIds={selectedClipIds}
               selectionMode={selectionMode}
+              onShare={onShareClip}
             />
-          )
-        ) : null}
+          )}
+        </>) : null}
       </section>
     </div>
   );

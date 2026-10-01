@@ -1,0 +1,70 @@
+/* Sidebar tally. Red is reserved for "recording"; it is the only ambient
+   (non-user-triggered) motion in the app, a slow breath while live. */
+:root { --tally: #e5484d; --tally-warning: #e0a13a; }
+
+.recorder-status {
+  display: grid;
+  gap: 6px;
+  margin-top: 28px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-deep);
+  box-shadow: inset 0 1px 0 var(--inset-highlight);
+}
+
+.recorder-status-head { display: flex; align-items: center; gap: 9px; }
+.recorder-status-head strong { color: var(--text-strong); font-size: 13px; font-weight: 600; }
+.recorder-status-detail { color: var(--text-muted); font-size: 12px; }
+.recorder-status-detail.warning-text { color: var(--tally-warning); }
+
+.recorder-tally {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-subtle);
+}
+.recorder-status.live .recorder-tally {
+  background: var(--tally);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tally) 22%, transparent);
+  animation: tally-breathe 2.6s ease-in-out infinite;
+}
+.recorder-status.warning .recorder-tally { background: var(--tally-warning); }
+.recorder-status.warning { border-color: color-mix(in srgb, var(--tally-warning) 45%, var(--border)); }
+
+.recorder-buffer { display: grid; gap: 4px; margin-top: 4px; }
+.recorder-buffer-track {
+  height: 4px;
+  border-radius: 2px;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), var(--surface-deep) calc(25% - 1px) 25%),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 25%, transparent), var(--accent));
+}
+.recorder-status:not(.live, .warning) .recorder-buffer-track { background: var(--surface-active); }
+.recorder-buffer-labels {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-subtle);
+  font: 10px/1.3 var(--font-instrument, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.recorder-readout {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font: 11px/1.45 var(--font-instrument, ui-monospace, monospace);
+}
+
+@keyframes tally-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recorder-status.live .recorder-tally { animation: none; }
+}

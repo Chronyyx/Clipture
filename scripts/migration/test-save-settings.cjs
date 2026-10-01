@@ -19,13 +19,16 @@ new Function('exports', 'require', compiled)(moduleExports, name => {
 const normalize = moduleExports.normalizeSaveSettings;
 assert.equal(normalize({}).saveInPlace, fixture.settingsDefaults.saveInPlace);
 assert.equal(normalize({ saveInPlace: false }).saveInPlace, false);
-assert.deepEqual(normalize({ saveInPlace: true, hotkey: 'fixture' }), { saveInPlace: true, hotkey: 'fixture', fps: 30 });
+assert.equal(normalize({}).saveInPlaceOverlap, fixture.settingsDefaults.saveInPlaceOverlap);
+assert.equal(normalize({ saveInPlaceOverlap: false }).saveInPlaceOverlap, false);
+assert.deepEqual(normalize({ saveInPlace: true, hotkey: 'fixture' }),
+  { saveInPlace: true, saveInPlaceOverlap: true, hotkey: 'fixture', fps: 30 });
 assert.deepEqual(fpsExports.CAPTURE_FPS_OPTIONS, fixture.captureFpsOptions);
 for (const fps of fixture.captureFpsOptions) {
   assert.equal(normalize({ fps }).fps, fps);
   assert.equal(normalize(JSON.parse(JSON.stringify(normalize({ fps })))).fps, fps);
 }
-for (const fps of [undefined, null, 0, 59, 61, 119, 241, 999, NaN, Infinity]) {
+for (const fps of [undefined, null, 0, 59, 61, 119, 144, 210, 240, '144', '210', '240', 241, 999, NaN, Infinity]) {
   assert.equal(normalize({ fps }).fps, 30);
 }
 assert.match(read('src/main/main.ts'), /const fps = normalizeCaptureFps\(settings.fps\)/);
@@ -35,6 +38,9 @@ for (const adapter of ['electron-adapter.ts', 'tauri-adapter.ts']) {
   assert.match(text, /getSettings:.*normalizeSaveSettings/);
   assert.match(text, /saveSettings:.*normalizeSaveSettings/);
 }
-assert.match(read('engine/src/main.cpp'), /extractBool\(line, "saveInPlace", true\)/);
+assert.match(read('engine/src/main.cpp'), /extractBool\(request, "saveInPlace", true\)/);
+assert.match(read('engine/src/main.cpp'), /extractBool\(request, "saveInPlaceOverlap", true\)/);
 assert.match(read('src-tauri/src/contracts/engine.rs'), /save_in_place: settings.save_in_place/);
-console.log('Save settings: default-on, explicit opt-out and both host adapters passed.');
+assert.match(read('src-tauri/src/contracts/engine.rs'), /save_in_place_overlap: settings.save_in_place_overlap/);
+assert.match(read('src/main/main.ts'), /saveInPlaceOverlap: settings.saveInPlaceOverlap !== false/);
+console.log('Save settings: default-on in-place and overlap, explicit opt-outs and both host adapters passed.');

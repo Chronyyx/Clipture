@@ -5,6 +5,8 @@ import { LibrarySnapshot } from './librarySnapshot';
 
 export function useClipLibrary(onNotice: (message: string, durationMs?: number) => void) {
   const [clips, setClips] = useState<ClipRecord[]>([]);
+  // False until the first list arrives, so the empty state never flashes.
+  const [loaded, setLoaded] = useState(false);
   const snapshot = useRef(new LibrarySnapshot());
   const refreshLibrary = useCallback(async () => {
     const request = snapshot.current.begin();
@@ -17,7 +19,7 @@ export function useClipLibrary(onNotice: (message: string, durationMs?: number) 
 
   useEffect(() => {
     const refresh = () => void refreshLibrary().catch(error =>
-      onNotice(error instanceof Error ? error.message : 'Could not refresh library.', 6000));
+      onNotice(error instanceof Error ? error.message : 'Could not refresh library.', 6000)).finally(() => setLoaded(true));
     const unsubscribe = clipture.onLibraryChanged(clip => clip ? addClip(clip) : refresh());
     refresh();
     return () => { snapshot.current.invalidate(); unsubscribe(); };
@@ -35,5 +37,5 @@ export function useClipLibrary(onNotice: (message: string, durationMs?: number) 
       return false;
     }
   }
-  return { clips, addClip, refreshLibrary, importVideos };
+  return { clips, loaded, addClip, refreshLibrary, importVideos };
 }

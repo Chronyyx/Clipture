@@ -1,0 +1,66 @@
+name: Website
+
+# Deploys clipture.app to Cloudflare Pages: web/ (home and invite pages,
+# ADR 0011) plus the real Clipture interface built in demo mode at /demo/,
+# with download links for the latest release.
+# Runs after every release (called by release.yml, because releases published
+# with GITHUB_TOKEN do not trigger other workflows), when web/ changes, and
+# on demand. Needs secrets CLOUDFLARE_API_TOKEN (Pages: Edit) and
+# CLOUDFLARE_ACCOUNT_ID, and a Direct Upload Pages project named "clipture".
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "src/renderer/**"
+      - "src/shared/**"
+      - "scripts/release/render-site.cjs"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Find the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          echo "CLIPTURE_VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      - name: Build site and live demo
+        run: npm run build:site
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist/site --project-name=clipture --branch=main
