@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.6.4] - 2026-10-02
+
+### Smooth Clips Under Game Load
+
+- **Smooth clips under game load:** Since the September pacing change, a recorder wake that ran even slightly late skipped that frame, leaving gaps that made clips choppy in games. A wake up to 70 ms late now catches up: the missed frames are encoded back to back, each on its own evenly spaced timestamp. Only longer stalls (capture transitions) skip ahead, so video still cannot drift behind audio (`EncoderCadence`).
+
 ## [1.6.3] - 2026-10-02
 
 ### Reliable Update Installs

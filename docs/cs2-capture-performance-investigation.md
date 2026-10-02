@@ -469,6 +469,10 @@ Fixes implemented:
   with a video clock drifting behind elapsed time. Existing duplication behavior
   remains enabled; the diagnostic now truthfully reports it. Scheduler lateness
   and skipped/repeated ticks are recorded rather than left at zero.
+  Revised in 1.6.4: skipping every expired tick made clips visibly choppy in
+  games, because an ordinary late wake left a gap in the output timeline. A
+  wake up to 70 ms late now catches up tick by tick (each on its own grid
+  timestamp, so the video clock never drifts); only longer stalls skip ahead.
 - `DeadlineWait.hpp`: high-resolution waitable timer, with a short encoder spin
   tail. DXGI acquisition stays non-blocking; after an empty poll, a 0.2 ms
   requested idle wait happens **outside** DXGI. OS wakeup precision is not

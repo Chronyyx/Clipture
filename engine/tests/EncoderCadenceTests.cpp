@@ -15,6 +15,21 @@ int main() {
             const auto tick = clock.advance(expected);
             require(tick.skipped == 0 && tick.lateness100ns == 0, "on-time tick skipped");
         }
+        // A short delay (a busy game) is caught up tick by tick, every
+        // timestamp evenly spaced, nothing skipped: no gap in the clip.
+        {
+            const auto first = clock.deadline100ns();
+            const auto wake = first + 400'000; // 40 ms late
+            int caughtUp = 0;
+            while (clock.deadline100ns() <= wake) {
+                const auto expected = clock.deadline100ns();
+                const auto tick = clock.advance(wake);
+                require(tick.skipped == 0, "short delay skipped a tick");
+                require(tick.deadline100ns == expected, "catch-up timestamp not on the grid");
+                ++caughtUp;
+            }
+            require(caughtUp >= 1 + int(400'000LL * fps / 10'000'000), "missed ticks not all caught up");
+        }
         const auto due = clock.deadline100ns();
         const auto late = clock.advance(due + 750'000); // a 75 ms transition stall
         require(late.skipped > 0 && late.lateness100ns == 750'000, "late wake not counted");
@@ -22,5 +37,5 @@ int main() {
         require(late.deadline100ns <= due + 750'000, "future timestamp selected");
         require(due + 750'000 - late.deadline100ns < 10'000'000 / fps + 1, "video clock fell behind");
     }
-    std::cout << "Encoder cadence: all rates, 120-second drift, late wake and no burst passed.\n";
+    std::cout << "Encoder cadence: all rates, 120-second drift, short-delay catch-up and long-stall skip passed.\n";
 }
