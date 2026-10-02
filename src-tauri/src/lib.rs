@@ -120,6 +120,7 @@ pub fn run() {
             commands::sharing_set_display_name,
             commands::sharing_add_friend,
             commands::sharing_accept_friend,
+            commands::sharing_set_nickname,
             commands::sharing_accept_invite,
             commands::sharing_dismiss_invite,
             commands::sharing_remove_friend,

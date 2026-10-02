@@ -26,6 +26,17 @@ pub struct Friend {
     /// Our request has not reached the peer yet (it was offline).
     #[serde(default)]
     pub undelivered: bool,
+    /// Our own name for them. It replaces `name` everywhere we show them,
+    /// is never sent to anyone, and survives whatever name they pick.
+    #[serde(default)]
+    pub nickname: Option<String>,
+}
+
+impl Friend {
+    /// What we call them: our nickname, or else the name they chose.
+    pub fn display_name(&self) -> &str {
+        self.nickname.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// Metadata a sender publishes about one clip. Validated on receipt.
@@ -54,7 +65,8 @@ pub struct ClipOffer {
 pub struct OutgoingShare {
     pub offer: ClipOffer,
     pub friend_id: String,
-    /// The file served: the clip, or its stream copy.
+    /// The file served: the clip, or (shared by builds before 1.6.5) its
+    /// stream copy.
     pub path: PathBuf,
     pub delivered: bool,
     /// The library clip, when `path` is a stream copy of it.
@@ -63,6 +75,10 @@ pub struct OutgoingShare {
     /// The library clip's digest when shared, to spot edits on re-sharing.
     #[serde(default)]
     pub source_blake3: Option<String>,
+    /// `path` is served in playing order through its linear view (see
+    /// `media::LinearView`); the offer's size and digest are the view's.
+    #[serde(default)]
+    pub linear: bool,
     /// What the friend decided. Shares from before friends could decline
     /// were already in their inbox, so they read as accepted.
     #[serde(default = "accepted")]

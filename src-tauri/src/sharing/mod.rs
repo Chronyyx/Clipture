@@ -11,6 +11,7 @@ mod service;
 mod store;
 mod streams;
 mod transfers;
+mod view_body;
 mod wire;
 
 pub use core::{ShareCue, SharingEvents};

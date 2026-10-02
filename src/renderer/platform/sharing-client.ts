@@ -16,6 +16,7 @@ function createUnsupportedSharingAdapter(): SharingApi {
     acceptInvite: unavailable,
     dismissInvite: unavailable,
     acceptFriend: unavailable,
+    setFriendNickname: unavailable,
     removeFriend: unavailable,
     shareClip: unavailable,
     revokeShare: unavailable,

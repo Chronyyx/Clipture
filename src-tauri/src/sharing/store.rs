@@ -142,6 +142,7 @@ impl StoredState {
             status: FriendStatus::Outgoing,
             added_at_ms: now_ms,
             undelivered: true,
+            nickname: None,
         });
         Ok(FriendStatus::Outgoing)
     }
@@ -186,8 +187,20 @@ impl StoredState {
             status: FriendStatus::Incoming,
             added_at_ms: now_ms,
             undelivered: false,
+            nickname: None,
         });
         HelloOutcome::Requested
+    }
+
+    /// Sets or clears (`None`) our own name for someone on the list.
+    pub fn set_nickname(&mut self, id: &str, nickname: Option<String>) -> AppResult<()> {
+        let friend = self
+            .friends
+            .iter_mut()
+            .find(|friend| friend.id == id)
+            .ok_or_else(|| AppError::Path("that friend is no longer on your list".into()))?;
+        friend.nickname = nickname;
+        Ok(())
     }
 
     pub fn accept_request(&mut self, id: &str) -> AppResult<()> {
@@ -580,6 +593,7 @@ mod tests {
             kept: false,
             accepted_at_ms: None,
             keep_started: false,
+            linear: false,
         });
         assert!(state.outgoing_for("a", "s1").is_some());
         assert!(state.outgoing_for("b", "s1").is_none());
@@ -634,6 +648,7 @@ mod tests {
             kept: false,
             accepted_at_ms: None,
             keep_started: false,
+            linear: false,
         });
         assert_eq!(state.receive_answer("b", "s1", false, false, 1), None);
         assert_eq!(state.receive_answer("a", "s1", false, false, 1), Some(AnswerChange::Declined));
@@ -667,6 +682,7 @@ mod tests {
             kept: false,
             accepted_at_ms: None,
             keep_started: false,
+            linear: false,
         };
         state.add_outgoing(share("s1"));
         state.add_outgoing(share("s2"));
@@ -719,6 +735,20 @@ mod tests {
         assert!(other.forget_unfriended("b"));
         assert!(other.friends.is_empty());
         assert!(other.goodbyes.is_empty(), "being dropped is not a removal to announce");
+    }
+
+    #[test]
+    fn a_nickname_outlasts_the_name_they_choose() {
+        let mut state = StoredState::default();
+        state.receive_hello("x", "Rude name", 1);
+        state.set_nickname("x", Some("Sam".into())).unwrap();
+        assert_eq!(state.friend("x").unwrap().display_name(), "Sam");
+        // They rename themselves (still a request, so their name updates).
+        state.receive_hello("x", "Ruder name", 2);
+        assert_eq!(state.friend("x").unwrap().display_name(), "Sam");
+        state.set_nickname("x", None).unwrap();
+        assert_eq!(state.friend("x").unwrap().display_name(), "Ruder name");
+        assert!(state.set_nickname("nobody", Some("A".into())).is_err());
     }
 
     #[test]

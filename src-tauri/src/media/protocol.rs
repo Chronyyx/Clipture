@@ -391,6 +391,17 @@ fn capped_range(range: ByteRange, maximum_bytes: u64) -> ByteRange {
 fn read_video_bytes(plan: &VideoStreamPlan) -> AppResult<Vec<u8>> {
     let length = usize::try_from(plan.range.len())
         .map_err(|_| AppError::Path("media range is too large".into()))?;
+    if let Some(view) = &plan.view {
+        let mut bytes = vec![0_u8; length];
+        view.open_source()
+            .and_then(|mut file| view.read_at(&mut file, plan.range.start, &mut bytes))
+            .map_err(|source| AppError::Io {
+                action: "read authorized playback media",
+                path: plan.path.clone(),
+                source,
+            })?;
+        return Ok(bytes);
+    }
     let mut file = File::open(&plan.path).map_err(|source| AppError::Io {
         action: "open authorized playback media",
         path: plan.path.clone(),
@@ -707,6 +718,7 @@ mod tests {
                 offset: 6,
                 bytes: vec![90, 91],
             }],
+            view: None,
         };
         assert_eq!(
             read_video_bytes(&plan).unwrap(),
@@ -741,6 +753,36 @@ mod tests {
         let request = Request::builder().uri(uri).body(Vec::new()).unwrap();
         let denied = handle_request(Some(media), "other-window", request);
         assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn scrambled_clips_are_served_in_playing_order() {
+        let root = tempfile::tempdir().unwrap();
+        let video = root.path().join("ring.mp4");
+        crate::media::write_scrambled_clip(&video);
+        let authority = PathAuthorizer::from_records([ClipRecord {
+            id: "ring".into(),
+            file_path: video.to_string_lossy().into(),
+            ..ClipRecord::default()
+        }]);
+        let sessions = Arc::new(MediaSessionRegistry::new("clipture-media://localhost").unwrap());
+        let media = Arc::new(MediaService::new(sessions, Arc::new(FakeFfmpeg)));
+        let session = media.open_playback(&authority, "ring", &[], "main").unwrap();
+        let view = crate::media::LinearView::open(&video, &[]).unwrap().unwrap();
+        let mut expected = vec![0_u8; view.len() as usize];
+        view.read_at(&mut view.open_source().unwrap(), 0, &mut expected).unwrap();
+
+        let uri = format!("clipture-media://localhost/v1/session/{}/video", session.session_id);
+        let request = Request::builder().uri(&uri).header(RANGE, "bytes=0-").body(Vec::new()).unwrap();
+        let response = handle_request(Some(media.clone()), "main", request);
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers()[CONTENT_RANGE], format!("bytes 0-{}/{}", view.len() - 1, view.len()));
+        assert_eq!(response.body(), &expected);
+
+        // A clip replaced while open is not served from the old layout.
+        fs::write(&video, b"replaced").unwrap();
+        let request = Request::builder().uri(&uri).body(Vec::new()).unwrap();
+        assert_ne!(handle_request(Some(media), "main", request).status(), StatusCode::OK);
     }
 
     #[test]

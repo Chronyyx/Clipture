@@ -96,6 +96,22 @@ pub fn sharing_dismiss_invite(state: State<'_, AppState>) -> SharingSnapshot {
     state.sharing.snapshot()
 }
 
+/// Our own name for a friend, shown instead of theirs; empty clears it.
+#[tauri::command]
+pub fn sharing_set_nickname(
+    state: State<'_, AppState>,
+    friend_id: String,
+    nickname: String,
+) -> CommandResult<SharingSnapshot> {
+    friend(&friend_id)?;
+    bounded(&nickname)?;
+    state
+        .sharing
+        .set_friend_nickname(&friend_id, &nickname)
+        .map_err(|error| error.to_string())?;
+    Ok(state.sharing.snapshot())
+}
+
 #[tauri::command]
 pub fn sharing_accept_friend(
     state: State<'_, AppState>,

@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.5] - 2026-10-02
+
+### Friend Nicknames, Smooth Playback & Instant Sends
+
+- **Nicknames only you see:** Any friend or friend request can be renamed from the Friends tab (pencil on the row). The nickname replaces the name they chose everywhere in your Clipture (friends list, sidebar, send dialog, incoming clips, notices), is never sent to them, and outlasts any name they pick later. "Use their name" clears it. New `setFriendNickname` / `sharing_set_nickname`; friends carry `nickname` in `state.json`.
+- **No more freeze about a second into a clip:** Save in place turns the replay buffer itself into the clip, so frames sit wherever the buffer had room (in a measured 2-minute clip, consecutive frames jumped hundreds of MB about 850 times). The player had to jump across the whole file and froze at about 0.7 s while its cache filled. Such clips are now played through a linear view: the same file with only the index's chunk offsets rewritten and every chunk served in playing order, read from the original on request (`media/linear_view.rs`). Nothing is copied or written, and clips that are already in order are served as before. In a headless Edge replay of that clip, playback start went from a 0.8 s freeze, about 375 range requests and 1.5 GB read to no freeze, 31 requests and 124 MB. All 35,413 packets are byte-identical to the original.
+- **Sending a clip to a friend starts right away:** Out-of-order clips are sent through the same view instead of a remuxed FFmpeg copy under `<saveFolder>\.clipture-sharing`, so there is no remux wait and no extra 700 MB on disk. The offer's size and digest are the view's, and the friend keeps a normal time-ordered MP4. Shares made by older builds keep their copies (outgoing shares gain `linear` in `state.json`).
+
 ## [1.6.4] - 2026-10-02
 
 ### Smooth Clips Under Game Load

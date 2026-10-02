@@ -119,7 +119,6 @@ impl AppState {
             Arc::new(SharedClipLibrary {
                 settings: settings.clone(),
                 clips: clips.clone(),
-                media: media.clone(),
             }),
             runtime,
             if paths.test_mode {
@@ -210,7 +209,6 @@ impl AppState {
 struct SharedClipLibrary {
     settings: Arc<SettingsStore>,
     clips: Arc<ClipService>,
-    media: Arc<MediaService>,
 }
 
 impl ClipLibrary for SharedClipLibrary {
@@ -225,14 +223,6 @@ impl ClipLibrary for SharedClipLibrary {
     /// Hidden (dot) folders are skipped by the library scan.
     fn outgoing_copies_folder(&self) -> PathBuf {
         PathBuf::from(self.settings.get().save_folder).join(".clipture-sharing")
-    }
-
-    fn write_stream_copy(
-        &self,
-        source: &std::path::Path,
-        destination: &std::path::Path,
-    ) -> crate::error::AppResult<bool> {
-        self.media.write_stream_copy(source, destination)
     }
 }
 

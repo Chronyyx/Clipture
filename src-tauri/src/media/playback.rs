@@ -1,7 +1,7 @@
 use std::{
     ffi::OsString,
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, OnceLock},
     time::Duration,
 };
@@ -13,8 +13,8 @@ use crate::{
 
 use super::{
     audio_edit_list_patches, library_input, resolve_range, ByteRange, FfmpegExecutor, FfmpegJob,
-    MediaSessionRegistry, PlaybackDescriptor, PlaybackPatch, RemoteMediaSource, RemoteVideoChunk,
-    ThumbnailService,
+    LinearView, MediaSessionRegistry, PlaybackDescriptor, PlaybackPatch, RemoteMediaSource,
+    RemoteVideoChunk, ThumbnailService,
 };
 
 const MAXIMUM_AUDIO_CHUNK_BYTES: usize = 8 * 1024 * 1024;
@@ -25,6 +25,8 @@ pub struct VideoStreamPlan {
     pub content_type: &'static str,
     pub range: ByteRange,
     pub patches: Vec<PlaybackPatch>,
+    /// Read through this instead of `path` (patches already applied).
+    pub view: Option<Arc<LinearView>>,
 }
 
 pub struct MediaService {
@@ -55,8 +57,17 @@ impl MediaService {
             .primary(clip_id)
             .ok_or_else(|| AppError::Path("clip is not authorized for playback".into()))?;
         let patches = audio_edit_list_patches(path);
+        // Save in place stores frames wherever the replay buffer had room;
+        // played as stored, the player jumps across the file and stalls.
+        let view = match LinearView::open(path, &patches) {
+            Ok(view) => view.map(Arc::new),
+            Err(error) => {
+                tracing::warn!(%error, "could not lay the clip out for playback; playing it as stored");
+                None
+            }
+        };
         self.sessions
-            .open(authority, clip_id, audio_tracks, patches, owner)
+            .open(authority, clip_id, audio_tracks, patches, view, owner)
     }
 
     pub fn video_stream_plan(
@@ -66,20 +77,27 @@ impl MediaService {
         range_header: Option<&str>,
     ) -> AppResult<VideoStreamPlan> {
         let session = self.sessions.resolve(session_id, owner)?;
-        let total = fs::metadata(&session.path)
-            .map_err(|source| AppError::Io {
-                action: "inspect playback media",
-                path: session.path.clone(),
-                source,
-            })?
-            .len();
+        let total = match &session.view {
+            Some(view) if !view.is_current() => {
+                return Err(AppError::Path("the clip changed while it was open".into()))
+            }
+            Some(view) => view.len(),
+            None => fs::metadata(&session.path)
+                .map_err(|source| AppError::Io {
+                    action: "inspect playback media",
+                    path: session.path.clone(),
+                    source,
+                })?
+                .len(),
+        };
         let range = resolve_range(range_header, total)
             .map_err(|error| AppError::Path(format!("invalid media byte range: {error:?}")))?;
         Ok(VideoStreamPlan {
             path: session.path,
             content_type: session.content_type,
             range,
-            patches: session.playback_patches,
+            patches: if session.view.is_some() { Vec::new() } else { session.playback_patches },
+            view: session.view,
         })
     }
 
@@ -182,12 +200,6 @@ impl MediaService {
                 output.stderr
             }))
         }
-    }
-
-    /// A copy of a clip laid out for streaming to a friend; `false` when
-    /// the clip already streams well and no copy was written.
-    pub fn write_stream_copy(&self, input: &Path, output: &Path) -> AppResult<bool> {
-        super::layout_repair::write_stream_copy(self.ffmpeg.as_ref(), input, output)
     }
 
     pub fn thumbnail(&self, authority: &PathAuthorizer, clip_id: &str) -> AppResult<String> {

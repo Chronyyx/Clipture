@@ -28,6 +28,8 @@ pub struct TrackLayout {
     /// Decode time of each sample in seconds.
     pub times: Vec<f64>,
     pub duration_seconds: f64,
+    /// How many samples each chunk of the offset table holds, in table order.
+    pub chunk_samples: Vec<u32>,
 }
 
 impl TrackLayout {
@@ -230,12 +232,14 @@ fn parse_track(trak: &[u8]) -> Option<TrackLayout> {
     let stsc = child(stbl, &[b"stsc"])?;
     let runs = u32_at(stsc, 4)? as usize;
     let mut offsets = Vec::with_capacity(count);
+    let mut chunk_samples = Vec::with_capacity(chunks.len());
     for run in 0..runs {
         let first = u32_at(stsc, 8 + 12 * run)? as usize;
         let per_chunk = u32_at(stsc, 12 + 12 * run)? as usize;
         let last = if run + 1 < runs { u32_at(stsc, 8 + 12 * (run + 1))? as usize - 1 } else { chunks.len() };
         for chunk in first..=last {
             let mut offset = *chunks.get(chunk.checked_sub(1)?)?;
+            let before = offsets.len();
             for _ in 0..per_chunk {
                 if offsets.len() >= count {
                     break;
@@ -243,6 +247,7 @@ fn parse_track(trak: &[u8]) -> Option<TrackLayout> {
                 offsets.push(offset);
                 offset += u64::from(sizes[offsets.len() - 1]);
             }
+            chunk_samples.push((offsets.len() - before) as u32);
         }
     }
     if offsets.len() != count {
@@ -267,6 +272,7 @@ fn parse_track(trak: &[u8]) -> Option<TrackLayout> {
         sizes,
         times,
         duration_seconds: ticks as f64 / timescale,
+        chunk_samples,
     })
 }
 

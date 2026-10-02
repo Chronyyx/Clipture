@@ -14,10 +14,12 @@ use iroh::{
     protocol::{AcceptError, ProtocolHandler},
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncSeekExt},
+    io::{AsyncRead, AsyncReadExt, AsyncSeekExt},
     sync::Semaphore,
     time::timeout,
 };
+
+use crate::media::LinearViews;
 
 use super::{
     core::{now_ms, Core, ShareCue},
@@ -26,6 +28,7 @@ use super::{
     presence::PresenceBook,
     store::{AnswerChange, HelloOutcome, OfferOutcome},
     transfers::{Change, TransferBook},
+    view_body::ViewBody,
     wire::{self, RangePurpose, Request, Response},
 };
 
@@ -50,6 +53,8 @@ pub struct PeerContext {
     pub on_closed: Box<dyn Fn() + Send + Sync>,
     /// How long a friend may watch or start keeping a clip after accepting.
     pub share_window_ms: Arc<std::sync::atomic::AtomicU64>,
+    /// Clips shared in playing order, ready for the next range.
+    pub views: Arc<LinearViews>,
 }
 
 impl PeerContext {
@@ -323,9 +328,9 @@ async fn serve_range(
     let share = core.read(|state| {
         state
             .outgoing_for(peer, share_id)
-            .map(|share| (share.path.clone(), share.offer.size))
+            .map(|share| (share.path.clone(), share.offer.size, share.linear))
     });
-    let Some((path, size)) = share else {
+    let Some((path, size, linear)) = share else {
         if is_stranger(core, peer) {
             return reply(send, not_friends(context, peer)).await;
         }
@@ -349,17 +354,9 @@ async fn serve_range(
     if admission.implicitly_accepted {
         core.events.cue(ShareCue::Accepted);
     }
-    let file = async {
-        let mut file = tokio::fs::File::open(&path).await?;
-        // A clip that was edited after sharing no longer matches its digest.
-        if file.metadata().await?.len() != size {
-            return Err(std::io::Error::other("size changed"));
-        }
-        file.seek(std::io::SeekFrom::Start(start)).await?;
-        Ok(file)
-    };
-    let file = match file.await {
-        Ok(file) => file,
+    let source = open_source(context, path, linear, size, start, length);
+    let source = match source.await {
+        Ok(source) => source,
         Err(_) => return reply(send, denied("the clip was moved, edited or deleted")).await,
     };
     let total = size;
@@ -389,8 +386,6 @@ async fn serve_range(
             None => {}
         }
     };
-    // Large reads keep the QUIC send buffer full; the default is 8 KiB.
-    let source = tokio::io::BufReader::with_capacity(SEND_BUFFER, file.take(length));
     let result = super::range_body::send_body(source, send, length, sparse, &mut on_progress)
         .await
         .map_err(|error| error.to_string());
@@ -400,6 +395,36 @@ async fn serve_range(
     }
     core.events.changed();
     result
+}
+
+/// The bytes of `start..start + length` as shared: the clip as stored, or
+/// in playing order through its view. A clip edited after sharing no longer
+/// matches its digest, so a changed size refuses the read.
+async fn open_source(
+    context: &PeerContext,
+    path: std::path::PathBuf,
+    linear: bool,
+    size: u64,
+    start: u64,
+    length: u64,
+) -> std::io::Result<Box<dyn AsyncRead + Unpin + Send>> {
+    if linear {
+        let views = context.views.clone();
+        let view = tokio::task::spawn_blocking(move || views.get(&path))
+            .await
+            .map_err(std::io::Error::other)?
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .filter(|view| view.len() == size)
+            .ok_or_else(|| std::io::Error::other("the clip changed"))?;
+        return Ok(Box::new(ViewBody::new(view, start, start + length)));
+    }
+    let mut file = tokio::fs::File::open(&path).await?;
+    if file.metadata().await?.len() != size {
+        return Err(std::io::Error::other("size changed"));
+    }
+    file.seek(std::io::SeekFrom::Start(start)).await?;
+    // Large reads keep the QUIC send buffer full; the default is 8 KiB.
+    Ok(Box::new(tokio::io::BufReader::with_capacity(SEND_BUFFER, file.take(length))))
 }
 
 /// The friend now has every byte of the clip. Their confirmed save, not

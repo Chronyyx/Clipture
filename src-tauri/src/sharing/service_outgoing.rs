@@ -1,18 +1,16 @@
 //! Offering clips to friends. A clip that streams badly as recorded (in-place
-//! recordings are often half zero padding, with frames out of time order) is
-//! sent as a remuxed copy: lossless, time-ordered, index first, and about half
-//! the size. Copies live in `<save folder>/.clipture-sharing` (hidden from the
-//! library scan) and are deleted when their share ends; a size cap and an age
-//! limit keep them from piling up.
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+//! recordings can be part zero padding, with frames out of time order) is
+//! sent through its linear view: the same samples in playing order, index
+//! first, read from the clip as the friend asks for them, without writing a
+//! copy. Builds before 1.6.5 sent a remuxed copy from
+//! `<save folder>/.clipture-sharing` instead; those shares keep working, and
+//! their copies are still deleted when the share ends, past a size cap or
+//! an age limit.
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
     error::{AppError, AppResult},
-    media::random_token,
+    media::{random_token, LinearView},
 };
 
 use super::super::{
@@ -20,7 +18,7 @@ use super::super::{
     model::{ClipOffer, OutgoingShare, ShareAnswer},
     wire::{self, MAX_CLIP_BYTES},
 };
-use super::{hash_file, ShareSource, SharingService};
+use super::{hash_file, hash_view, ShareSource, SharingService};
 
 /// Disk the stream copies may use together; the oldest shares go first.
 const MAX_COPY_BYTES: u64 = 10 * 1024 * 1024 * 1024;
@@ -42,8 +40,9 @@ impl SharingService {
             return Err(AppError::Path("this clip is too large to share".into()));
         }
         // Sharing again re-sends: the friend may have removed it from their
-        // list. Unchanged, the same share goes out again; edited since (or its
-        // copy is gone), the old share no longer matches and is replaced.
+        // list. Unchanged, the same share goes out again; edited since (or an
+        // older build's copy is gone), the old share no longer matches and is
+        // replaced.
         let existing = self.core.update_when(|state| {
             let index = state
                 .outbox
@@ -75,9 +74,16 @@ impl SharingService {
         }
 
         let share_id: String = random_token().chars().take(32).collect();
-        let served = self.stream_copy(&source.path, &share_id);
-        let (size, digest) = match &served {
-            Some(copy) => hash_file(copy)?,
+        let view = match LinearView::open(&source.path, &[]) {
+            Ok(view) => view,
+            Err(error) => {
+                // Sending the clip as recorded still works, just slower.
+                tracing::warn!(%error, "could not lay the clip out for sending; sharing it as stored");
+                None
+            }
+        };
+        let (size, digest) = match &view {
+            Some(view) => hash_view(view)?,
             None => (source_size, source_digest.clone()),
         };
         let offer = ClipOffer {
@@ -95,10 +101,11 @@ impl SharingService {
         let share = OutgoingShare {
             offer,
             friend_id: friend_id.into(),
-            path: served.clone().unwrap_or_else(|| source.path.clone()),
+            path: source.path,
             delivered: false,
-            source: served.is_some().then_some(source.path),
+            source: None,
             source_blake3: Some(source_digest),
+            linear: view.is_some(),
             answer: ShareAnswer::Pending,
             received_whole: false,
             kept: false,
@@ -121,25 +128,6 @@ impl SharingService {
         self.transfers.forget(share_id);
         self.tidy_copies();
         Ok(())
-    }
-
-    /// A stream-friendly copy of `source`, or `None` to send it as is.
-    fn stream_copy(&self, source: &Path, share_id: &str) -> Option<PathBuf> {
-        let folder = self.library.outgoing_copies_folder();
-        if let Err(error) = std::fs::create_dir_all(&folder) {
-            tracing::warn!(%error, "could not create the shared copies folder");
-            return None;
-        }
-        let copy = folder.join(format!("{share_id}.mp4"));
-        match self.library.write_stream_copy(source, &copy) {
-            Ok(true) => Some(copy),
-            Ok(false) => None,
-            Err(error) => {
-                // Sending the clip as recorded still works, just slower.
-                tracing::warn!(%error, "could not prepare a stream copy; sharing the clip as is");
-                None
-            }
-        }
     }
 
     /// Ends shares whose copies are too old or over the size cap (oldest

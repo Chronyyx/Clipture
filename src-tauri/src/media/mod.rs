@@ -2,6 +2,9 @@ mod base64;
 mod ffmpeg;
 mod layout_probe;
 mod layout_repair;
+mod linear_view;
+#[cfg(test)]
+mod linear_view_tests;
 mod playback;
 mod protocol;
 mod range;
@@ -29,6 +32,9 @@ pub use ffmpeg::{
 pub(crate) use ffmpeg::library_input;
 pub use layout_probe::layout_from_moov;
 pub use layout_repair::{ClipLayoutRepair, RepairCandidate};
+pub use linear_view::{LinearView, LinearViews};
+#[cfg(test)]
+pub(crate) use linear_view_tests::write_scrambled_clip;
 pub use playback::{MediaService, VideoStreamPlan};
 pub(crate) use protocol::handle_request as handle_protocol_request;
 pub(crate) use protocol::MediaAdmission;

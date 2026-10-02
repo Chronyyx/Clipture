@@ -108,6 +108,11 @@ pub async fn invoke(
         )?),
         "sharing_accept_invite" => encode(commands::sharing_accept_invite(state)?),
         "sharing_dismiss_invite" => encode(commands::sharing_dismiss_invite(state)),
+        "sharing_set_nickname" => encode(commands::sharing_set_nickname(
+            state,
+            argument(&args, "friendId")?,
+            argument(&args, "nickname")?,
+        )?),
         "sharing_accept_friend" => {
             encode(commands::sharing_accept_friend(state, argument(&args, "friendId")?)?)
         }

@@ -37,11 +37,8 @@ const MAX_DOWNLOAD_ROWS: usize = 20;
 pub trait ClipLibrary: Send + Sync {
     fn shared_clips_folder(&self) -> PathBuf;
     fn publish(&self, record: ClipRecord) -> AppResult<()>;
-    /// Where stream copies of clips we share are kept.
+    /// Where builds before 1.6.5 kept stream copies of clips we share.
     fn outgoing_copies_folder(&self) -> PathBuf;
-    /// Writes a stream-friendly copy of `source` to `destination`; `false`
-    /// (writing nothing) when the clip already streams well as stored.
-    fn write_stream_copy(&self, source: &std::path::Path, destination: &std::path::Path) -> AppResult<bool>;
 }
 
 /// A clip from the local library, already authorized by the caller.
@@ -218,6 +215,12 @@ impl SharingService {
         }
     }
 
+    /// Our own name for a friend; an empty one goes back to theirs.
+    pub fn set_friend_nickname(&self, id: &str, nickname: &str) -> AppResult<()> {
+        let nickname = Some(wire::clean_name(nickname)).filter(|name| !name.is_empty());
+        self.core.update(|state| state.set_nickname(id, nickname))?
+    }
+
     pub fn accept_friend(self: &Arc<Self>, id: &str) -> AppResult<()> {
         self.core.update(|state| state.accept_request(id))??;
         self.deliver_soon();
@@ -345,6 +348,26 @@ fn hash_file(path: &std::path::Path) -> AppResult<(u64, String)> {
         size += read as u64;
     }
     Ok((size, hasher.finalize().to_hex().to_string()))
+}
+
+/// Size and digest of a clip as its linear view presents it.
+fn hash_view(view: &crate::media::LinearView) -> AppResult<(u64, String)> {
+    let io = |source| AppError::Io {
+        action: "read clip to share",
+        path: view.path().to_owned(),
+        source,
+    };
+    let mut file = view.open_source().map_err(io)?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut position = 0;
+    while position < view.len() {
+        let count = (view.len() - position).min(buffer.len() as u64) as usize;
+        view.read_at(&mut file, position, &mut buffer[..count]).map_err(io)?;
+        hasher.update(&buffer[..count]);
+        position += count as u64;
+    }
+    Ok((view.len(), hasher.finalize().to_hex().to_string()))
 }
 
 /// Unused ids are rejected by the store; this only guards the command layer.

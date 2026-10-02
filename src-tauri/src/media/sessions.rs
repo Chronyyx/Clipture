@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Mutex,
+        Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -17,7 +17,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::PlaybackPatch;
+use super::{LinearView, PlaybackPatch};
 
 const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_SESSION_LIMIT: usize = 32;
@@ -42,6 +42,8 @@ pub struct ResolvedSession {
     pub content_type: &'static str,
     pub selected_audio_indexes: Vec<u8>,
     pub playback_patches: Vec<PlaybackPatch>,
+    /// The clip in playing order, when it is not stored that way.
+    pub view: Option<Arc<LinearView>>,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +52,7 @@ struct SessionEntry {
     path: PathBuf,
     selected_audio_indexes: Vec<u8>,
     playback_patches: Vec<PlaybackPatch>,
+    view: Option<Arc<LinearView>>,
     owner: String,
     touched_at: Instant,
 }
@@ -95,6 +98,7 @@ impl MediaSessionRegistry {
         clip_id: &str,
         audio_tracks: &[String],
         playback_patches: Vec<PlaybackPatch>,
+        view: Option<Arc<LinearView>>,
         owner: &str,
     ) -> AppResult<PlaybackDescriptor> {
         let path = authority
@@ -127,6 +131,7 @@ impl MediaSessionRegistry {
                 path,
                 selected_audio_indexes: indexes,
                 playback_patches,
+                view,
                 owner: owner.into(),
                 touched_at: Instant::now(),
             },
@@ -169,6 +174,7 @@ impl MediaSessionRegistry {
             path: entry.path.clone(),
             selected_audio_indexes: entry.selected_audio_indexes.clone(),
             playback_patches: entry.playback_patches.clone(),
+            view: entry.view.clone(),
         })
     }
 
@@ -341,10 +347,10 @@ mod tests {
         }]);
         let registry = MediaSessionRegistry::new("clipture-media://localhost").unwrap();
         assert!(registry
-            .open(&authority, "unknown", &[], vec![], "window-a")
+            .open(&authority, "unknown", &[], vec![], None, "window-a")
             .is_err());
         let opened = registry
-            .open(&authority, "known", &["system".into()], vec![], "window-a")
+            .open(&authority, "known", &["system".into()], vec![], None, "window-a")
             .unwrap();
         assert!(registry.resolve(&opened.session_id, "window-b").is_err());
         assert!(registry.resolve(&opened.session_id, "window-a").is_ok());
@@ -370,7 +376,7 @@ mod tests {
         .unwrap();
         for _ in 0..3 {
             registry
-                .open(&authority, "known", &[], vec![], "owner")
+                .open(&authority, "known", &[], vec![], None, "owner")
                 .unwrap();
         }
         assert_eq!(registry.active_count(), 2);

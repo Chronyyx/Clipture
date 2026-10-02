@@ -26,7 +26,10 @@ export interface OutgoingTransfer {
 export interface Friend {
   /** The friend's public key, which is also their friend code. */
   id: string;
+  /** What to show: your nickname for them when set, else the name they chose. */
   name: string;
+  /** Your own name for them, never sent to anyone; null uses theirs. */
+  nickname: string | null;
   status: FriendStatus;
   addedAtMs: number;
   /** Our request/acceptance has not reached them yet. */
@@ -127,6 +130,8 @@ export interface SharingApi {
   acceptInvite(): Promise<SharingSnapshot>;
   dismissInvite(): Promise<SharingSnapshot>;
   acceptFriend(friendId: string): Promise<SharingSnapshot>;
+  /** Your own name for someone on the list; an empty one goes back to theirs. */
+  setFriendNickname(friendId: string, nickname: string): Promise<SharingSnapshot>;
   /** Removes a friend, or declines (and blocks) a pending request. */
   removeFriend(friendId: string): Promise<SharingSnapshot>;
   /** `filePath` must be a clip from the current library listing. The friend

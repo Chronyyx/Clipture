@@ -33,6 +33,7 @@ export function createMockSharingAdapter(options: MockSharingOptions = {}): Shar
     ...clone(options.seed ?? {})
   };
   const changed = () => { for (const listener of [...listeners]) listener(); };
+  const chosenNames = new Map<string, string>();
   const commit = async (change: (draft: SharingSnapshot) => void) => {
     await delay(latency / 3);
     change(state);
@@ -63,7 +64,7 @@ export function createMockSharingAdapter(options: MockSharingOptions = {}): Shar
     addFriend: async (code, name) => {
       if (code.trim().length < 52) throw new Error('That friend code or invite link is not valid.');
       await commit((draft) => {
-        draft.friends.push({ id: code.trim(), name: name.trim() || 'Friend', status: 'outgoing', addedAtMs: Date.now(), undelivered: true, presence: 'offline' });
+        draft.friends.push({ id: code.trim(), name: name.trim() || 'Friend', status: 'outgoing', addedAtMs: Date.now(), undelivered: true, presence: 'offline', nickname: null });
       });
       return 'outgoing';
     },
@@ -76,10 +77,22 @@ export function createMockSharingAdapter(options: MockSharingOptions = {}): Shar
       draft.friendCode = mockCode;
       draft.inviteLink = mockInviteLink(draft.displayName);
       if (!draft.friends.some((candidate) => candidate.id === invite.code)) {
-        draft.friends.push({ id: invite.code, name: invite.name || 'Friend', status: 'outgoing', addedAtMs: Date.now(), undelivered: false, presence: 'offline' });
+        draft.friends.push({ id: invite.code, name: invite.name || 'Friend', status: 'outgoing', addedAtMs: Date.now(), undelivered: false, presence: 'offline', nickname: null });
       }
     }),
     dismissInvite: () => commit((draft) => { draft.pendingInvite = null; }),
+    // The mock keeps each friend's own name beside the nickname, like the host.
+    setFriendNickname: (friendId, nickname) => commit((draft) => {
+      const target = friend(friendId);
+      const own = chosenNames.get(friendId) ?? target.name;
+      chosenNames.set(friendId, own);
+      const trimmed = nickname.trim().slice(0, 40);
+      target.nickname = trimmed || null;
+      target.name = trimmed || own;
+      for (const clip of [...draft.inbox, ...draft.outbox]) {
+        if (clip.friendId === friendId) clip.friendName = target.name;
+      }
+    }),
     acceptFriend: (friendId) => commit(() => {
       const accepted = friend(friendId);
       accepted.status = 'accepted';
@@ -186,13 +199,13 @@ export function mockSharingSeed(search: string): MockSharingOptions | undefined 
   const now = Date.now();
   const hour = 3_600_000;
   const friends: Friend[] = [
-    { id: 'k7qh3nfw1ecxmg8dyb5o6tzr9uaspi4jk7qh3nfw1ecxmg8dyb5o', name: 'Maya', status: 'accepted', addedAtMs: now - 90 * hour, undelivered: false, presence: 'online' },
-    { id: 'x1pqm8bwz3hfk6yrcg9eondt5sau47jix1pqm8bwz3hfk6yrcg9e', name: 'Theo', status: 'accepted', addedAtMs: now - 40 * hour, undelivered: false, presence: 'offline' },
-    { id: 'm2zkd9rqw4xbn7ycht1eog5pusa36jfim2zkd9rqw4xbn7ycht1e', name: 'Jo', status: 'accepted', addedAtMs: now - 70 * hour, undelivered: false, presence: 'online' },
-    { id: 'p8wte3jnk6rxq1bmz9yudh4gosa57cfip8wte3jnk6rxq1bmz9yu', name: 'Kai', status: 'accepted', addedAtMs: now - 12 * hour, undelivered: false, presence: 'online' },
-    { id: 'e5rbn2xhz8kqw4tmj7yco1dgusa96pfie5rbn2xhz8kqw4tmj7yc', name: 'Priya', status: 'accepted', addedAtMs: now - 200 * hour, undelivered: false, presence: 'offline' },
-    { id: 'u9djr3kx5ybe1qmcgn8zhtwo6spa74fiu9djr3kx5ybe1qmcgn8z', name: 'Rin', status: 'incoming', addedAtMs: now - hour / 3, undelivered: false, presence: 'offline' },
-    { id: 'c4hn8oyqg1tkx5bm3ejw9rzdup6as7fic4hn8oyqg1tkx5bm3ejw', name: 'Sam', status: 'outgoing', addedAtMs: now - 2 * hour, undelivered: true, presence: 'offline' }
+    { id: 'k7qh3nfw1ecxmg8dyb5o6tzr9uaspi4jk7qh3nfw1ecxmg8dyb5o', name: 'Maya', status: 'accepted', addedAtMs: now - 90 * hour, undelivered: false, presence: 'online', nickname: null },
+    { id: 'x1pqm8bwz3hfk6yrcg9eondt5sau47jix1pqm8bwz3hfk6yrcg9e', name: 'Theo', status: 'accepted', addedAtMs: now - 40 * hour, undelivered: false, presence: 'offline', nickname: null },
+    { id: 'm2zkd9rqw4xbn7ycht1eog5pusa36jfim2zkd9rqw4xbn7ycht1e', name: 'Jo', status: 'accepted', addedAtMs: now - 70 * hour, undelivered: false, presence: 'online', nickname: null },
+    { id: 'p8wte3jnk6rxq1bmz9yudh4gosa57cfip8wte3jnk6rxq1bmz9yu', name: 'Kai', status: 'accepted', addedAtMs: now - 12 * hour, undelivered: false, presence: 'online', nickname: null },
+    { id: 'e5rbn2xhz8kqw4tmj7yco1dgusa96pfie5rbn2xhz8kqw4tmj7yc', name: 'Priya', status: 'accepted', addedAtMs: now - 200 * hour, undelivered: false, presence: 'offline', nickname: null },
+    { id: 'u9djr3kx5ybe1qmcgn8zhtwo6spa74fiu9djr3kx5ybe1qmcgn8z', name: 'Rin', status: 'incoming', addedAtMs: now - hour / 3, undelivered: false, presence: 'offline', nickname: null },
+    { id: 'c4hn8oyqg1tkx5bm3ejw9rzdup6as7fic4hn8oyqg1tkx5bm3ejw', name: 'Sam', status: 'outgoing', addedAtMs: now - 2 * hour, undelivered: true, presence: 'offline', nickname: null }
   ];
   const shared = (index: number, friendIndex: number, title: string, game: string, durationSeconds: number, hoursAgo: number, saved = false): SharedClip => ({
     shareId: String(index).repeat(32).slice(0, 32),

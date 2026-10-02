@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::{
-    layout_probe::{is_padded, needs_interleave_repair, needs_stream_layout, read_layout, TrackLayout},
+    layout_probe::{is_padded, needs_interleave_repair, read_layout, TrackLayout},
     library_input, FfmpegExecutor, FfmpegJob,
 };
 
@@ -154,7 +154,7 @@ fn repair_clip(ffmpeg: &dyn FfmpegExecutor, replace: fn(&Path, &Path) -> std::io
     let modified = fs::metadata(path).and_then(|metadata| metadata.modified()).ok();
     let working = working_path(path);
     let _ = fs::remove_file(&working);
-    let result = remux(ffmpeg, path, &working, &[])
+    let result = remux(ffmpeg, path, &working)
         .and_then(|()| verify(&original, &read_layout(&working)?))
         .and_then(|()| {
             replace(path, &working).map_err(|source| AppError::Io {
@@ -181,33 +181,7 @@ fn needs_repair(tracks: &[TrackLayout], file_bytes: u64) -> bool {
     needs_interleave_repair(tracks) || is_padded(tracks, file_bytes)
 }
 
-/// Writes `output`: a lossless copy of `input` in time order with its index
-/// first, verified to hold the same samples, for sending to a friend. Returns
-/// `false` (writing nothing) when the clip already streams well as stored.
-pub fn write_stream_copy(ffmpeg: &dyn FfmpegExecutor, input: &Path, output: &Path) -> AppResult<bool> {
-    let original = read_layout(input)?;
-    let size = fs::metadata(input)
-        .map_err(|source| AppError::Io {
-            action: "inspect clip to share",
-            path: input.to_owned(),
-            source,
-        })?
-        .len();
-    if !needs_stream_layout(&original, size) {
-        return Ok(false);
-    }
-    let _ = fs::remove_file(output);
-    let faststart = [OsString::from("-movflags"), OsString::from("+faststart")];
-    let result = remux(ffmpeg, input, output, &faststart)
-        .and_then(|()| verify(&original, &read_layout(output)?));
-    if let Err(error) = result {
-        let _ = fs::remove_file(output);
-        return Err(error);
-    }
-    Ok(true)
-}
-
-fn remux(ffmpeg: &dyn FfmpegExecutor, input: &Path, output: &Path, extra: &[OsString]) -> AppResult<()> {
+fn remux(ffmpeg: &dyn FfmpegExecutor, input: &Path, output: &Path) -> AppResult<()> {
     let head = [
         OsString::from("-nostdin"),
         OsString::from("-hide_banner"),
@@ -225,9 +199,6 @@ fn remux(ffmpeg: &dyn FfmpegExecutor, input: &Path, output: &Path, extra: &[OsSt
             OsString::from("copy"),
             OsString::from("-map_metadata"),
             OsString::from("0"),
-        ])
-        .chain(extra.iter().cloned())
-        .chain([
             OsString::from("-f"),
             OsString::from("mp4"),
             output.as_os_str().to_owned(),
@@ -291,30 +262,6 @@ mod tests {
         assert!(needs_repair(&tracks(&ordered), 100_000 + 20 * 1024 * 1024), "half padding");
         let scrambled: Vec<u32> = (0..100).map(|i| ((i * 37) % 100) * 1000).collect();
         assert!(!needs_repair(&tracks(&scrambled), 100_000), "plays fine locally");
-    }
-
-    /// `$env:CLIPTURE_STREAM_COPY_CLIP = "C:\...\clip.mp4"`, then
-    /// `cargo test --lib real_stream_copy -- --ignored --nocapture`.
-    #[test]
-    #[ignore = "needs CLIPTURE_STREAM_COPY_CLIP and the bundled FFmpeg"]
-    fn real_stream_copy() {
-        let input = PathBuf::from(std::env::var("CLIPTURE_STREAM_COPY_CLIP").unwrap());
-        let ffmpeg = std::env::current_dir()
-            .unwrap()
-            .join("binaries/ffmpeg-x86_64-pc-windows-msvc.exe");
-        let ffmpeg = crate::media::CommandFfmpeg::new(ffmpeg, Arc::new(crate::media::AlwaysReady));
-        let output = input.with_extension("stream-copy.mp4");
-        let started = Instant::now();
-        let written = write_stream_copy(&ffmpeg, &input, &output).unwrap();
-        let before = fs::metadata(&input).unwrap().len();
-        println!("copy written: {written} in {:?}", started.elapsed());
-        if written {
-            let after = fs::metadata(&output).unwrap().len();
-            let layout = read_layout(&output).unwrap();
-            println!("{} MB -> {} MB; copy needs another: {}", before >> 20, after >> 20,
-                needs_stream_layout(&layout, after));
-            assert!(!needs_stream_layout(&layout, after));
-        }
     }
 
     fn clip_file(path: &Path, audio_after_video: bool) {

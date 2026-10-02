@@ -25,7 +25,7 @@ impl SharingService {
             let name_of = |id: &str| {
                 state
                     .friend(id)
-                    .map(|friend| friend.name.clone())
+                    .map(|friend| friend.display_name().to_owned())
                     .unwrap_or_else(|| "Former friend".into())
             };
             let mut inbox: Vec<_> = state
@@ -96,7 +96,11 @@ impl SharingService {
                     .friends
                     .iter()
                     .map(|friend| FriendView {
-                        friend: friend.clone(),
+                        // The UI shows `name`; our nickname takes its place.
+                        friend: crate::sharing::model::Friend {
+                            name: friend.display_name().to_owned(),
+                            ..friend.clone()
+                        },
                         presence: if friend.status != FriendStatus::Accepted {
                             Presence::Offline
                         } else if state.appear_offline || status != NodeStatus::Online {

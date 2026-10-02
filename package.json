@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.6.4",
+  "version": "1.6.5",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.6.4: Smooth Clips Under Game Load",
+  "releaseTitle": "Clipture 1.6.5: Friend Nicknames, Smooth Playback & Instant Sends",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

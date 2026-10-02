@@ -101,6 +101,8 @@ export function useSharing(notify: Notify) {
     acceptInvite: (name: string) => run(() => sharing.acceptInvite(), name ? `Friend request sent to ${name}.` : "Friend request sent."),
     dismissInvite: () => run(() => sharing.dismissInvite()),
     acceptFriend: (friendId: string) => run(() => sharing.acceptFriend(friendId), "Request accepted."),
+    setFriendNickname: (friendId: string, nickname: string) =>
+      run(() => sharing.setFriendNickname(friendId, nickname), nickname ? "Nickname saved. Only you see it." : "Back to the name they chose."),
     removeFriend: (friendId: string) => run(() => sharing.removeFriend(friendId)),
     shareClip,
     answerSharedClip: (shareId: string, accept: boolean) =>

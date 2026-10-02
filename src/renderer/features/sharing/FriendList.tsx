@@ -1,7 +1,30 @@
-import { Check, ChevronDown, Clock, UserMinus, UserPlus, X } from "lucide-react";
+import { Check, ChevronDown, Clock, Pencil, UserMinus, UserPlus, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import type { Friend } from "../../../shared/sharing";
 import { FriendAvatar, presenceLabel } from "./FriendAvatar";
+import { NicknameField, useNicknameEditing } from "./FriendNickname";
+
+type Rename = (friendId: string, nickname: string) => Promise<boolean>;
+
+function RenameButton({ friend, onClick }: { friend: Friend; onClick: () => void }) {
+  return (
+    <button className="icon-button share-rename" type="button" title={`Give ${friend.name} a nickname only you see`}
+      aria-label={`Nickname for ${friend.name}`} onClick={onClick}>
+      <Pencil size={15} />
+    </button>
+  );
+}
+
+/** Their shown name, or the nickname editor while it is open. */
+function FriendName({ friend, editing, onRename, onDone }: {
+  friend: Friend;
+  editing: boolean;
+  onRename: Rename;
+  onDone: () => void;
+}) {
+  if (editing) return <NicknameField friend={friend} onSave={(nickname) => onRename(friend.id, nickname)} onDone={onDone} />;
+  return <strong>{friend.name}</strong>;
+}
 import { formatSharedAt } from "./sharingFormat";
 
 /** Pasting a code is the fallback to invite links, so it starts folded
@@ -56,12 +79,15 @@ export function AddFriendForm({ onAdd, startOpen }: {
 export function FriendRequests({
   requests,
   onAccept,
-  onDecline
+  onDecline,
+  onRename
 }: {
   requests: Friend[];
   onAccept: (id: string) => void;
   onDecline: (id: string) => void;
+  onRename: Rename;
 }) {
+  const nicknames = useNicknameEditing();
   if (requests.length === 0) return null;
   return (
     <section className="share-requests" aria-labelledby="share-requests-title">
@@ -71,10 +97,11 @@ export function FriendRequests({
           <li key={friend.id} className="share-friend-row">
             <FriendAvatar name={friend.name} />
             <span className="share-friend-copy">
-              <strong>{friend.name}</strong>
-              <span title={friend.id}>Asked {formatSharedAt(friend.addedAtMs)}</span>
+              <FriendName friend={friend} editing={nicknames.editing === friend.id} onRename={onRename} onDone={nicknames.stop} />
+              <span title={friend.id}>{friend.nickname ? "Your nickname, asked " : "Asked "}{formatSharedAt(friend.addedAtMs)}</span>
             </span>
             <span className="share-row-actions">
+              <RenameButton friend={friend} onClick={() => nicknames.start(friend.id)} />
               <button className="icon-button share-accept" type="button" title={`Accept ${friend.name}`}
                 aria-label={`Accept ${friend.name}`} onClick={() => onAccept(friend.id)}>
                 <Check size={17} />
@@ -91,8 +118,13 @@ export function FriendRequests({
   );
 }
 
-export function FriendList({ friends, onRemove }: { friends: Friend[]; onRemove: (friend: Friend) => void }) {
+export function FriendList({ friends, onRemove, onRename }: {
+  friends: Friend[];
+  onRemove: (friend: Friend) => void;
+  onRename: Rename;
+}) {
   const [confirming, setConfirming] = useState<string>();
+  const nicknames = useNicknameEditing();
   return (
     <section className="share-friends" aria-labelledby="share-friends-title">
       <h2 id="share-friends-title">Friends <span>{friends.filter((friend) => friend.status === "accepted").length}</span></h2>
@@ -104,11 +136,11 @@ export function FriendList({ friends, onRemove }: { friends: Friend[]; onRemove:
             <li key={friend.id} className="share-friend-row">
               <FriendAvatar name={friend.name} presence={friend.status === "accepted" ? friend.presence : undefined} />
               <span className="share-friend-copy">
-                <strong>{friend.name}</strong>
+                <FriendName friend={friend} editing={nicknames.editing === friend.id} onRename={onRename} onDone={nicknames.stop} />
                 {friend.status === "outgoing" ? (
                   <span><Clock size={12} aria-hidden="true" /> {friend.undelivered ? "Request waits until they're online" : "Waiting for them to accept"}</span>
                 ) : (
-                  <span>{presenceLabel(friend.presence)}</span>
+                  <span>{presenceLabel(friend.presence)}{friend.nickname ? ", your nickname" : ""}</span>
                 )}
               </span>
               <span className="share-row-actions">
@@ -122,10 +154,13 @@ export function FriendList({ friends, onRemove }: { friends: Friend[]; onRemove:
                     </button>
                   </>
                 ) : (
-                  <button className="icon-button" type="button" title={`Remove ${friend.name}`}
-                    aria-label={`Remove ${friend.name}`} onClick={() => setConfirming(friend.id)}>
-                    <UserMinus size={16} />
-                  </button>
+                  <>
+                    <RenameButton friend={friend} onClick={() => nicknames.start(friend.id)} />
+                    <button className="icon-button" type="button" title={`Remove ${friend.name}`}
+                      aria-label={`Remove ${friend.name}`} onClick={() => setConfirming(friend.id)}>
+                      <UserMinus size={16} />
+                    </button>
+                  </>
                 )}
               </span>
             </li>

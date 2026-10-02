@@ -55,6 +55,9 @@ can follow that share. `answerSharedClip` accepts or declines an incoming clip.
 friend's answer (outbox). Outbox clips carry `transfer` (bytes sent, purpose,
 state, rate) and `saved` once the friend confirmed a verified copy. Both sides
 carry `availableUntilMs`, the end of the 15-minute window.
+`setFriendNickname` stores a local-only name for a friend; the host then
+returns it as that friend's `name` (and in every clip's `friendName`), with
+`Friend.nickname` set, so the renderer never has to choose between the two.
 Media replies relayed to the UI worker never exceed the pipe's 4 MiB body
 limit; an oversized reply fails that request instead of closing the window.
 `scripts/migration/fixtures/sharing-contract.v1.json`

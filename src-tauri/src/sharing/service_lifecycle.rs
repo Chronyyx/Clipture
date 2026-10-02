@@ -63,6 +63,7 @@ impl SharingService {
                 }
             }),
             share_window_ms: self.share_window_ms.clone(),
+            views: Default::default(),
             on_closed: Box::new(move || {
                 if let Some(this) = weak.upgrade() {
                     this.tidy_copies();

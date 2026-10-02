@@ -31,7 +31,6 @@ impl SharingEvents for Cues {
 pub(super) struct FakeLibrary {
     folder: PathBuf,
     published: Mutex<Vec<ClipRecord>>,
-    pub(super) copies: std::sync::atomic::AtomicBool,
 }
 
 impl ClipLibrary for FakeLibrary {
@@ -46,16 +45,6 @@ impl ClipLibrary for FakeLibrary {
 
     fn outgoing_copies_folder(&self) -> PathBuf {
         self.folder.with_file_name(".clipture-sharing")
-    }
-
-    fn write_stream_copy(&self, source: &Path, destination: &Path) -> AppResult<bool> {
-        if !self.copies.load(std::sync::atomic::Ordering::Relaxed) {
-            return Ok(false);
-        }
-        let mut bytes = std::fs::read(source).unwrap();
-        bytes[8..].reverse();
-        std::fs::write(destination, bytes).unwrap();
-        Ok(true)
     }
 }
 
@@ -72,7 +61,6 @@ impl Peer {
         let library = Arc::new(FakeLibrary {
             folder: directory.path().join("clips").join("Shared"),
             published: Mutex::new(Vec::new()),
-            copies: Default::default(),
         });
         let cues = Arc::new(Mutex::new(Vec::new()));
         let service = SharingService::new(
@@ -189,17 +177,19 @@ pub(super) async fn receive(bob: &Peer, share_id: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn badly_laid_out_clips_are_sent_as_a_stream_copy() {
+async fn scrambled_clips_are_sent_in_playing_order_without_a_copy() {
     let (alice, bob, _lookup) = online_pair().await;
     befriend(&alice, &bob).await;
-    alice.library.copies.store(true, std::sync::atomic::Ordering::Relaxed);
-    let clip = write_clip(&alice._directory.path().join("clips"), "ring.mp4", 300 * 1024, 4);
+    let folder = alice._directory.path().join("clips");
+    std::fs::create_dir_all(&folder).unwrap();
+    let clip = folder.join("ring.mp4");
+    crate::media::write_scrambled_clip(&clip);
+    let original = std::fs::read(&clip).unwrap();
     let share_id = share(&alice, &bob.code(), &clip).await;
-    let copy = alice.library.outgoing_copies_folder().join(format!("{share_id}.mp4"));
-    assert!(copy.is_file(), "the copy is what gets served");
+    assert!(!alice.library.outgoing_copies_folder().exists(), "nothing is written for the send");
     receive(&bob, &share_id).await;
 
-    // Bob keeps the copy, verified against the copy's own digest.
+    // Bob keeps the clip in playing order, verified against the view's digest.
     bob.service.save_shared_clip(&share_id).unwrap();
     until("download ends", || {
         bob.service
@@ -209,19 +199,16 @@ async fn badly_laid_out_clips_are_sent_as_a_stream_copy() {
             .any(|row| row.phase != DownloadPhase::Running)
     })
     .await;
-    let kept = bob.library.published.lock().unwrap()[0].file_path.clone();
-    assert_eq!(std::fs::read(kept).unwrap(), std::fs::read(&copy).unwrap());
-    assert_ne!(std::fs::read(&copy).unwrap(), std::fs::read(&clip).unwrap());
+    let kept = std::fs::read(&bob.library.published.lock().unwrap()[0].file_path).unwrap();
+    let view = crate::media::LinearView::open(&clip, &[]).unwrap().unwrap();
+    let mut expected = vec![0_u8; view.len() as usize];
+    view.read_at(&mut view.open_source().unwrap(), 0, &mut expected).unwrap();
+    assert_eq!(kept, expected);
+    assert!(kept.len() < original.len() / 4, "the padding stayed home");
 
-    // Sharing the unchanged clip again reuses the copy; revoking deletes it.
+    // Sharing the unchanged clip again sends the same share.
     assert_eq!(share(&alice, &bob.code(), &clip).await, share_id);
-    alice.service.revoke_share(&share_id).unwrap();
-    // Copies younger than the in-progress window survive one sweep; age it.
-    let old = std::time::SystemTime::now() - Duration::from_secs(3600);
-    std::fs::File::options().write(true).open(&copy).unwrap().set_modified(old).unwrap();
-    alice.service.revoke_share(&share_id).unwrap();
-    assert!(!copy.exists(), "a copy nobody uses is deleted");
-    assert!(clip.exists(), "the library clip is never touched");
+    assert_eq!(std::fs::read(&clip).unwrap(), original, "the library clip is never touched");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

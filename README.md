@@ -90,10 +90,10 @@ Save output is paced according to storage type, observed write service, and capt
 Sharing is off until enabled in the Friends tab. Each install has its own iroh
 identity; friends are added with an invite link and must accept each other.
 Clips travel directly between the two PCs over QUIC (a relay is used only when
-no direct path exists), and nothing is uploaded to a Clipture server. Sharing a
-clip makes a lossless, stream-ready copy under `<saveFolder>\.clipture-sharing`
-(capped at 10 GB / 30 days, removed with the share); the original is never
-modified.
+no direct path exists), and nothing is uploaded to a Clipture server. A clip
+saved in place, whose frames are stored out of order, is sent in playing order
+(same samples, no padding) straight from the original, which is never modified;
+nothing extra is written to disk.
 
 A friend is asked before anything is sent and can accept or decline. After
 accepting they have 15 minutes to watch the clip or start adding it to their

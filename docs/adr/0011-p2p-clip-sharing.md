@@ -160,7 +160,8 @@ reconnect. Counts are runtime only; the one fact kept across restarts is
 A share closes once the friend has kept it. After their "Add to library"
 copy passes its BLAKE3 check, the receiver sends `answer` again with
 `kept: true`. The sender marks the share `kept`, refuses every later range
-(watching or keeping), deletes its stream copy, and shows the check mark.
+(watching or keeping), deletes any stream copy an older build made for it,
+and shows the check mark.
 The check mark means a confirmed copy, not just bytes sent: a copy that
 failed its check can still be fetched again. Sharing the clip again on
 purpose reopens it and asks the friend again. An older receiver never
@@ -277,7 +278,19 @@ video samples. The benchmark below measured the effect: a 121 MB clip became
 61 MB and started in 0.7 s instead of 1.6 s without its stall; a 719 MB
 50 Mbit/s clip started in 1.6 s instead of 8.8 s. Copies are deleted when
 their share ends, are capped at 10 GB together (oldest shares end first) and
-expire after 30 days. "Fix clips" in Settings also offers padded clips now,
+expire after 30 days.
+
+Since 1.6.5 no copy is written. Such a clip is offered through its linear
+view (`media/linear_view.rs`): the original `ftyp`, the original `moov` with
+only its chunk offset tables rewritten, an `mdat` header, then every chunk in
+playing order, gathered from the clip as ranges are requested. The offer's
+size and BLAKE3 digest are the view's, so receivers verify exactly what was
+sent, and the file they keep is a normal, time-ordered MP4 with no padding.
+Sending no longer waits for a remux or uses extra disk; the share records
+`linear: true`. Shares from older builds keep their copies, which are still
+tidied as above. The library player serves such clips through the same view.
+
+"Fix clips" in Settings also offers padded clips,
 which can halve their size on disk. "Add to library" labels
 every audio track found in the downloaded file's `moov`, not only the
 sender's list, so the library player never silences a track.

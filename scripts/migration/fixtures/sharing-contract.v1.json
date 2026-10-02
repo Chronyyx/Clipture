@@ -13,6 +13,7 @@
     { "method": "acceptInvite", "command": "sharing_accept_invite", "args": [] },
     { "method": "dismissInvite", "command": "sharing_dismiss_invite", "args": [] },
     { "method": "acceptFriend", "command": "sharing_accept_friend", "args": ["friendId"] },
+    { "method": "setFriendNickname", "command": "sharing_set_nickname", "args": ["friendId", "nickname"] },
     { "method": "removeFriend", "command": "sharing_remove_friend", "args": ["friendId"] },
     { "method": "shareClip", "command": "sharing_share_clip", "args": ["friendId", "filePath"] },
     { "method": "revokeShare", "command": "sharing_revoke_share", "args": ["shareId"] },
