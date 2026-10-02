@@ -34,6 +34,8 @@ const MAX_STREAMS_PER_FRIEND: usize = 8;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const SEND_BUFFER: usize = 1024 * 1024;
+/// How long a finished reply may wait to be acknowledged before moving on.
+const REPLY_LINGER: Duration = Duration::from_secs(2);
 
 /// What request handling needs besides persisted state.
 pub struct PeerContext {
@@ -116,7 +118,7 @@ impl ProtocolHandler for ShareProtocol {
             };
             if !self.context.core.read(|state| state.is_accepted(&peer)) {
                 // Anyone who is not a friend yet gets exactly one request.
-                handle_stream(self.context.clone(), &connection, peer.clone(), send, recv).await;
+                handle_stream(self.context.clone(), &connection, peer.clone(), send, recv, true).await;
                 break;
             }
             let Ok(permit) = streams.clone().try_acquire_owned() else {
@@ -128,7 +130,7 @@ impl ProtocolHandler for ShareProtocol {
             let connection = connection.clone();
             tokio::spawn(async move {
                 let _permit = permit;
-                handle_stream(context, &connection, peer, send, recv).await;
+                handle_stream(context, &connection, peer, send, recv, false).await;
             });
         }
         connection.close(0u32.into(), b"idle");
@@ -142,6 +144,8 @@ async fn handle_stream(
     peer: String,
     mut send: SendStream,
     mut recv: RecvStream,
+    // The connection closes right after this reply, so wait for it to arrive.
+    linger: bool,
 ) {
     let core = &context.core;
     let request = match timeout(
@@ -192,6 +196,11 @@ async fn handle_stream(
     match result {
         Ok(()) => {
             let _ = send.finish();
+            // Closing the connection with the reply unacknowledged would
+            // discard it (a removed friend would never hear "not friends").
+            if linger {
+                let _ = timeout(REPLY_LINGER, send.stopped()).await;
+            }
         }
         Err(error) => tracing::debug!(%error, "peer request ended early"),
     }
@@ -207,13 +216,13 @@ fn answer(context: &PeerContext, peer: &str, request: Request) -> Response {
         Request::Offer { .. } | Request::Answer { .. } | Request::Presence { online: true }
     );
     if friendly && is_stranger(core, peer) {
-        return not_friends(core, peer);
+        return not_friends(context, peer);
     }
     // A hello from someone we removed who has not heard it yet is their old
     // acceptance being retried, not a new request: answer the removal.
     let owed = core.read(|state| state.goodbyes.iter().any(|goodbye| goodbye == peer));
     if owed && matches!(request, Request::Hello { .. }) {
-        return not_friends(core, peer);
+        return not_friends(context, peer);
     }
     let saved = match request {
         Request::Hello { name } => {
@@ -318,7 +327,7 @@ async fn serve_range(
     });
     let Some((path, size)) = share else {
         if is_stranger(core, peer) {
-            return reply(send, not_friends(core, peer)).await;
+            return reply(send, not_friends(context, peer)).await;
         }
         return reply(send, denied("this clip is not shared with you")).await;
     };
@@ -418,13 +427,13 @@ fn is_stranger(core: &Core, peer: &str) -> bool {
     core.read(|state| state.friend(peer).is_none())
 }
 
-/// Says we are not friends; that also delivers any goodbye still owed.
-fn not_friends(core: &Core, peer: &str) -> Response {
-    let _ = core.update_when(|state| {
-        let before = state.goodbyes.len();
-        state.goodbyes.retain(|goodbye| goodbye != peer);
-        ((), state.goodbyes.len() != before)
-    });
+/// Says we are not friends. This reply can be lost, so a goodbye still
+/// owed stays owed (it keeps their stale hellos from becoming requests);
+/// they are back, so it is sent now and settled once they acknowledge it.
+fn not_friends(context: &PeerContext, peer: &str) -> Response {
+    if context.core.read(|state| state.goodbyes.iter().any(|goodbye| goodbye == peer)) {
+        (context.on_arrival)(peer.to_owned());
+    }
     Response::NotFriends {}
 }
 

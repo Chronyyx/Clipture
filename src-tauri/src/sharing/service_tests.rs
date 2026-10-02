@@ -606,8 +606,9 @@ async fn friends_see_each_other_come_and_go() {
 async fn appearing_offline_refuses_everything_until_visible() {
     let (alice, bob, _lookup) = online_pair().await;
     befriend(&alice, &bob).await;
-    until("alice sees bob", || {
-        presence_of(&alice, &bob) == Presence::Online
+    // Both ways: bob only tells friends he sees online that he is leaving.
+    until("they see each other", || {
+        presence_of(&alice, &bob) == Presence::Online && presence_of(&bob, &alice) == Presence::Online
     })
     .await;
 

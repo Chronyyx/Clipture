@@ -150,6 +150,9 @@ impl SharingService {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
+        if let Some(node) = &node {
+            node.begin_closing();
+        }
         let friends = self.presence.online_ids();
         self.presence.clear();
         self.set_status(NodeStatus::Off, None);
@@ -219,7 +222,12 @@ impl SharingService {
         let Ok(peer) = parse_friend_code(friend_id) else {
             return;
         };
-        let result = node.notify(peer, &Request::Goodbye {}).await;
+        let mut result = node.notify(peer, &Request::Goodbye {}).await;
+        if result.as_ref().is_err_and(|error| !is_not_friends(error)) {
+            // A cached connection may have died meanwhile; a failed request
+            // drops it, so one retry dials afresh.
+            result = node.notify(peer, &Request::Goodbye {}).await;
+        }
         if result.is_ok() || result.as_ref().is_err_and(is_not_friends) {
             let _ = self.core.update_when(|state| {
                 let before = state.goodbyes.len();
@@ -307,6 +315,11 @@ impl SharingService {
     /// Everything waiting for one accepted friend: our acceptance, clips,
     /// and our answers to clips they sent.
     async fn deliver_to(&self, node: &Node, friend_id: &str) {
+        // Someone we removed gets only the goodbye they are owed.
+        if self.core.read(|state| state.goodbyes.iter().any(|goodbye| goodbye == friend_id)) {
+            self.send_goodbye(node, friend_id).await;
+            return;
+        }
         let (name, hello, offers, answers) = self.core.read(|state| {
             let hello = state.friend(friend_id).is_some_and(|friend| {
                 friend.undelivered && friend.status != FriendStatus::Incoming

@@ -5,6 +5,7 @@
 ### Reliable Update Installs
 
 - **Installing an update no longer fails at random while recording:** Install was refused whenever the frame queue showed a momentary "elevated" reading, which happens in normal recording. Installing is always an explicit click and stops capture anyway, so only an active clip save now holds it back (still enforced atomically by the installation reservation). Update downloads keep their capture-aware pacing.
+- **Friend removals and presence are more robust:** A removed friend's retried hello can no longer turn into a new friend request: the owed goodbye stays owed until they acknowledge it, and it is sent the moment they reappear. Replies to someone who is not a friend now wait to be delivered before the connection closes (closing first could discard them). A node that is shutting sharing off sends nothing after its "going offline" notice, so friends no longer see it come straight back.
 - **Readable error notices:** Update errors show the reason as a sentence instead of the diagnostic "Tauri capability ... failed through ..." form (`userMessage` in `platform/hostError.ts`).
 
 ## [1.6.2] - 2026-10-02

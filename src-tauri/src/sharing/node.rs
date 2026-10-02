@@ -62,6 +62,9 @@ pub struct Node {
     router: Router,
     context: Arc<PeerContext>,
     connections: Mutex<HashMap<EndpointId, Connection>>,
+    /// Saying goodbye: nothing else may leave after it, or a late request
+    /// would make friends think we came straight back.
+    closing: std::sync::atomic::AtomicBool,
 }
 
 impl Node {
@@ -113,7 +116,13 @@ impl Node {
             router,
             context,
             connections: Mutex::new(HashMap::new()),
+            closing: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// From now on only "going offline" presence is sent.
+    pub fn begin_closing(&self) {
+        self.closing.store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// An answer proves a friend is online; an unreachable friend is not.
@@ -170,6 +179,10 @@ impl Node {
         peer: EndpointId,
         request: &Request,
     ) -> AppResult<(Response, RecvStream)> {
+        let leaving = matches!(request, Request::Presence { online: false });
+        if self.closing.load(std::sync::atomic::Ordering::Acquire) && !leaving {
+            return Err(offline());
+        }
         let started = Instant::now();
         let connection = match self.connection(peer).await {
             Ok(connection) => connection,
