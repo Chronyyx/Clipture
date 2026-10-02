@@ -34,11 +34,37 @@ pub enum Request {
         /// The requester can read a sparse body (zero runs elided).
         #[serde(default)]
         sparse: bool,
+        /// Why the bytes are wanted, so the sender can show progress.
+        #[serde(default)]
+        purpose: RangePurpose,
+    },
+    /// The recipient accepted or declined a clip offered to them. Older
+    /// senders reject the unknown type; the answer is then simply not shown.
+    #[serde(rename_all = "camelCase")]
+    Answer {
+        share_id: String,
+        accepted: bool,
+        /// Sent once more after a verified copy is in the library; the
+        /// sender then stops serving the clip.
+        #[serde(default)]
+        kept: bool,
     },
     /// The requester removed us from their friends.
     Goodbye {},
     /// A friend came online (or heartbeats), or is going offline.
     Presence { online: bool },
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RangePurpose {
+    /// Older requesters do not say.
+    #[default]
+    Unknown,
+    /// Streaming to play.
+    Watch,
+    /// Downloading a verified copy into the library.
+    Keep,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -58,6 +84,10 @@ pub enum Response {
     Denied {
         reason: String,
     },
+    /// The requester is not on our friends list: we removed them. Sent only
+    /// to requests a friend would make (presence, offers, answers, reads),
+    /// never to a friend request.
+    NotFriends {},
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -184,11 +214,21 @@ mod tests {
             start: 7,
             length: 9,
             sparse: true,
+            purpose: RangePurpose::Keep,
         };
         let mut bytes = Vec::new();
         write_message(&mut bytes, &request).await.unwrap();
         let decoded: Request = read_message(&mut bytes.as_slice()).await.unwrap();
         assert_eq!(decoded, request);
+    }
+
+    #[tokio::test]
+    async fn ranges_from_older_peers_have_no_purpose() {
+        let body = br#"{"type":"range","shareId":"0123456789abcdef0123456789abcdef","start":0,"length":1}"#;
+        let mut bytes = (body.len() as u32).to_be_bytes().to_vec();
+        bytes.extend_from_slice(body);
+        let decoded: Request = read_message(&mut bytes.as_slice()).await.unwrap();
+        assert!(matches!(decoded, Request::Range { purpose: RangePurpose::Unknown, .. }));
     }
 
     #[tokio::test]

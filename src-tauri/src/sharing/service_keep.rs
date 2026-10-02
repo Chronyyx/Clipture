@@ -26,7 +26,7 @@ impl SharingService {
             .read(|state| {
                 state
                     .inbox_clip(share_id)
-                    .filter(|clip| state.is_accepted(&clip.friend_id))
+                    .filter(|clip| state.is_accepted(&clip.friend_id) && !clip.awaiting_answer)
                     .cloned()
             })
             .ok_or_else(|| AppError::Path("this shared clip is no longer available".into()))?;
@@ -103,6 +103,9 @@ impl SharingService {
             })
             .await
             .and_then(|path| this.publish_download(&clip.offer, &friend_name, path));
+            if result.is_ok() {
+                this.confirm_kept(&clip.offer.share_id);
+            }
             this.finish_download(
                 &clip.offer.share_id,
                 result.err().map(|error| error.to_string()),
@@ -116,6 +119,14 @@ impl SharingService {
             row.abort = Some(task.abort_handle());
         }
         Ok(())
+    }
+
+    /// Tells the sender a verified copy is in the library, so they stop
+    /// serving it: the friend has it now.
+    fn confirm_kept(self: &Arc<Self>, share_id: &str) {
+        if let Ok(Some(friend_id)) = self.core.update(|state| state.confirm_kept(share_id)) {
+            self.deliver_to_soon(friend_id);
+        }
     }
 
     /// Stops an "add to library" transfer and deletes what was received;

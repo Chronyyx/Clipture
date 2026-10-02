@@ -49,6 +49,12 @@ connection, like playback; the Tauri adapter returns `StreamUrls`, the video
 route and the mixed-audio route beside it (`/v1/remote/<id>/audio`, valid once
 `SharedClip.allAudioReady`). `SharedClip.streamed` carries the host's own record
 of streamed byte ranges, and `cancelDownload` stops an "Add to library" copy.
+`shareClip` returns `SharedClipResult` (`shareId` plus the snapshot) so the UI
+can follow that share. `answerSharedClip` accepts or declines an incoming clip.
+`SharedClip.answer` is `pending` for clips waiting on a decision (inbox) or a
+friend's answer (outbox). Outbox clips carry `transfer` (bytes sent, purpose,
+state, rate) and `saved` once the friend confirmed a verified copy. Both sides
+carry `availableUntilMs`, the end of the 15-minute window.
 Media replies relayed to the UI worker never exceed the pipe's 4 MiB body
 limit; an oversized reply fails that request instead of closing the window.
 `scripts/migration/fixtures/sharing-contract.v1.json`

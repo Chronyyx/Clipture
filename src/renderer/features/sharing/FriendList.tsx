@@ -1,10 +1,16 @@
-import { Check, Clock, UserMinus, UserPlus, X } from "lucide-react";
+import { Check, ChevronDown, Clock, UserMinus, UserPlus, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import type { Friend } from "../../../shared/sharing";
 import { FriendAvatar, presenceLabel } from "./FriendAvatar";
 import { formatSharedAt } from "./sharingFormat";
 
-export function AddFriendForm({ onAdd }: { onAdd: (code: string, name: string) => Promise<boolean> }) {
+/** Pasting a code is the fallback to invite links, so it starts folded
+ * away unless there is nobody on the list yet. */
+export function AddFriendForm({ onAdd, startOpen }: {
+  onAdd: (code: string, name: string) => Promise<boolean>;
+  startOpen: boolean;
+}) {
+  const [open, setOpen] = useState(startOpen);
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -21,21 +27,28 @@ export function AddFriendForm({ onAdd }: { onAdd: (code: string, name: string) =
   };
 
   return (
-    <form className="share-add-form" onSubmit={(event) => void submit(event)}>
-      <h2>Add a friend</h2>
-      <label>
-        <span>Invite link or friend code</span>
-        <input value={code} onChange={(event) => setCode(event.target.value)} spellCheck={false}
-          autoComplete="off" maxLength={512} placeholder="Paste what your friend sent" />
-      </label>
-      <label>
-        <span>Name</span>
-        <input value={name} onChange={(event) => setName(event.target.value)} maxLength={40}
-          placeholder={/^https?:|^clipture:/i.test(code.trim()) ? "From the link" : "Optional"} />
-      </label>
-      <button className="primary" type="submit" disabled={!code.trim() || busy}>
-        <UserPlus size={17} /> {busy ? "Sending request..." : "Send request"}
-      </button>
+    <form className={open ? "share-add-form open" : "share-add-form"} onSubmit={(event) => void submit(event)}>
+      <h2>
+        <button className="share-add-toggle" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+          <UserPlus size={16} aria-hidden="true" /> Add with a friend code
+          <ChevronDown size={15} aria-hidden="true" />
+        </button>
+      </h2>
+      {open && <>
+        <label>
+          <span>Invite link or friend code</span>
+          <input value={code} onChange={(event) => setCode(event.target.value)} spellCheck={false}
+            autoComplete="off" maxLength={512} placeholder="Paste what your friend sent" />
+        </label>
+        <label>
+          <span>Name</span>
+          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={40}
+            placeholder={/^https?:|^clipture:/i.test(code.trim()) ? "From the link" : "Optional"} />
+        </label>
+        <button className="primary" type="submit" disabled={!code.trim() || busy}>
+          <UserPlus size={17} /> {busy ? "Sending request..." : "Send request"}
+        </button>
+      </>}
     </form>
   );
 }

@@ -74,8 +74,8 @@ export function FriendsView({
             onAccept={(id) => void controller.acceptFriend(id)}
             onDecline={(id) => void controller.removeFriend(id)}
           />
-          <AddFriendForm onAdd={controller.addFriend} />
           <FriendList friends={friends} onRemove={(friend) => void controller.removeFriend(friend.id)} />
+          <AddFriendForm onAdd={controller.addFriend} startOpen={friends.length === 0} />
         </div>
       </div>
     );

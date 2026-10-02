@@ -10,9 +10,10 @@ mod server;
 mod service;
 mod store;
 mod streams;
+mod transfers;
 mod wire;
 
-pub use core::SharingEvents;
+pub use core::{ShareCue, SharingEvents};
 pub use model::{FriendStatus, SharingSnapshot};
 pub use invite::invite_argument;
 pub use node::Network;

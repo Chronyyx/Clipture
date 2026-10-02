@@ -23,7 +23,7 @@ use crate::error::{AppError, AppResult};
 use super::{
     range_body::RangeBody,
     server::{PeerContext, ShareProtocol},
-    wire::{self, Request, Response, ALPN},
+    wire::{self, RangePurpose, Request, Response, ALPN},
 };
 
 /// mDNS service name; only Clipture devices answer to it.
@@ -196,7 +196,12 @@ impl Node {
             }
             Err(_) => Err(offline()),
         };
-        self.note_outcome(peer, result.is_ok(), started);
+        // "Not friends" is no sign of a friend coming online: counting it
+        // would start deliveries to someone who is about to be dropped.
+        let unfriended = matches!(result, Ok((Response::NotFriends {}, _)));
+        if !unfriended {
+            self.note_outcome(peer, result.is_ok(), started);
+        }
         result
     }
 
@@ -208,6 +213,7 @@ impl Node {
                 "your friend's Clipture declined: {}",
                 wire::clean_text(&reason, 120)
             ))),
+            Response::NotFriends {} => Err(AppError::Path(NOT_FRIENDS.into())),
             Response::Range { .. } | Response::SparseRange { .. } => {
                 Err(AppError::Path("unexpected peer response".into()))
             }
@@ -221,12 +227,14 @@ impl Node {
         share_id: &str,
         start: u64,
         length: u64,
+        purpose: RangePurpose,
     ) -> AppResult<(u64, RangeBody<RecvStream>)> {
         let request = Request::Range {
             share_id: share_id.into(),
             start,
             length,
             sparse: true,
+            purpose,
         };
         // Older senders ignore `sparse` and answer with plain bytes.
         match self.request(peer, &request).await? {
@@ -240,6 +248,7 @@ impl Node {
                 "{UNAVAILABLE}: {}",
                 wire::clean_text(&reason, 120)
             ))),
+            (Response::NotFriends {}, _) => Err(AppError::Path(format!("{UNAVAILABLE}: {NOT_FRIENDS}"))),
             _ => Err(AppError::Path("unexpected peer response".into())),
         }
     }
@@ -263,6 +272,12 @@ fn add_local_network_lookup(endpoint: &Endpoint, visible: bool) {
 }
 
 const UNAVAILABLE: &str = "this clip is no longer available";
+const NOT_FRIENDS: &str = "they removed you from their friends";
+
+/// The peer answered that we are no longer on their friends list.
+pub fn is_not_friends(error: &AppError) -> bool {
+    matches!(error, AppError::Path(message) if message == NOT_FRIENDS)
+}
 
 /// The friend refused the range (unshared, moved or edited); retrying
 /// cannot help, unlike a dropped or unreachable connection.

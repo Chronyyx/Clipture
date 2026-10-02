@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use serde::Serialize;
 use tauri::{State, WebviewWindow};
 
 use crate::{
@@ -11,6 +12,14 @@ use crate::{
 
 const MAX_INPUT_CHARS: usize = 120;
 const MAX_LINK_BYTES: usize = 512;
+
+/// A clip offered to a friend: its share, to follow its progress.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedClipResult {
+    share_id: String,
+    snapshot: SharingSnapshot,
+}
 
 #[tauri::command]
 pub fn sharing_get_state(state: State<'_, AppState>) -> SharingSnapshot {
@@ -120,7 +129,7 @@ pub async fn sharing_share_clip(
     state: State<'_, AppState>,
     friend_id: String,
     file_path: String,
-) -> CommandResult<SharingSnapshot> {
+) -> CommandResult<SharedClipResult> {
     friend(&friend_id)?;
     let library = state.library.clone();
     let sharing = state.sharing.clone();
@@ -143,7 +152,7 @@ pub async fn sharing_share_clip(
             .primary(&id)
             .map(PathBuf::from)
             .ok_or_else(|| AppError::Path("that clip is no longer in the library".into()))?;
-        sharing.share_clip(
+        let share_id = sharing.share_clip(
             &friend_id,
             ShareSource {
                 path,
@@ -155,9 +164,27 @@ pub async fn sharing_share_clip(
                 audio_tracks: record.audio_tracks,
             },
         )?;
-        Ok(sharing.snapshot())
+        Ok(SharedClipResult {
+            share_id,
+            snapshot: sharing.snapshot(),
+        })
     })
     .await
+}
+
+/// Accepts or declines a clip a friend wants to send.
+#[tauri::command]
+pub fn sharing_answer_clip(
+    state: State<'_, AppState>,
+    share_id: String,
+    accept: bool,
+) -> CommandResult<SharingSnapshot> {
+    share(&share_id)?;
+    state
+        .sharing
+        .answer_shared_clip(&share_id, accept)
+        .map_err(|error| error.to_string())?;
+    Ok(state.sharing.snapshot())
 }
 
 #[tauri::command]

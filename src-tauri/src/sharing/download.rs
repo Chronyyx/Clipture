@@ -23,6 +23,7 @@ use crate::{
 use super::{
     model::ClipOffer,
     node::{is_unavailable, Node},
+    wire::RangePurpose,
 };
 
 const READ_TIMEOUT: Duration = Duration::from_secs(45);
@@ -224,7 +225,7 @@ async fn receive(
 ) -> Result<(), Failure> {
     let start = partial.received;
     let (total, mut stream) = node
-        .open_range(peer, &offer.share_id, start, offer.size - start)
+        .open_range(peer, &offer.share_id, start, offer.size - start, RangePurpose::Keep)
         .await
         .map_err(|error| {
             if is_unavailable(&error) {

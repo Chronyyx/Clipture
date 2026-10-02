@@ -9,7 +9,7 @@ import { DiagnosticsView, RecorderStatus, useDiagnostics } from "../features/dia
 import { appVersion } from "./appVersion";
 import { LibraryView, useClipLibrary } from "../features/library";
 import { SettingsView, useClipPreferences } from "../features/settings";
-import { FriendsSidebar, FriendsView, InviteDialog, ShareClipDialog, useSharing } from "../features/sharing";
+import { FriendsSidebar, FriendsView, InviteDialog, ShareClipDialog, friendsWaiting, useSharing } from "../features/sharing";
 import { TitlebarUpdateControls, useUpdates } from "../features/updates";
 import { HalloweenAmbience, SpookyNoticePet, SpookySaveCheer } from "../shared/halloween";
 import { CafeNoticePet, CafeSaveCheer } from "../shared/maid-cafe";
@@ -51,7 +51,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
   const { saveClip, isSavingClip, saveIoAnalyzer, toggleSaveIoAnalyzer } =
     useCaptureActions(settings, addClip, saveNotice, diagnosticsNotice);
   const sharing = useSharing(globalNotice);
-  const friendRequests = sharing.snapshot?.friends.filter((friend) => friend.status === "incoming").length ?? 0;
+  const waiting = friendsWaiting(sharing.snapshot);
   const openFriends = (friendId?: string) => {
     setFocusFriendId(friendId);
     setActiveTab("friends");
@@ -98,8 +98,8 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
                   transition={{ type: "spring", bounce: 0, visualDuration: 0.25 }} />
               )}
               <Icon size={18} aria-hidden="true" /> {label}
-              {id === "friends" && friendRequests > 0 && (
-                <span className="nav-badge" aria-label={`${friendRequests} friend ${friendRequests === 1 ? "request" : "requests"}`}>{friendRequests}</span>
+              {id === "friends" && waiting.count > 0 && (
+                <span className="nav-badge" aria-label={waiting.label}>{waiting.count}</span>
               )}
             </button>
           ))}
@@ -223,7 +223,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
         <ShareClipDialog
           clip={clipToShare}
           snapshot={sharing.snapshot}
-          onShare={(friendId, friendName) => sharing.shareClip(friendId, clipToShare.filePath, friendName)}
+          onShare={(friendId) => sharing.shareClip(friendId, clipToShare.filePath)}
           onClose={() => setClipToShare(undefined)}
           onOpenFriends={() => openFriends()}
         />

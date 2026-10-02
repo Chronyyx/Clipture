@@ -22,7 +22,7 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 - Resolution-change segmentation and stream-copy stitching when compatible.
 - HDR-to-SDR tonemapping on supported HDR capture paths.
 - Searchable clip library with folder filters, multi-select deletion, renaming, and non-copying imported video directories.
-- Friend-to-friend sharing over iroh (opt-in): invite links, click-to-play streaming in playback order, resumable "Add to library" downloads, and LAN discovery (ADR 0011).
+- Friend-to-friend sharing over iroh (opt-in): invite links, accept/decline for every clip, live send status, a 15-minute access window, click-to-play streaming in playback order, resumable "Add to library" downloads, and LAN discovery (ADR 0011).
 - Fix clips: lossless, verified repair of clips with a poor sample layout or zero padding.
 - Range-buffered playback with rolling mixed-audio chunks, Spacebar controls, automatic resume after unloaded seeks, fullscreen controls, and accelerated keyboard seeking.
 - Viewport-aware 480x270 thumbnails with bounded extraction concurrency and compressed RAM caching.
@@ -93,7 +93,15 @@ Clips travel directly between the two PCs over QUIC (a relay is used only when
 no direct path exists), and nothing is uploaded to a Clipture server. Sharing a
 clip makes a lossless, stream-ready copy under `<saveFolder>\.clipture-sharing`
 (capped at 10 GB / 30 days, removed with the share); the original is never
-modified. The protocol, limits and threat model are in
+modified.
+
+A friend is asked before anything is sent and can accept or decline. After
+accepting they have 15 minutes to watch the clip or start adding it to their
+library; a download that began in time may finish. Once their copy passes its
+integrity check, the share closes and the clip is never served again. The
+sender sees the answer and live progress (watching or downloading, speed,
+dropped connections). A friend removed while offline is told when either side
+next comes online. The protocol, limits and threat model are in
 [ADR 0011](docs/adr/0011-p2p-clip-sharing.md).
 
 ## Requirements

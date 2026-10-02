@@ -72,7 +72,8 @@ pub(super) fn decode_wave(ffmpeg: &dyn FfmpegExecutor, path: &Path) -> AppResult
     wave_from_pcm(output.stdout)
 }
 
-fn wave_from_pcm(mut pcm: Vec<u8>) -> AppResult<DecodedWave> {
+/// 48 kHz, 16-bit, stereo interleaved PCM as a playable in-memory wave.
+pub(super) fn wave_from_pcm(mut pcm: Vec<u8>) -> AppResult<DecodedWave> {
     if pcm.is_empty() || pcm.len() % 4 != 0 || pcm.len() > MAX_PCM_BYTES {
         return Err(AppError::Integration(
             "Clip sound PCM is empty, unaligned, or exceeds 16 MiB".into(),

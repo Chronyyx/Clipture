@@ -128,6 +128,11 @@ pub async fn invoke(
         "sharing_dismiss_clip" => {
             encode(commands::sharing_dismiss_clip(state, argument(&args, "shareId")?)?)
         }
+        "sharing_answer_clip" => encode(commands::sharing_answer_clip(
+            state,
+            argument(&args, "shareId")?,
+            argument(&args, "accept")?,
+        )?),
         "sharing_cancel_download" => {
             encode(commands::sharing_cancel_download(state, argument(&args, "shareId")?)?)
         }

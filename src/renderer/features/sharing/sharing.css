@@ -1,6 +1,11 @@
-/* Friends tab. Built only from theme tokens so every theme applies. The one
-   expressive element is the wire bar: which parts of a clip have arrived
-   from a friend's PC. Everything around it stays quiet. */
+/* Friends tab. Built only from theme tokens so every theme applies. Each
+   friend has a colour (a stable hue from their name, pulled toward the theme
+   accent) that marks their avatar and the clips they send; everything else
+   stays quiet. The wire bar shows which parts of a clip have arrived. */
+
+:is(.share-avatar, .share-tile, .send-art, .share-incoming-item) {
+  --friend: color-mix(in oklch, oklch(0.72 0.14 var(--friend-hue, 40)) 82%, var(--accent));
+}
 
 .share-view {
   display: grid;
@@ -364,20 +369,71 @@
   background: var(--surface-row);
 }
 
-.share-rail-head {
-  margin: 0;
-  padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--border);
+.share-rail-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  margin: 12px 12px 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-deep);
+}
+
+.share-rail-tabs button {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.share-rail-tabs button:hover { color: var(--text); }
+
+.share-rail-tabs button.active {
+  background: var(--surface-active);
+  box-shadow: inset 0 1px 0 var(--inset-highlight, transparent);
   color: var(--text-strong);
-  font-size: 13px;
   font-weight: 600;
 }
 
-.share-rail-head span {
-  margin-left: 4px;
+.share-rail-tabs span {
+  margin-left: 3px;
   color: var(--text-subtle);
   font-variant-numeric: tabular-nums;
   font-weight: 400;
+}
+
+.share-rail-empty {
+  padding: 18px 10px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.share-rail-state[data-tone="done"] { color: var(--share-good); }
+.share-rail-state:is([data-tone="declined"], [data-tone="ended"]) { color: var(--text-subtle); }
+
+.share-stage-title p.share-window {
+  color: var(--accent-text);
+  font-size: 12.5px;
+}
+.share-rail-state[data-tone="trouble"] { color: var(--share-warn); }
+.share-rail-state[data-tone="working"] { color: var(--accent-text); }
+
+/* Under a sent clip: how much has left your PC. */
+.share-rail-meter {
+  height: 3px;
+  margin-top: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) calc(var(--sent) * 100%), var(--border) 0);
 }
 
 .share-rail-list {
@@ -420,14 +476,18 @@
   place-items: center;
   aspect-ratio: 16 / 9;
   overflow: hidden;
-  border-radius: 5px;
-  background: var(--surface-active);
+  border-radius: 6px;
+  background:
+    radial-gradient(120% 90% at 0% 0%, color-mix(in oklch, var(--friend) 38%, transparent), transparent 70%),
+    color-mix(in oklch, var(--friend) 12%, var(--surface-deep));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--friend) 22%, transparent);
 }
 
 .share-tile-letter {
-  color: var(--text-subtle);
+  color: color-mix(in oklch, var(--friend) 70%, var(--text-strong));
   font-family: var(--font-display);
   font-size: 22px;
+  opacity: 0.85;
 }
 
 .share-tile-duration {
@@ -494,18 +554,91 @@
 /* People column. */
 .share-people {
   display: grid;
-  gap: 14px;
   min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 var(--inset-highlight, transparent);
 }
 
 .share-people > section,
 .share-add-form {
   display: grid;
   gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
+  padding: 18px;
+}
+
+.share-people > * + * { border-top: 1px solid var(--border); }
+
+/* You: the name friends see, and the link that adds you. */
+.share-me {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.share-me-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.share-people .share-me-copy h2 {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.share-me .share-name-button,
+.share-me .share-name-input {
+  justify-self: start;
+  max-width: 100%;
+  margin-left: -8px;
+  color: var(--text-strong);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.share-me .share-name-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.share-me .share-name-button svg { flex: none; color: var(--text-subtle); }
+
+.share-add-form:not(.open) { padding-block: 6px; }
+
+.share-add-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.share-add-toggle:hover { background: var(--surface-hover); }
+.share-add-toggle svg:first-child { color: var(--icon); }
+.share-add-toggle svg:last-child {
+  margin-left: auto;
+  color: var(--text-subtle);
+  transition: transform 150ms ease-out;
+}
+.share-add-toggle[aria-expanded="true"] svg:last-child { transform: rotate(180deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .share-add-toggle svg:last-child { transition: none; }
 }
 
 .share-people h2 {
@@ -619,8 +752,10 @@
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  background:
+    linear-gradient(160deg, color-mix(in oklch, var(--friend) 34%, var(--surface)), color-mix(in oklch, var(--friend) 16%, var(--surface)));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--friend) 36%, transparent);
+  color: color-mix(in oklch, var(--friend) 62%, var(--text-strong));
   font-weight: 700;
 }
 
@@ -657,6 +792,18 @@
   height: 32px;
 }
 
+/* Removing a friend is rare: the button stays quiet until the row is in use. */
+.share-friends .share-row-actions .icon-button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-subtle);
+}
+
+.share-friends .share-friend-row:is(:hover, :focus-within) .share-row-actions .icon-button {
+  border-color: var(--border-strong);
+  color: var(--icon);
+}
+
 .share-row-actions .share-accept {
   border-color: var(--accent-border);
   background: var(--accent-soft);
@@ -670,7 +817,7 @@
 }
 
 .share-requests {
-  border-color: var(--accent-border) !important;
+  background: linear-gradient(to bottom, var(--accent-soft), transparent);
 }
 
 /* First run. */
@@ -737,52 +884,6 @@
   font-size: 18px;
 }
 
-.share-dialog-clip {
-  overflow: hidden;
-  color: var(--text-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.share-pick-list {
-  display: grid;
-  gap: 4px;
-  max-height: 280px;
-  overflow-y: auto;
-}
-
-.share-pick {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-row);
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.share-pick:hover { background: var(--surface-hover); }
-
-.share-pick.active {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent-text);
-}
-
-.share-pick-name {
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.share-pick-skeleton { height: 50px; border-radius: 8px; }
-
 .share-dialog-empty {
   display: grid;
   justify-items: center;
@@ -829,13 +930,6 @@
 }
 
 .share-presence-dot.unknown { opacity: 0.5; }
-
-.share-pick-name small {
-  display: block;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 400;
-}
 
 .share-rail-filter {
   display: flex;

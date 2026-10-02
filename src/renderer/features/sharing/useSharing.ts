@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SharingSnapshot } from "../../../shared/sharing";
 import { sharing } from "../../platform";
+import { useIncomingClipNotice } from "./useIncomingClipNotice";
 
 type Notify = (message: string, durationMs?: number) => void;
 
@@ -69,6 +70,20 @@ export function useSharing(notify: Notify) {
 
   // Stable so a stream is not reopened every time the snapshot changes.
   const streamUrl = useCallback((shareId: string) => sharing.streamUrl(shareId), []);
+  useIncomingClipNotice(snapshot, notify);
+
+  /** Resolves to the new share's id, to follow the friend's answer. */
+  const shareClip = useCallback(async (friendId: string, filePath: string) => {
+    const issued = ++sequence.current;
+    try {
+      const result = await sharing.shareClip(friendId, filePath);
+      accept(result.snapshot, issued);
+      return result.shareId;
+    } catch (error) {
+      notify(messageOf(error), 6000);
+      return undefined;
+    }
+  }, [accept, notify]);
 
   return {
     snapshot,
@@ -87,8 +102,9 @@ export function useSharing(notify: Notify) {
     dismissInvite: () => run(() => sharing.dismissInvite()),
     acceptFriend: (friendId: string) => run(() => sharing.acceptFriend(friendId), "Request accepted."),
     removeFriend: (friendId: string) => run(() => sharing.removeFriend(friendId)),
-    shareClip: (friendId: string, filePath: string, friendName: string) =>
-      run(() => sharing.shareClip(friendId, filePath), `Shared with ${friendName}.`),
+    shareClip,
+    answerSharedClip: (shareId: string, accept: boolean) =>
+      run(() => sharing.answerSharedClip(shareId, accept), accept ? undefined : "Declined."),
     revokeShare: (shareId: string) => run(() => sharing.revokeShare(shareId), "Stopped sharing."),
     dismissSharedClip: (shareId: string) => run(() => sharing.dismissSharedClip(shareId)),
     saveSharedClip: (shareId: string) => run(() => sharing.saveSharedClip(shareId)),

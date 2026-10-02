@@ -9,10 +9,27 @@ use crate::error::AppResult;
 
 use super::store::{StateFile, StoredState};
 
+/// Moments worth a sound. They come from the resident controller, so they
+/// play with or without a window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShareCue {
+    /// A friend wants to send us a clip.
+    Incoming,
+    /// A friend accepted a clip we sent.
+    Accepted,
+    /// A friend declined a clip we sent.
+    Declined,
+    /// A friend finished downloading a clip we sent.
+    Complete,
+    /// The connection closed while a clip was still being sent.
+    Interrupted,
+}
+
 /// Change hints for the UI. Implementations must not block.
 pub trait SharingEvents: Send + Sync {
     fn changed(&self);
     fn library_changed(&self);
+    fn cue(&self, _cue: ShareCue) {}
 }
 
 pub struct Core {

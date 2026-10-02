@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { FriendStatus, SharingApi, SharingSnapshot } from '../../shared/sharing';
+import type { FriendStatus, SharedClipResult, SharingApi, SharingSnapshot } from '../../shared/sharing';
 import { subscribeToTauriEvent } from './tauri-events';
 
 export const sharingCommands = {
@@ -15,6 +15,7 @@ export const sharingCommands = {
   shareClip: 'sharing_share_clip',
   revokeShare: 'sharing_revoke_share',
   dismissSharedClip: 'sharing_dismiss_clip',
+  answerSharedClip: 'sharing_answer_clip',
   saveSharedClip: 'sharing_save_clip',
   cancelDownload: 'sharing_cancel_download',
   streamUrl: 'sharing_stream_url'
@@ -47,7 +48,8 @@ export function createTauriSharingAdapter(): SharingApi {
     dismissInvite: () => call<SharingSnapshot>('dismissInvite'),
     acceptFriend: (friendId) => call<SharingSnapshot>('acceptFriend', { friendId }),
     removeFriend: (friendId) => call<SharingSnapshot>('removeFriend', { friendId }),
-    shareClip: (friendId, filePath) => call<SharingSnapshot>('shareClip', { friendId, filePath }),
+    shareClip: (friendId, filePath) => call<SharedClipResult>('shareClip', { friendId, filePath }),
+    answerSharedClip: (shareId, accept) => call<SharingSnapshot>('answerSharedClip', { shareId, accept }),
     revokeShare: (shareId) => call<SharingSnapshot>('revokeShare', { shareId }),
     dismissSharedClip: (shareId) => call<SharingSnapshot>('dismissSharedClip', { shareId }),
     saveSharedClip: (shareId) => call<SharingSnapshot>('saveSharedClip', { shareId }),

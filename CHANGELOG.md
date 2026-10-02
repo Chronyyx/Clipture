@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.6.2] - 2026-10-02
+
+### Clip Requests, Live Send Status & Timed Access
+
+- **Friends accept clips first:** A clip a friend sends now waits in Friends with Accept and Decline. The Friends badge counts it, a notice appears anywhere in the app, and a sound plays even with the window closed. Nothing streams or downloads until it is accepted. Peer message `answer` and the store's `answers` queue carry the decision back (ADR 0011).
+- **Live send status:** After sending, the dialog follows the clip: preparing, waiting for the friend, declined, accepted, how much they have watched or downloaded with speed, "Connection lost" if the connection closes mid-send, and a check once they have all of it. Progress is counted on the sender as bytes leave. The Friends tab gains a Sent list that reopens the same view, with Stop sharing.
+- **Sound cues:** Short synthesized cues for an incoming clip, accepted, declined, finished and interrupted sends. No sound files are bundled.
+- **Send dialog:** The clip's thumbnail leads, friends are grouped Online and Away, and the send button has a fixed place in the footer. Choosing a friend only selects them, so a stray click can never send.
+- **A saved clip is closed:** Once a friend's "Add to library" copy passes its integrity check, their Clipture confirms it (`answer` with `kept`). Your PC then stops serving that clip for good, by stream or download, and deletes its stream copy. The check mark now means this confirmed save. Sending it again on purpose asks them again.
+- **15-minute window:** After accepting, a friend has 15 minutes to watch a clip or start adding it to their library. Then your PC stops serving it. A download that began in time may still finish. Both sides show the time left and a "Time's up" state, and sending it again gives another 15 minutes.
+- **Removing an offline friend sticks:** A friend removed while offline used to keep you on their list. The removal is now kept until it reaches them, and when they come back online and check in, Clipture answers that you are no longer friends, so their side drops you too (peer reply `notFriends`, store `goodbyes`).
+- **Stream cache sweep:** Startup only deletes stale `clipture-stream-*` temp files, so it can no longer remove a stream file that another session is still writing.
+- **Friends tab:** Each friend has a consistent colour on their avatar and the clips they send. Your name, invite link, requests and friends share one panel, and adding by code folds away. The library's send action is now a labelled button under the clip details.
+
 ## [1.6.1] - 2026-10-01
 
 ### Version Label & Update Status

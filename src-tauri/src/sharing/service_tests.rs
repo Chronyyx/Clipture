@@ -9,14 +9,23 @@ use std::{
 use iroh::address_lookup::MemoryLookup;
 
 use super::*;
-use crate::sharing::model::{DownloadPhase, FriendStatus, Presence};
+use crate::sharing::{
+    core::ShareCue,
+    model::{DownloadPhase, FriendStatus, Presence, ShareAnswer, TransferPurpose, TransferState},
+    node::is_unavailable,
+    wire::{RangePurpose, Request},
+};
 
+/// Records sound cues; UI hints are ignored.
 #[derive(Default)]
-struct NoEvents;
+struct Cues(Arc<Mutex<Vec<ShareCue>>>);
 
-impl SharingEvents for NoEvents {
+impl SharingEvents for Cues {
     fn changed(&self) {}
     fn library_changed(&self) {}
+    fn cue(&self, cue: ShareCue) {
+        self.0.lock().unwrap().push(cue);
+    }
 }
 
 pub(super) struct FakeLibrary {
@@ -53,6 +62,7 @@ impl ClipLibrary for FakeLibrary {
 pub(super) struct Peer {
     pub(super) service: Arc<SharingService>,
     pub(super) library: Arc<FakeLibrary>,
+    cues: Arc<Mutex<Vec<ShareCue>>>,
     _directory: tempfile::TempDir,
 }
 
@@ -64,9 +74,10 @@ impl Peer {
             published: Mutex::new(Vec::new()),
             copies: Default::default(),
         });
+        let cues = Arc::new(Mutex::new(Vec::new()));
         let service = SharingService::new(
             directory.path().join("sharing"),
-            Box::new(NoEvents),
+            Box::new(Cues(cues.clone())),
             library.clone(),
             tokio::runtime::Handle::current(),
             Network::Local(lookup.clone()),
@@ -74,6 +85,7 @@ impl Peer {
         Self {
             service,
             library,
+            cues,
             _directory: directory,
         }
     }
@@ -163,6 +175,19 @@ pub(super) async fn share(alice: &Peer, friend: &str, path: &Path) -> String {
         .unwrap()
 }
 
+/// Waits for a friend's clip to arrive, then accepts it.
+pub(super) async fn receive(bob: &Peer, share_id: &str) {
+    until("bob is asked about the clip", || {
+        bob.service
+            .snapshot()
+            .inbox
+            .iter()
+            .any(|clip| clip.share_id == share_id && clip.answer == ShareAnswer::Pending)
+    })
+    .await;
+    bob.service.answer_shared_clip(share_id, true).unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn badly_laid_out_clips_are_sent_as_a_stream_copy() {
     let (alice, bob, _lookup) = online_pair().await;
@@ -172,7 +197,7 @@ async fn badly_laid_out_clips_are_sent_as_a_stream_copy() {
     let share_id = share(&alice, &bob.code(), &clip).await;
     let copy = alice.library.outgoing_copies_folder().join(format!("{share_id}.mp4"));
     assert!(copy.is_file(), "the copy is what gets served");
-    until("bob receives it", || !bob.service.snapshot().inbox.is_empty()).await;
+    receive(&bob, &share_id).await;
 
     // Bob keeps the copy, verified against the copy's own digest.
     bob.service.save_shared_clip(&share_id).unwrap();
@@ -238,14 +263,7 @@ async fn friends_stream_and_keep_a_verified_clip() {
     );
     let original = std::fs::read(&clip).unwrap();
     let share_id = share(&alice, &bob_code, &clip).await;
-    until("bob receives the offer", || {
-        bob.service
-            .snapshot()
-            .inbox
-            .iter()
-            .any(|clip| clip.share_id == share_id)
-    })
-    .await;
+    receive(&bob, &share_id).await;
 
     // Streaming: bounded ranges served straight from memory.
     let service = bob.service.clone();
@@ -326,7 +344,7 @@ async fn strangers_and_revoked_shares_get_nothing() {
     until("mallory online", || mallory.service.node().is_some()).await;
     let alice_id = parse_friend_code(&alice.code()).unwrap();
     let node = mallory.service.node().unwrap();
-    assert!(node.open_range(alice_id, &share_id, 0, 16).await.is_err());
+    assert!(node.open_range(alice_id, &share_id, 0, 16, RangePurpose::Watch).await.is_err());
     assert!(node
         .notify(
             alice_id,
@@ -349,7 +367,7 @@ async fn strangers_and_revoked_shares_get_nothing() {
     .await;
     let bob_node = bob.service.node().unwrap();
     assert!(bob_node
-        .open_range(alice_id, &share_id, 0, 16)
+        .open_range(alice_id, &share_id, 0, 16, RangePurpose::Watch)
         .await
         .is_err());
 }
@@ -361,10 +379,7 @@ async fn a_tampered_clip_is_discarded() {
     let folder = alice._directory.path().join("clips");
     let clip = write_clip(&folder, "clip.mp4", 256 * 1024, 3);
     let share_id = share(&alice, &bob.code(), &clip).await;
-    until("bob has the offer", || {
-        !bob.service.snapshot().inbox.is_empty()
-    })
-    .await;
+    receive(&bob, &share_id).await;
     // Same size, different bytes: only the digest can catch this.
     write_clip(&folder, "clip.mp4", 256 * 1024, 4);
 
@@ -393,10 +408,7 @@ async fn an_interrupted_download_resumes_from_its_partial_file() {
     befriend(&alice, &bob).await;
     let clip = write_clip(&alice._directory.path().join("clips"), "clip.mp4", 512 * 1024, 7);
     let share_id = share(&alice, &bob.code(), &clip).await;
-    until("bob has the offer", || {
-        !bob.service.snapshot().inbox.is_empty()
-    })
-    .await;
+    receive(&bob, &share_id).await;
     // What an earlier, interrupted attempt left behind.
     let original = std::fs::read(&clip).unwrap();
     std::fs::create_dir_all(&bob.library.folder).unwrap();
@@ -417,6 +429,142 @@ async fn an_interrupted_download_resumes_from_its_partial_file() {
     let saved = bob.library.published.lock().unwrap()[0].file_path.clone();
     assert_eq!(std::fs::read(saved).unwrap(), original);
     assert!(!partial.exists(), "the partial becomes the clip");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn friends_answer_and_the_sender_follows_the_transfer() {
+    let (alice, bob, _lookup) = online_pair().await;
+    befriend(&alice, &bob).await;
+    let clip = write_clip(&alice._directory.path().join("clips"), "ask.mp4", 700 * 1024, 9);
+    let size = std::fs::metadata(&clip).unwrap().len();
+    let outbox = |alice: &Peer| alice.service.snapshot().outbox.remove(0);
+
+    // Nothing streams before bob says yes.
+    let share_id = share(&alice, &bob.code(), &clip).await;
+    until("bob is asked", || {
+        bob.service.snapshot().inbox.first().is_some_and(|clip| clip.answer == ShareAnswer::Pending)
+    })
+    .await;
+    assert!(bob.cues.lock().unwrap().contains(&ShareCue::Incoming));
+    assert!(bob.service.open_stream("main", &share_id).is_err());
+    assert!(bob.service.save_shared_clip(&share_id).is_err());
+    until("alice sees it delivered", || outbox(&alice).delivered).await;
+    assert_eq!(outbox(&alice).answer, ShareAnswer::Pending);
+
+    // Declining tells alice, and she stops serving it.
+    bob.service.answer_shared_clip(&share_id, false).unwrap();
+    assert!(bob.service.snapshot().inbox.is_empty());
+    until("alice hears no", || outbox(&alice).answer == ShareAnswer::Declined).await;
+    assert!(alice.cues.lock().unwrap().contains(&ShareCue::Declined));
+    let alice_id = parse_friend_code(&alice.code()).unwrap();
+    let bob_node = bob.service.node().unwrap();
+    assert!(bob_node.open_range(alice_id, &share_id, 0, 16, RangePurpose::Watch).await.is_err());
+
+    // Asked again, bob accepts and keeps it; alice watches it arrive.
+    assert_eq!(share(&alice, &bob.code(), &clip).await, share_id);
+    receive(&bob, &share_id).await;
+    until("alice hears yes", || outbox(&alice).answer == ShareAnswer::Accepted).await;
+    bob.service.save_shared_clip(&share_id).unwrap();
+    until("alice has sent every byte", || {
+        outbox(&alice).transfer.is_some_and(|transfer| transfer.state == TransferState::Complete)
+    })
+    .await;
+    let transfer = outbox(&alice).transfer.unwrap();
+    assert_eq!((transfer.sent_bytes, transfer.total_bytes), (size, size));
+    assert_eq!(transfer.purpose, TransferPurpose::Keep);
+    assert!(alice.service.core.read(|state| state.outbox[0].received_whole), "kept across restarts");
+
+    // Bob's verified copy closes the share: he has it, so it is never
+    // served again, by stream or download.
+    until("alice hears bob kept it", || outbox(&alice).saved).await;
+    assert!(alice.cues.lock().unwrap().contains(&ShareCue::Complete));
+    for purpose in [RangePurpose::Watch, RangePurpose::Keep] {
+        assert!(bob_node.open_range(alice_id, &share_id, 0, 16, purpose).await.is_err());
+    }
+    // Bob still plays his own copy, without asking alice.
+    assert!(bob.service.snapshot().inbox[0].saved);
+}
+
+/// Turns sharing off and waits out the goodbye budget, after which the
+/// endpoint is closed and the peer is truly unreachable.
+async fn go_offline(peer: &Peer) {
+    peer.service.set_enabled(false).unwrap();
+    until("node detached", || peer.service.node().is_none()).await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_sender_stops_serving_when_the_window_closes() {
+    let (alice, bob, _lookup) = online_pair().await;
+    befriend(&alice, &bob).await;
+    alice.service.set_share_window(1_500);
+    let clip = write_clip(&alice._directory.path().join("clips"), "brief.mp4", 64 * 1024, 6);
+    let share_id = share(&alice, &bob.code(), &clip).await;
+    receive(&bob, &share_id).await;
+    until("alice hears yes", || {
+        alice.service.snapshot().outbox[0].available_until_ms.is_some()
+    })
+    .await;
+    let alice_id = parse_friend_code(&alice.code()).unwrap();
+    let bob_node = bob.service.node().unwrap();
+    assert!(bob_node.open_range(alice_id, &share_id, 0, 16, RangePurpose::Watch).await.is_ok());
+
+    tokio::time::sleep(Duration::from_millis(1_800)).await;
+    for purpose in [RangePurpose::Watch, RangePurpose::Keep] {
+        let refused = bob_node.open_range(alice_id, &share_id, 0, 16, purpose).await;
+        assert!(refused.is_err_and(|error| is_unavailable(&error)), "closed for {purpose:?}");
+    }
+}
+
+fn knows(viewer: &Peer, friend: &str) -> bool {
+    viewer.service.core.read(|state| state.friend(friend).is_some())
+}
+
+fn owes_goodbye(viewer: &Peer, friend: &str) -> bool {
+    viewer.service.core.read(|state| state.goodbyes.iter().any(|id| id == friend))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_friend_removed_while_offline_learns_it_when_back() {
+    let (alice, bob, _lookup) = online_pair().await;
+    befriend(&alice, &bob).await;
+    let (alice_code, bob_code) = (alice.code(), bob.code());
+
+    // Bob is away when Alice removes him: the goodbye cannot reach him.
+    go_offline(&bob).await;
+    alice.service.remove_friend(&bob_code).unwrap();
+    assert!(!knows(&alice, &bob_code));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(owes_goodbye(&alice, &bob_code), "kept until bob hears it");
+    assert!(knows(&bob, &alice_code), "bob has not heard yet");
+
+    // Back online, Bob announces himself; Alice says they are not friends.
+    bob.service.set_enabled(true).unwrap();
+    until("bob drops alice", || !knows(&bob, &alice_code)).await;
+    until("alice's goodbye is settled", || !owes_goodbye(&alice, &bob_code)).await;
+    assert!(!knows(&alice, &bob_code), "nobody is re-added: {:?}", alice.service.core.read(|state| state.friends.clone()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owed_goodbye_goes_out_when_the_remover_returns() {
+    let (alice, bob, _lookup) = online_pair().await;
+    befriend(&alice, &bob).await;
+    let (alice_code, bob_code) = (alice.code(), bob.code());
+
+    go_offline(&bob).await;
+    alice.service.remove_friend(&bob_code).unwrap();
+    go_offline(&alice).await;
+
+    // Bob returns while Alice is away: nobody can tell him yet.
+    bob.service.set_enabled(true).unwrap();
+    until("bob online", || bob.service.node().is_some()).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(knows(&bob, &alice_code));
+
+    // Alice returns and delivers what she owes.
+    alice.service.set_enabled(true).unwrap();
+    until("bob drops alice", || !knows(&bob, &alice_code)).await;
+    until("alice's goodbye is settled", || !owes_goodbye(&alice, &bob_code)).await;
 }
 
 fn presence_of(viewer: &Peer, friend: &Peer) -> Presence {

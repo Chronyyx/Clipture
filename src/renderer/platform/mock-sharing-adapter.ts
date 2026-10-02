@@ -1,5 +1,6 @@
 import { DEMO_CLIP_URL } from './mockPreview';
-import type { Friend, SharingApi, SharingSnapshot } from '../../shared/sharing';
+import { simulateFriend } from './mock-sharing-transfer';
+import type { Friend, SharedClip, SharingApi, SharingSnapshot } from '../../shared/sharing';
 
 /** Browser preview host for the Friends tab (`?preview`, with `&sharing=off`
  * for the first-run state and `&slow` for loaders). Deterministic, in memory,
@@ -88,14 +89,30 @@ export function createMockSharingAdapter(options: MockSharingOptions = {}): Shar
       draft.friends = draft.friends.filter((candidate) => candidate.id !== friendId);
       draft.inbox = draft.inbox.filter((clip) => clip.friendId !== friendId || clip.saved);
     }),
-    shareClip: (friendId, filePath) => commit((draft) => {
+    shareClip: async (friendId, filePath) => {
       const title = filePath.split(/[\\/]/).pop()?.replace(/\.mp4$/i, '') ?? 'Clip';
-      draft.outbox.unshift({
-        shareId: Math.random().toString(16).slice(2).padEnd(32, '0').slice(0, 32),
-        friendId, friendName: friend(friendId).name, title, size: 48_000_000, durationSeconds: 30,
-        resolution: '1920x1080', gameOrApp: 'Game', createdAtMs: Date.now(), sharedAtMs: Date.now(),
-        saved: false, delivered: true, audioTracks: ['System audio'], streamed: [], allAudioReady: false
+      const shareId = Math.random().toString(16).slice(2).padEnd(32, '0').slice(0, 32);
+      // Hashing and preparing a clip takes a moment on the host too.
+      await delay(900);
+      const snapshot = await commit((draft) => {
+        draft.outbox.unshift({
+          shareId, friendId, friendName: friend(friendId).name, title, size: 48_000_000, durationSeconds: 30,
+          resolution: '1920x1080', gameOrApp: 'Game', createdAtMs: Date.now(), sharedAtMs: Date.now(),
+          saved: false, delivered: false, audioTracks: ['System audio'], streamed: [], allAudioReady: false,
+          answer: 'pending', transfer: null, availableUntilMs: null
+        });
       });
+      simulateFriend(() => state, shareId, changed);
+      return { shareId, snapshot };
+    },
+    answerSharedClip: (shareId, accept) => commit((draft) => {
+      const clip = draft.inbox.find((candidate) => candidate.shareId === shareId && candidate.answer === 'pending');
+      if (!clip) throw new Error('That clip is no longer waiting for an answer.');
+      if (accept) {
+        clip.answer = 'accepted';
+        clip.availableUntilMs = Date.now() + 15 * 60_000;
+      }
+      else draft.inbox = draft.inbox.filter((candidate) => candidate !== clip);
     }),
     revokeShare: (shareId) => commit((draft) => { draft.outbox = draft.outbox.filter((clip) => clip.shareId !== shareId); }),
     dismissSharedClip: (shareId) => commit((draft) => { draft.inbox = draft.inbox.filter((clip) => clip.shareId !== shareId); }),
@@ -177,14 +194,21 @@ export function mockSharingSeed(search: string): MockSharingOptions | undefined 
     { id: 'u9djr3kx5ybe1qmcgn8zhtwo6spa74fiu9djr3kx5ybe1qmcgn8z', name: 'Rin', status: 'incoming', addedAtMs: now - hour / 3, undelivered: false, presence: 'offline' },
     { id: 'c4hn8oyqg1tkx5bm3ejw9rzdup6as7fic4hn8oyqg1tkx5bm3ejw', name: 'Sam', status: 'outgoing', addedAtMs: now - 2 * hour, undelivered: true, presence: 'offline' }
   ];
-  const shared = (index: number, friendIndex: number, title: string, game: string, durationSeconds: number, hoursAgo: number, saved = false) => ({
+  const shared = (index: number, friendIndex: number, title: string, game: string, durationSeconds: number, hoursAgo: number, saved = false): SharedClip => ({
     shareId: String(index).repeat(32).slice(0, 32),
     friendId: friends[friendIndex]!.id,
     friendName: friends[friendIndex]!.name,
     title, size: durationSeconds * 1_450_000, durationSeconds, resolution: '1920x1080', gameOrApp: game,
     createdAtMs: now - hoursAgo * hour, sharedAtMs: now - hoursAgo * hour, saved, delivered: true,
-    audioTracks: ['System audio', 'Microphone'], streamed: [] as [number, number][], allAudioReady: false
+    audioTracks: ['System audio', 'Microphone'], streamed: [] as [number, number][], allAudioReady: false,
+    answer: 'accepted', transfer: null, availableUntilMs: now - hoursAgo * hour + 15 * 60_000
   });
+  const asking = { ...shared(5, 3, 'Ult into triple, Haven A', 'VALORANT', 38, 0.05), answer: 'pending' as const, availableUntilMs: null };
+  const fresh = shared(1, 0, 'Operator flick through smoke', 'VALORANT', 45, 0.4);
+  fresh.availableUntilMs = now + 11 * 60_000;
+  const sent = shared(4, 1, 'Deagle ace, Mirage B', 'Counter-Strike 2', 30, 3);
+  sent.transfer = { sentBytes: sent.size, totalBytes: sent.size, purpose: 'keep', state: 'complete', bytesPerSecond: 0 };
+  sent.saved = true;
   return {
     latencyMs,
     streamUrl,
@@ -198,11 +222,12 @@ export function mockSharingSeed(search: string): MockSharingOptions | undefined 
       displayName: 'Alex',
       friends,
       inbox: [
-        shared(1, 0, 'Operator flick through smoke', 'VALORANT', 45, 0.4),
+        asking,
+        fresh,
         shared(2, 1, 'Last circle no-scope', 'Apex Legends', 30, 5),
         shared(3, 0, 'Pentakill in the jungle', 'League of Legends', 60, 26, true)
       ],
-      outbox: [shared(4, 1, 'Deagle ace, Mirage B', 'Counter-Strike 2', 30, 3)],
+      outbox: [sent],
       downloads: []
     }
   };

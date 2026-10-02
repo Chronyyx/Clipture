@@ -20,7 +20,10 @@ use tokio::{sync::Notify, task::AbortHandle, time::timeout};
 use crate::error::{AppError, AppResult};
 
 use super::{
-    super::node::{is_unavailable, Node},
+    super::{
+        node::{is_unavailable, Node},
+        wire::RangePurpose,
+    },
     local_blocks,
     order::{find_moov, playback_order, Lookup, PlaybackOrder},
     store::BlockStore,
@@ -358,7 +361,7 @@ async fn run_runway(fetch: Fetch, id: u64) {
         let length = ((start + count) * BLOCK_BYTES).min(target.size) - offset;
         let opened = fetch
             .node
-            .open_range(target.peer, &target.share_id, offset, length)
+            .open_range(target.peer, &target.share_id, offset, length, RangePurpose::Watch)
             .await;
         let mut stream = match opened {
             Ok((size, stream)) if size == target.size => stream,

@@ -175,17 +175,6 @@ export function LibraryPlayerSidebar({
               </span>
             )}
           </h2>
-          {onShare && (
-            <button
-              className="icon-button"
-              type="button"
-              title="Send to a friend"
-              aria-label={`Send ${displayTitle} to a friend`}
-              onClick={() => onShare(clip)}
-            >
-              <Send size={16} />
-            </button>
-          )}
         </div>
         <p>{sourceText}</p>
         <dl className="library-player-side-meta">
@@ -194,6 +183,12 @@ export function LibraryPlayerSidebar({
           <div><dt>Video</dt><dd>{clip.resolution}, {clip.fps} FPS</dd></div>
           <div><dt>Audio</dt><dd>{clip.audioTracks.length} {clip.audioTracks.length === 1 ? "track" : "tracks"}</dd></div>
         </dl>
+        {onShare && (
+          <button className="library-send-button" type="button" onClick={() => onShare(clip)}
+            aria-label={`Send ${displayTitle} to a friend`}>
+            <Send size={16} aria-hidden="true" /> Send to a friend
+          </button>
+        )}
       </div>
       <div className="clip-rail-heading">
         <strong>{selectionMode ? "Select clips" : "More clips"}</strong>

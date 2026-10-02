@@ -63,6 +63,48 @@ pub struct OutgoingShare {
     /// The library clip's digest when shared, to spot edits on re-sharing.
     #[serde(default)]
     pub source_blake3: Option<String>,
+    /// What the friend decided. Shares from before friends could decline
+    /// were already in their inbox, so they read as accepted.
+    #[serde(default = "accepted")]
+    pub answer: ShareAnswer,
+    /// Every byte has been read by the friend at least once.
+    #[serde(default)]
+    pub received_whole: bool,
+    /// The friend confirmed a verified copy in their library. The share is
+    /// closed: they have it, so it is never served again.
+    #[serde(default)]
+    pub kept: bool,
+    /// When the friend accepted; their window to watch or keep starts here.
+    #[serde(default)]
+    pub accepted_at_ms: Option<u64>,
+    /// A download began inside the window, so it may finish after it.
+    #[serde(default)]
+    pub keep_started: bool,
+}
+
+fn accepted() -> ShareAnswer {
+    ShareAnswer::Accepted
+}
+
+/// A friend's decision about a clip offered to them.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ShareAnswer {
+    Pending,
+    Accepted,
+    Declined,
+}
+
+/// Our decision about a friend's clip, kept until it reaches them.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingAnswer {
+    pub friend_id: String,
+    pub share_id: String,
+    pub accepted: bool,
+    /// Also confirms a verified copy is in our library.
+    #[serde(default)]
+    pub kept: bool,
 }
 
 impl OutgoingShare {
@@ -85,6 +127,13 @@ pub struct InboxClip {
     pub received_at_ms: u64,
     #[serde(default)]
     pub saved_path: Option<String>,
+    /// Waiting for the user to accept or decline; nothing streams until then.
+    /// Clips received before friends could decline read as accepted.
+    #[serde(default)]
+    pub awaiting_answer: bool,
+    /// When we accepted it, to show how long it stays on the sender's PC.
+    #[serde(default)]
+    pub accepted_at_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -153,7 +202,8 @@ pub struct SharedClipView {
     pub game_or_app: String,
     pub created_at_ms: u64,
     pub shared_at_ms: u64,
-    /// Inbox only: whether a verified copy is in the library.
+    /// Inbox: a verified copy is in the library. Outbox: the friend
+    /// confirmed theirs, and the share is closed.
     pub saved: bool,
     /// Outbox only: whether the friend has been told about it.
     pub delivered: bool,
@@ -162,6 +212,44 @@ pub struct SharedClipView {
     pub streamed: Vec<[u64; 2]>,
     /// Inbox only: the whole clip is here, so every audio track can play.
     pub all_audio_ready: bool,
+    /// Inbox: `pending` until the user decides. Outbox: the friend's answer.
+    pub answer: ShareAnswer,
+    /// Outbox only: what the friend has read of the clip.
+    pub transfer: Option<TransferView>,
+    /// After this the sender serves nothing new: no watching, and no
+    /// download that had not started. `None` until accepted.
+    pub available_until_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferPurpose {
+    Watch,
+    Keep,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferState {
+    /// Bytes are leaving now.
+    Active,
+    /// Started, then stopped by the friend (closed the player, cancelled).
+    Paused,
+    /// The connection closed in the middle of sending.
+    Interrupted,
+    /// The friend has read every byte.
+    Complete,
+}
+
+/// The sender's view of one share: bytes that have left, by any stream.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferView {
+    pub sent_bytes: u64,
+    pub total_bytes: u64,
+    pub purpose: TransferPurpose,
+    pub state: TransferState,
+    pub bytes_per_second: u64,
 }
 
 /// An invite link that opened Clipture and awaits the user's decision.

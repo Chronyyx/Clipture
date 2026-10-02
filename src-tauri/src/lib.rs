@@ -126,6 +126,7 @@ pub fn run() {
             commands::sharing_share_clip,
             commands::sharing_revoke_share,
             commands::sharing_dismiss_clip,
+            commands::sharing_answer_clip,
             commands::sharing_save_clip,
             commands::sharing_cancel_download,
             commands::sharing_stream_url,

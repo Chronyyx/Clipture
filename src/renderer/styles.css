@@ -9,6 +9,7 @@
 @import './features/settings/audio/audio.css';
 @import './features/diagnostics/diagnostics.css';
 @import './features/sharing/sharing.css';
+@import './features/sharing/send.css';
 @import './shared/dialogs.css';
 @import './shared/themes.css';
 @import './features/library/glitten.css';

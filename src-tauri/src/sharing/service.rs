@@ -20,16 +20,14 @@ use crate::{
 use super::{
     core::{now_ms, Core, SharingEvents},
     download::partial_path,
-    invite::{invite_link, parse_invite, Invite},
-    model::{
-        ClipOffer, Download, FriendStatus, FriendView, InviteView, NodeStatus,
-        Presence, SharedClipView, SharingSnapshot,
-    },
+    invite::{parse_invite, Invite},
+    model::{Download, FriendStatus, NodeStatus},
     node::{friend_code, parse_friend_code, Network, Node},
     presence::PresenceBook,
-    store::StateFile,
+    store::{StateFile, SHARE_WINDOW_MS},
     streams::{StreamRegistry, StreamTarget},
-    wire::{self, Request},
+    transfers::TransferBook,
+    wire,
 };
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
@@ -69,6 +67,10 @@ pub struct SharingService {
     downloads: Mutex<Vec<Download>>,
     streams: Arc<StreamRegistry>,
     presence: Arc<PresenceBook>,
+    transfers: Arc<TransferBook>,
+    /// How long friends may watch or start keeping a clip after accepting.
+    /// Fixed outside tests.
+    share_window_ms: Arc<AtomicU64>,
     /// At most one link waits for a decision; a newer link replaces it.
     pending_invite: Mutex<Option<Invite>>,
 }
@@ -97,8 +99,16 @@ impl SharingService {
                 progress_core.events.changed()
             }))),
             presence: Arc::default(),
+            transfers: Arc::default(),
+            share_window_ms: Arc::new(AtomicU64::new(SHARE_WINDOW_MS)),
             pending_invite: Mutex::new(None),
         })
+    }
+
+    /// Tests use a short window instead of waiting fifteen minutes.
+    #[cfg(test)]
+    pub(super) fn set_share_window(&self, window_ms: u64) {
+        self.share_window_ms.store(window_ms, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Starts the node at launch when the user previously turned sharing on.
@@ -107,98 +117,6 @@ impl SharingService {
         if self.core.read(|state| state.enabled) {
             self.start();
         }
-    }
-
-    pub fn snapshot(&self) -> SharingSnapshot {
-        let (status, status_message) = self.status();
-        let friend_code = self.identity.get().map(|key| friend_code(&key.public()));
-        let downloads = self.lock_downloads().clone();
-        let pending_invite = self
-            .pending_invite
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        let mut snapshot = self.core.read(|state| {
-            let name_of = |id: &str| {
-                state
-                    .friend(id)
-                    .map(|friend| friend.name.clone())
-                    .unwrap_or_else(|| "Former friend".into())
-            };
-            let mut inbox: Vec<_> = state
-                .inbox
-                .iter()
-                .map(|clip| {
-                    view(
-                        &clip.offer,
-                        &clip.friend_id,
-                        name_of(&clip.friend_id),
-                        clip.received_at_ms,
-                        clip.saved_path.is_some(),
-                        true,
-                    )
-                })
-                .collect();
-            let mut outbox: Vec<_> = state
-                .outbox
-                .iter()
-                .map(|share| {
-                    view(
-                        &share.offer,
-                        &share.friend_id,
-                        name_of(&share.friend_id),
-                        share.offer.created_at_ms,
-                        false,
-                        share.delivered,
-                    )
-                })
-                .collect();
-            inbox.reverse();
-            outbox.reverse();
-            SharingSnapshot {
-                supported: true,
-                enabled: state.enabled,
-                appear_offline: state.appear_offline,
-                status,
-                status_message,
-                invite_link: friend_code
-                    .as_deref()
-                    .filter(|_| state.enabled)
-                    .map(|code| invite_link(code, &state.display_name)),
-                pending_invite: pending_invite.map(|invite| InviteView {
-                    already_friends: state.is_accepted(&invite.code),
-                    code: invite.code,
-                    name: invite.name,
-                }),
-                friend_code: friend_code.filter(|_| state.enabled),
-                display_name: state.display_name.clone(),
-                friends: state
-                    .friends
-                    .iter()
-                    .map(|friend| FriendView {
-                        friend: friend.clone(),
-                        presence: if friend.status != FriendStatus::Accepted {
-                            Presence::Offline
-                        } else if state.appear_offline || status != NodeStatus::Online {
-                            Presence::Unknown
-                        } else if self.presence.is_online(&friend.id) {
-                            Presence::Online
-                        } else {
-                            Presence::Offline
-                        },
-                    })
-                    .collect(),
-                inbox,
-                outbox,
-                downloads,
-            }
-        });
-        // Outside the state lock: stream sessions have their own.
-        for clip in &mut snapshot.inbox {
-            clip.streamed = self.streams.arrived(&clip.share_id);
-            clip.all_audio_ready = self.streams.complete(&clip.share_id);
-        }
-        snapshot
     }
 
     pub fn set_enabled(self: &Arc<Self>, enabled: bool) -> AppResult<()> {
@@ -306,26 +224,39 @@ impl SharingService {
         Ok(())
     }
 
+    /// Removes a friend. They are told now if reachable; otherwise the
+    /// goodbye waits in the store and goes out when they can hear it.
     pub fn remove_friend(self: &Arc<Self>, id: &str) -> AppResult<()> {
-        let was_connected = self.core.read(|state| {
-            state
-                .friend(id)
-                .is_some_and(|friend| friend.status != FriendStatus::Incoming)
-        });
         self.core.update(|state| state.remove_friend(id))?;
         self.tidy_copies();
-        if was_connected {
-            if let (Ok(peer), Some(node)) = (parse_friend_code(id), self.node()) {
-                self.runtime.spawn(async move {
-                    let _ = node.notify(peer, &Request::Goodbye {}).await;
-                });
-            }
+        let owed = self.core.read(|state| state.goodbyes.iter().any(|goodbye| goodbye == id));
+        if let (true, Some(node)) = (owed, self.node()) {
+            let this = self.clone();
+            let id = id.to_owned();
+            self.runtime.spawn(async move { this.send_goodbye(&node, &id).await });
         }
         Ok(())
     }
 
-    /// Removes a clip from the inbox; a kept library copy is untouched.
-    pub fn dismiss_shared_clip(&self, share_id: &str) -> AppResult<()> {
+    /// Accepts or declines a clip a friend wants to send; they are told.
+    /// Accepting only allows streaming and keeping; nothing transfers yet.
+    pub fn answer_shared_clip(self: &Arc<Self>, share_id: &str, accept: bool) -> AppResult<()> {
+        let friend_id = self.core.update(|state| state.answer_offer(share_id, accept, now_ms()))??;
+        self.deliver_to_soon(friend_id);
+        Ok(())
+    }
+
+    /// Removes a clip from the inbox; a kept library copy is untouched. A
+    /// clip still waiting for an answer is declined, so the sender knows.
+    pub fn dismiss_shared_clip(self: &Arc<Self>, share_id: &str) -> AppResult<()> {
+        let awaiting = self.core.read(|state| {
+            state
+                .inbox_clip(share_id)
+                .is_some_and(|clip| clip.awaiting_answer)
+        });
+        if awaiting {
+            return self.answer_shared_clip(share_id, false);
+        }
         self.cancel_download(share_id);
         self.core
             .update(|state| state.inbox.retain(|clip| clip.offer.share_id != share_id))
@@ -339,7 +270,7 @@ impl SharingService {
             .read(|state| {
                 state
                     .inbox_clip(share_id)
-                    .filter(|clip| state.is_accepted(&clip.friend_id))
+                    .filter(|clip| state.is_accepted(&clip.friend_id) && !clip.awaiting_answer)
                     .map(|clip| {
                         (
                             clip.friend_id.clone(),
@@ -392,33 +323,6 @@ impl RemoteMediaSource for SharingService {
     }
 }
 
-fn view(
-    offer: &ClipOffer,
-    friend_id: &str,
-    friend_name: String,
-    shared_at_ms: u64,
-    saved: bool,
-    delivered: bool,
-) -> SharedClipView {
-    SharedClipView {
-        share_id: offer.share_id.clone(),
-        friend_id: friend_id.into(),
-        friend_name,
-        title: offer.title.clone(),
-        size: offer.size,
-        duration_seconds: offer.duration_seconds,
-        resolution: offer.resolution.clone(),
-        game_or_app: offer.game_or_app.clone(),
-        created_at_ms: offer.created_at_ms,
-        shared_at_ms,
-        saved,
-        delivered,
-        audio_tracks: offer.audio_tracks.clone(),
-        streamed: Vec::new(),
-        all_audio_ready: false,
-    }
-}
-
 fn hash_file(path: &std::path::Path) -> AppResult<(u64, String)> {
     let mut file = fs::File::open(path).map_err(|source| AppError::Io {
         action: "open clip to share",
@@ -454,6 +358,8 @@ mod keep;
 mod lifecycle;
 #[path = "service_outgoing.rs"]
 mod outgoing;
+#[path = "service_snapshot.rs"]
+mod snapshot;
 
 #[cfg(test)]
 #[path = "service_tests.rs"]

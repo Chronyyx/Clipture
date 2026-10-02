@@ -20,6 +20,7 @@ function createUnsupportedSharingAdapter(): SharingApi {
     shareClip: unavailable,
     revokeShare: unavailable,
     dismissSharedClip: unavailable,
+    answerSharedClip: unavailable,
     saveSharedClip: unavailable,
     cancelDownload: unavailable,
     streamUrl: unavailable,

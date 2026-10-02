@@ -1,10 +1,11 @@
-import { Check, LibraryBig, Play, RotateCcw, Trash2, WifiOff, X } from "lucide-react";
+import { Check, LibraryBig, Play, RotateCcw, TimerOff, Trash2, WifiOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { SharedClip, SharingDownload, StreamUrls } from "../../../shared/sharing";
 import { clipture } from "../../platform";
 import { MediaPlayer } from "../player";
 import { formatDuration } from "../../shared/clips/clipMetadata";
 import { formatBytes, possessive } from "./sharingFormat";
+import { minutesLeft, useNow, windowClosed } from "./useNow";
 
 /** Where the playhead is, as a fraction of the clip. */
 function usePlayhead(video: HTMLVideoElement | null) {
@@ -48,9 +49,10 @@ function WireBar({ clip, video }: { clip: SharedClip; video: HTMLVideoElement | 
   );
 }
 
-function KeepButton({ clip, download, onSave, onCancel }: {
+function KeepButton({ clip, download, expired, onSave, onCancel }: {
   clip: SharedClip;
   download?: SharingDownload;
+  expired: boolean;
   onSave: () => void;
   onCancel: () => void;
 }) {
@@ -84,6 +86,10 @@ function KeepButton({ clip, download, onSave, onCancel }: {
   const resumeAt = download?.phase === "failed" && download.totalBytes > 0
     ? Math.floor((download.receivedBytes / download.totalBytes) * 100)
     : 0;
+  // A download that already began may still finish; a new one may not.
+  if (expired && resumeAt === 0) {
+    return <button className="secondary-button share-keep" type="button" disabled><TimerOff size={17} /> Time's up</button>;
+  }
   return (
     <button className="primary share-keep" type="button" onClick={onSave}>
       <LibraryBig size={17} />{" "}
@@ -117,6 +123,8 @@ export function StreamPlayer({
   // selecting a clip (or opening Friends) only shows it.
   const [startedFor, setStartedFor] = useState<string>();
   const started = startedFor === clip.shareId;
+  const now = useNow();
+  const expired = !clip.saved && windowClosed(clip.availableUntilMs, now);
 
   useEffect(() => {
     let current = true;
@@ -161,7 +169,12 @@ export function StreamPlayer({
   return (
     <section className="share-stage-player" aria-label={`${clip.title} from ${clip.friendName}`}>
       <div className="share-screen">
-        {!started ? (
+        {!started && expired ? (
+          <div className="share-screen-message">
+            <TimerOff size={30} aria-hidden="true" />
+            <p>Your 15 minutes with this clip are up. Ask {clip.friendName} to send it again.</p>
+          </div>
+        ) : !started ? (
           <div className="share-screen-message share-screen-idle">
             <button className="share-play" type="button" onClick={() => setStartedFor(clip.shareId)}
               aria-label={`Play ${clip.title} from ${possessive(clip.friendName)} PC`}>
@@ -209,9 +222,12 @@ export function StreamPlayer({
           <p>
             From {clip.friendName}, {clip.gameOrApp || "a clip"}, {formatDuration(clip.durationSeconds)}, {formatBytes(clip.size)}
           </p>
+          {!clip.saved && clip.availableUntilMs != null && !expired && (
+            <p className="share-window">Available for {minutesLeft(clip.availableUntilMs, now)}. Add it to your library to keep it.</p>
+          )}
         </div>
         <div className="share-stage-actions">
-          <KeepButton clip={clip} download={download} onSave={onSave} onCancel={onCancel} />
+          <KeepButton clip={clip} download={download} expired={expired} onSave={onSave} onCancel={onCancel} />
           <button className="icon-button share-dismiss" type="button" onClick={onDismiss}
             title="Remove from this list" aria-label={`Remove ${clip.title} from this list`}>
             <Trash2 size={17} />

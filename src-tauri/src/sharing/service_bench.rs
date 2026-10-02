@@ -45,6 +45,7 @@ async fn streaming_bench() {
     let share_id = share(&alice, &bob.code(), &clip).await;
     let has_offer = |id: &str| bob.service.snapshot().inbox.iter().any(|c| c.share_id == id);
     until("bob has the offer", || has_offer(&share_id)).await;
+    bob.service.answer_shared_clip(&share_id, true).unwrap();
 
     let service = bob.service.clone();
     let id = share_id.clone();

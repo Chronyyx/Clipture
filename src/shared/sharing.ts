@@ -8,6 +8,20 @@ export type SharingNodeStatus = "off" | "starting" | "online" | "error";
 export type SharingDownloadPhase = "running" | "done" | "failed";
 /** `unknown` while you appear offline or are not connected. */
 export type FriendPresence = "online" | "offline" | "unknown";
+/** Inbox: `pending` until you accept or decline. Outbox: the friend's answer. */
+export type ShareAnswer = "pending" | "accepted" | "declined";
+export type TransferPurpose = "watch" | "keep";
+/** `interrupted`: the connection closed mid-send. `complete`: every byte arrived. */
+export type TransferState = "active" | "paused" | "interrupted" | "complete";
+
+/** Outbox: what the friend has read of a clip, counted as it leaves your PC. */
+export interface OutgoingTransfer {
+  sentBytes: number;
+  totalBytes: number;
+  purpose: TransferPurpose;
+  state: TransferState;
+  bytesPerSecond: number;
+}
 
 export interface Friend {
   /** The friend's public key, which is also their friend code. */
@@ -31,7 +45,8 @@ export interface SharedClip {
   gameOrApp: string;
   createdAtMs: number;
   sharedAtMs: number;
-  /** Inbox: a verified copy is in the library. */
+  /** Inbox: a verified copy is in the library. Outbox: the friend confirmed
+   * theirs, so the share is closed and never streams from you again. */
   saved: boolean;
   /** Outbox: the friend has been told about it. */
   delivered: boolean;
@@ -40,6 +55,17 @@ export interface SharedClip {
   streamed: [number, number][];
   /** Inbox: the whole clip is here, so every audio track can play. */
   allAudioReady: boolean;
+  answer: ShareAnswer;
+  /** Outbox: null until the friend starts watching or downloading. */
+  transfer: OutgoingTransfer | null;
+  /** 15 minutes after acceptance. After it the sender serves nothing new:
+   * no watching, and no download that had not started. Null until accepted. */
+  availableUntilMs: number | null;
+}
+
+export interface SharedClipResult {
+  shareId: string;
+  snapshot: SharingSnapshot;
 }
 
 /** Where a friend's clip streams from. */
@@ -103,8 +129,11 @@ export interface SharingApi {
   acceptFriend(friendId: string): Promise<SharingSnapshot>;
   /** Removes a friend, or declines (and blocks) a pending request. */
   removeFriend(friendId: string): Promise<SharingSnapshot>;
-  /** `filePath` must be a clip from the current library listing. */
-  shareClip(friendId: string, filePath: string): Promise<SharingSnapshot>;
+  /** `filePath` must be a clip from the current library listing. The friend
+   * is asked first; follow `shareId` in the outbox for their answer. */
+  shareClip(friendId: string, filePath: string): Promise<SharedClipResult>;
+  /** Accepts or declines a clip a friend wants to send; they are told. */
+  answerSharedClip(shareId: string, accept: boolean): Promise<SharingSnapshot>;
   revokeShare(shareId: string): Promise<SharingSnapshot>;
   dismissSharedClip(shareId: string): Promise<SharingSnapshot>;
   /** Starts a verified copy into the library; progress arrives via snapshots. */

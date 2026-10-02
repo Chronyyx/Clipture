@@ -17,7 +17,7 @@ use crate::{
 
 use super::super::{
     core::now_ms,
-    model::{ClipOffer, OutgoingShare},
+    model::{ClipOffer, OutgoingShare, ShareAnswer},
     wire::{self, MAX_CLIP_BYTES},
 };
 use super::{hash_file, ShareSource, SharingService};
@@ -54,7 +54,14 @@ impl SharingService {
             };
             let share = &mut state.outbox[index];
             if share.source_digest() == source_digest && share.path.is_file() {
+                // Asked again: they may decline this time, or accept a clip
+                // they declined before.
                 share.delivered = false;
+                share.answer = ShareAnswer::Pending;
+                share.received_whole = false;
+                share.kept = false;
+                share.accepted_at_ms = None;
+                share.keep_started = false;
                 (Some(share.offer.share_id.clone()), true)
             } else {
                 state.outbox.remove(index);
@@ -62,6 +69,7 @@ impl SharingService {
             }
         })?;
         if let Some(existing) = existing {
+            self.transfers.forget(&existing);
             self.deliver_soon();
             return Ok(existing);
         }
@@ -91,6 +99,11 @@ impl SharingService {
             delivered: false,
             source: served.is_some().then_some(source.path),
             source_blake3: Some(source_digest),
+            answer: ShareAnswer::Pending,
+            received_whole: false,
+            kept: false,
+            accepted_at_ms: None,
+            keep_started: false,
         };
         self.core.update(|state| state.add_outgoing(share))?;
         self.tidy_copies();
@@ -105,6 +118,7 @@ impl SharingService {
                 .outbox
                 .retain(|share| share.offer.share_id != share_id)
         })?;
+        self.transfers.forget(share_id);
         self.tidy_copies();
         Ok(())
     }
@@ -161,7 +175,8 @@ impl SharingService {
             state
                 .outbox
                 .iter()
-                .filter(|share| share.source.is_some())
+                // A kept share is never served again, so its copy can go.
+                .filter(|share| share.source.is_some() && !share.kept)
                 .map(|share| share.path.clone())
                 .collect()
         });

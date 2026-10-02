@@ -1,10 +1,16 @@
-import { Check, Send, Users } from "lucide-react";
+import { Send, Users, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ClipRecord } from "../../../shared/types";
 import type { SharingSnapshot } from "../../../shared/sharing";
-import { FriendAvatar } from "./FriendAvatar";
+import { useClipThumbnail } from "../../shared/clips/useClipThumbnail";
+import { formatDuration } from "../../shared/clips/clipMetadata";
+import { FriendPicker, sendHint } from "./FriendPicker";
+import { SendStatusView } from "./SendStatusView";
+import { describeSend } from "./sendStatus";
+import { useNow } from "./useNow";
 
+/** Pick a friend, then follow the send: their answer, and what they read. */
 export function ShareClipDialog({
   clip,
   snapshot,
@@ -14,16 +20,18 @@ export function ShareClipDialog({
 }: {
   clip: ClipRecord;
   snapshot?: SharingSnapshot;
-  onShare: (friendId: string, friendName: string) => Promise<boolean>;
+  /** Resolves to the share id, or undefined when it failed (already said). */
+  onShare: (friendId: string) => Promise<string | undefined>;
   onClose: () => void;
   onOpenFriends: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [chosen, setChosen] = useState<string>();
-  const [sending, setSending] = useState(false);
-  const rank = { online: 0, unknown: 1, offline: 2 } as const;
-  const friends = (snapshot?.friends.filter((friend) => friend.status === "accepted") ?? [])
-    .sort((left, right) => rank[left.presence] - rank[right.presence] || left.name.localeCompare(right.name));
+  const [sending, setSending] = useState<{ friendId: string; shareId?: string }>();
+  const thumbnailUrl = useClipThumbnail(clip.filePath);
+  const now = useNow();
+  const title = clip.title === "Clipture clip" ? "Clipture" : clip.title;
+  const friends = snapshot?.friends.filter((friend) => friend.status === "accepted") ?? [];
   const chosenFriend = friends.find((friend) => friend.id === chosen);
 
   useEffect(() => {
@@ -33,64 +41,84 @@ export function ShareClipDialog({
 
   const send = async () => {
     if (!chosenFriend || sending) return;
-    setSending(true);
-    const sent = await onShare(chosenFriend.id, chosenFriend.name);
-    setSending(false);
-    if (sent) onClose();
+    setSending({ friendId: chosenFriend.id });
+    const shareId = await onShare(chosenFriend.id);
+    setSending(shareId ? { friendId: chosenFriend.id, shareId } : undefined);
   };
-
   const openFriends = () => { onClose(); onOpenFriends(); };
 
-  let body;
-  if (!snapshot) {
-    body = (
-      <div className="share-pick-list" aria-busy="true">
-        {[0, 1, 2].map((row) => <span key={row} className="skeleton share-pick-skeleton" />)}
-      </div>
-    );
-  } else if (!snapshot.enabled || friends.length === 0) {
-    body = (
-      <div className="share-dialog-empty">
-        <Users size={32} aria-hidden="true" />
-        <p>{snapshot.enabled ? "Add a friend with their code before sending clips." : "Turn on friend sharing to send clips."}</p>
-        <button className="secondary-button" type="button" onClick={openFriends}>Open Friends</button>
-      </div>
+  const close = (
+    <button className="icon-button share-dialog-close" type="button" aria-label="Close" onClick={onClose}>
+      <X size={18} />
+    </button>
+  );
+
+  let content;
+  if (sending) {
+    const friend = snapshot?.friends.find((candidate) => candidate.id === sending.friendId);
+    const name = friend?.name ?? chosenFriend?.name ?? "your friend";
+    const share = sending.shareId ? snapshot?.outbox.find((row) => row.shareId === sending.shareId) : undefined;
+    const status = describeSend(share, friend?.presence, name, now);
+    content = (
+      <>
+        {close}
+        <SendStatusView status={status} clip={share} title={title} friendName={name} thumbnailUrl={thumbnailUrl} />
+        <div className="share-dialog-actions">
+          {status.tone === "declined" && (
+            <button className="secondary-button" type="button" onClick={() => { setSending(undefined); setChosen(undefined); }}>
+              Send to someone else
+            </button>
+          )}
+          <button className="secondary-button share-dialog-done" type="button" onClick={onClose}>Close</button>
+        </div>
+      </>
     );
   } else {
-    body = (
-      <div className="share-pick-list" role="radiogroup" aria-label="Friend">
-        {friends.map((friend) => (
-          <button key={friend.id} type="button" role="radio" aria-checked={chosen === friend.id}
-            className={chosen === friend.id ? "share-pick active" : "share-pick"} onClick={() => setChosen(friend.id)}>
-            <FriendAvatar name={friend.name} presence={friend.presence} />
-            <span className="share-pick-name">
-              {friend.name}
-              {friend.presence === "offline" && <small>Gets it when they're online</small>}
-            </span>
-            {chosen === friend.id && <Check size={17} aria-hidden="true" />}
-          </button>
-        ))}
-      </div>
+    const ready = snapshot?.enabled && friends.length > 0;
+    content = (
+      <>
+        <header className="share-dialog-head">
+          <span className="share-dialog-thumb" aria-hidden="true">
+            {thumbnailUrl && <img src={thumbnailUrl} alt="" />}
+            <span>{formatDuration(clip.durationSeconds)}</span>
+          </span>
+          <span className="share-dialog-heading">
+            <h2 id="share-dialog-title">Send to a friend</h2>
+            <p className="share-dialog-clip">{title}</p>
+          </span>
+          {close}
+        </header>
+        {!snapshot ? (
+          <div className="share-pick-list" aria-busy="true">
+            {[0, 1, 2].map((row) => <span key={row} className="skeleton share-pick-skeleton" />)}
+          </div>
+        ) : !ready ? (
+          <div className="share-dialog-empty">
+            <Users size={32} aria-hidden="true" />
+            <p>{snapshot.enabled ? "Add a friend with their code before sending clips." : "Turn on friend sharing to send clips."}</p>
+            <button className="secondary-button" type="button" onClick={openFriends}>Open Friends</button>
+          </div>
+        ) : (
+          <FriendPicker friends={friends} chosen={chosen} onChoose={setChosen} />
+        )}
+        {ready && (
+          <footer className="share-dialog-footer">
+            <p className="share-hint">{sendHint(chosenFriend, snapshot?.appearOffline)}</p>
+            <button className="share-send" type="button" disabled={!chosenFriend} onClick={() => void send()}>
+              <Send size={16} aria-hidden="true" />
+              <span>{chosenFriend ? `Send to ${chosenFriend.name}` : "Choose a friend"}</span>
+            </button>
+          </footer>
+        )}
+      </>
     );
   }
 
   return createPortal(
-    <dialog ref={dialog} className="modal share-dialog" aria-labelledby="share-dialog-title" onCancel={onClose}
-      onClick={(event) => { if (event.target === dialog.current) onClose(); }}>
-      <h2 id="share-dialog-title">Send to a friend</h2>
-      <p className="share-dialog-clip">{clip.title}</p>
-      {body}
-      <p className="share-hint">
-        {snapshot?.appearOffline
-          ? "You appear offline, so this will be sent when you're back online."
-          : "They can stream it right away while you're both online, and add it to their library if they want to keep it."}
-      </p>
-      <div className="share-dialog-actions">
-        <button className="secondary-button" type="button" onClick={onClose}>Cancel</button>
-        <button className="primary" type="button" disabled={!chosenFriend || sending} onClick={() => void send()}>
-          <Send size={16} /> {sending ? "Preparing clip..." : chosenFriend ? `Send to ${chosenFriend.name}` : "Send"}
-        </button>
-      </div>
+    <dialog ref={dialog} className={sending ? "modal share-dialog share-send-dialog sending" : "modal share-dialog share-send-dialog"}
+      aria-labelledby={sending ? undefined : "share-dialog-title"} aria-label={sending ? "Sending clip" : undefined}
+      onCancel={onClose} onClick={(event) => { if (event.target === dialog.current) onClose(); }}>
+      {content}
     </dialog>,
     document.body
   );

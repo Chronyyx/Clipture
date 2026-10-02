@@ -410,6 +410,37 @@
 .library-player-side-meta dt { color: var(--text-subtle); font-family: var(--font-ui); }
 .library-player-side-meta dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 
+/* Sending is the clip's main outward action, so it gets a labelled button. */
+.library-send-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  margin-top: 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 120ms ease-out;
+}
+
+.library-send-button:hover { background: color-mix(in oklch, var(--accent) 26%, var(--surface)); }
+
+.library-send-button:focus-visible {
+  outline: 2px solid var(--selection);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .library-send-button { transition: none; }
+}
+
 .library-filter-row { display: flex; align-items: center; gap: 12px; }
 .library-filter-row .library-tabs { flex: 0 0 auto; }
 .library-filter-row .library-search { flex: 1; min-width: 0; }

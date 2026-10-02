@@ -1,3 +1,4 @@
+mod cues;
 mod decoded_player;
 #[cfg(test)]
 mod decoded_player_tests;
@@ -7,6 +8,7 @@ mod library;
 mod native_tests;
 mod player;
 
+pub use cues::{CuePlayer, Note};
 pub use decoded_player::{DecodedSoundPlayer, WaveSoundSink};
 pub use decoder::DecodedWave;
 pub use library::{BundledSound, ClipSoundOption, SoundLibrary};

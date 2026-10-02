@@ -276,13 +276,20 @@ fn serve(shared: &Shared, requested: ByteRange, first: u64) -> RemoteVideoChunk 
 }
 
 /// Whole-clip copies are deleted with their session, but a crash or an
-/// open file handle can leave one behind.
+/// open file handle can leave one behind. Only stale files go: a copy still
+/// being written belongs to a live session elsewhere (another registry in
+/// the same process, as in tests).
 fn remove_leftover_copies() {
+    const STALE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
     let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
         return;
     };
     for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with(TEMP_PREFIX) {
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > STALE));
+        if stale && entry.file_name().to_string_lossy().starts_with(TEMP_PREFIX) {
             let _ = std::fs::remove_file(entry.path());
         }
     }

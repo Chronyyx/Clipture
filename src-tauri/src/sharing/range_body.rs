@@ -19,11 +19,14 @@ const PIECE: usize = 64 * 1024;
 const MAX_DATA_SEGMENT: usize = 1024 * 1024;
 
 /// Sends `length` bytes of `source`, eliding zero runs when `sparse`.
+/// `progress` hears how many bytes of the range have been handed to the
+/// stream so far (buffered data counts once it is written).
 pub async fn send_body(
     mut source: impl AsyncRead + Unpin,
     send: &mut (impl AsyncWrite + Unpin),
     length: u64,
     sparse: bool,
+    progress: &mut impl FnMut(u64),
 ) -> std::io::Result<()> {
     let mut piece = vec![0_u8; PIECE];
     let mut data: Vec<u8> = Vec::with_capacity(if sparse { MAX_DATA_SEGMENT } else { 0 });
@@ -36,21 +39,25 @@ pub async fn send_body(
         sent += wanted as u64;
         if !sparse {
             put(send, bytes).await?;
+            progress(sent);
             continue;
         }
         if bytes.iter().all(|byte| *byte == 0) {
             flush_data(send, &mut data).await?;
             zeros += wanted as u64;
-            continue;
+        } else {
+            flush_zeros(send, &mut zeros).await?;
+            data.extend_from_slice(bytes);
+            if data.len() >= MAX_DATA_SEGMENT {
+                flush_data(send, &mut data).await?;
+            }
         }
-        flush_zeros(send, &mut zeros).await?;
-        data.extend_from_slice(bytes);
-        if data.len() >= MAX_DATA_SEGMENT {
-            flush_data(send, &mut data).await?;
-        }
+        progress(sent - data.len() as u64);
     }
     flush_zeros(send, &mut zeros).await?;
-    flush_data(send, &mut data).await
+    flush_data(send, &mut data).await?;
+    progress(length);
+    Ok(())
 }
 
 async fn flush_zeros(send: &mut (impl AsyncWrite + Unpin), zeros: &mut u64) -> std::io::Result<()> {
@@ -172,9 +179,14 @@ mod tests {
 
     async fn round_trip(source: &[u8], sparse: bool) -> (Vec<u8>, usize) {
         let mut wire = Vec::new();
-        send_body(source, &mut wire, source.len() as u64, sparse)
-            .await
-            .unwrap();
+        let mut reported = 0;
+        send_body(source, &mut wire, source.len() as u64, sparse, &mut |sent| {
+            assert!(sent >= reported, "progress never goes backwards");
+            reported = sent;
+        })
+        .await
+        .unwrap();
+        assert_eq!(reported, source.len() as u64);
         let carried = wire.len();
         let mut body = RangeBody::new(wire.as_slice(), source.len() as u64, sparse);
         let mut out = vec![7_u8; source.len()];

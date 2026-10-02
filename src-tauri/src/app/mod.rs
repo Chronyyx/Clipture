@@ -52,7 +52,10 @@ pub fn setup(application: &mut App) -> AppResult<()> {
         engine,
         Arc::new(NativeIconSource),
         notification_sink,
-        Box::new(sharing_events::TauriSharingEvents(application.handle().clone())),
+        Box::new(sharing_events::TauriSharingEvents {
+            app: application.handle().clone(),
+            cues: share_cues(test_mode),
+        }),
         tauri::async_runtime::handle().inner().clone(),
     );
     let update_service = updates::runtime_service(
@@ -79,6 +82,18 @@ pub fn setup(application: &mut App) -> AppResult<()> {
     // An explicit launch opens the UI; startup registration passes --hidden.
     handle_second_instance(application.handle(), &std::env::args().collect::<Vec<_>>());
     Ok(())
+}
+
+/// Sharing sounds play natively; test mode stays silent.
+fn share_cues(test_mode: bool) -> Option<Arc<crate::sounds::CuePlayer>> {
+    #[cfg(windows)]
+    if !test_mode {
+        return Some(Arc::new(crate::sounds::CuePlayer::new(Arc::new(
+            crate::platform::windows::WindowsWaveSoundSink,
+        ))));
+    }
+    let _ = test_mode;
+    None
 }
 
 pub fn handle_second_instance(app: &AppHandle, arguments: &[String]) {

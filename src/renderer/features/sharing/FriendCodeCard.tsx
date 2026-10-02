@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Copy, Link, Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
+import { FriendAvatar } from "./FriendAvatar";
 import { codeGroups } from "./sharingFormat";
 
 function useCopied() {
@@ -46,28 +47,31 @@ export function FriendCodeCard({
 
   return (
     <section className="share-code-card" aria-labelledby="share-code-title">
-      <div className="share-code-head">
-        <h2 id="share-code-title">Invite friends</h2>
-        {editing ? (
-          <input
-            className="share-name-input"
-            value={draft}
-            maxLength={40}
-            autoFocus
-            aria-label="Name your friends see"
-            onChange={(event) => setDraft(event.target.value)}
-            onBlur={() => void commit()}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.currentTarget.blur();
-              if (event.key === "Escape") { setDraft(displayName); setEditing(false); }
-            }}
-          />
-        ) : (
-          <button className="share-name-button" type="button" onClick={() => setEditing(true)}
-            title="Change the name your friends see">
-            {displayName} <Pencil size={13} aria-hidden="true" />
-          </button>
-        )}
+      <div className="share-me">
+        <FriendAvatar name={displayName} size={46} />
+        <span className="share-me-copy">
+          <h2 id="share-code-title">Your friends see you as</h2>
+          {editing ? (
+            <input
+              className="share-name-input"
+              value={draft}
+              maxLength={40}
+              autoFocus
+              aria-label="Name your friends see"
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={() => void commit()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") { setDraft(displayName); setEditing(false); }
+              }}
+            />
+          ) : (
+            <button className="share-name-button" type="button" onClick={() => setEditing(true)}
+              title="Change the name your friends see">
+              <span>{displayName}</span> <Pencil size={13} aria-hidden="true" />
+            </button>
+          )}
+        </span>
       </div>
       {code && inviteLink ? (
         <>

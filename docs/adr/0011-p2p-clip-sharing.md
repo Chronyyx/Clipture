@@ -31,8 +31,10 @@ therefore continue with no WebView (ADR 0002/0004).
 
 One bidirectional stream per request, carrying a u32-length-prefixed JSON
 message (at most 16 KiB, unknown types rejected). Messages: `hello` (request,
-accept, rename), `offer` (clip metadata and its BLAKE3), `range` (bytes of an
-offered clip), `presence` (online/heartbeat/leaving), `goodbye` (unfriend).
+accept, rename), `offer` (clip metadata and its BLAKE3), `answer` (the
+recipient accepts or declines an offer), `range` (bytes of an offered clip,
+with an optional `purpose` of `watch` or `keep`), `presence`
+(online/heartbeat/leaving), `goodbye` (unfriend).
 
 ### Authorization
 
@@ -76,6 +78,29 @@ mark offline a friend who announced themselves meanwhile.
 The client connection cache is never locked while dialing. One unreachable
 friend (up to a 20 s dial) cannot stall requests to others, including stream reads.
 
+### Removing a friend who is offline
+
+`goodbye` used to be sent once and forgotten, so a friend removed while
+offline kept us on their list. Removal is now settled from both ends:
+
+- **Owed goodbyes:** removing an accepted friend (or one we asked) records
+  them in `state.json` (`goodbyes`). The goodbye is retried on start, on
+  every delivery pass and on the heartbeat, and is cleared once they hear it.
+- **"Not friends" answers:** a peer not on our list at all that makes a
+  request only a friend would make (`presence` online, `offer`, `answer`,
+  `range`) gets `Response::NotFriends`. So does a `hello` from someone we
+  still owe a goodbye: that is their old acceptance being retried, not a new
+  request. Replying settles the goodbye.
+- **On the other side:** when a friend answers `NotFriends` to our presence,
+  offers or hello, we drop them without blocking (`forget_unfriended`).
+  Pending requests and declines are never touched, so this cannot reveal a
+  declined request. A `NotFriends` reply does not count as the friend coming
+  online, so no deliveries start toward someone being dropped.
+
+Strangers who were never friends learn nothing new: friend requests are
+still answered `ok`. Older peers do not parse `NotFriends` and see a failed
+request, as before; they still get the owed goodbye.
+
 ### Invite links
 
 The friend code is the full 32-byte public key (52 z-base-32 characters) and
@@ -105,6 +130,62 @@ ignored, and parsing accepts only `add` links with a valid key.
 
 Anything queued while the node was starting is delivered once the node is online,
 not at the next heartbeat.
+
+### Asking first, and what the sender sees
+
+An offer no longer lands in the inbox as a playable clip. It arrives with
+`awaitingAnswer` set, the receiver's controller plays a cue, and the Friends
+badge counts it next to friend requests. Nothing streams or downloads until
+the user accepts: `open_stream` and `save_shared_clip` refuse a clip that is
+still waiting. Accepting or declining queues an `answer` in `state.json`
+(`answers`), delivered like offers (now, or when the sender is next seen).
+A declined clip leaves the inbox; dismissing a waiting clip declines it.
+Re-sending a clip the friend already accepted is answered again
+automatically, so the sender is never left waiting on a duplicate.
+
+The sender keeps the answer on the share (`answer`: pending, accepted,
+declined). A declined share stops serving ranges at once. Sharing the same
+clip again resets the share to pending and asks again.
+
+Progress is counted on the sender as bytes leave (`transfers.rs`), so it
+needs nothing extra from the receiver and works with any reader. Each share
+records the union of byte spans sent by any stream, a recent rate, and
+whether the friend is watching or keeping (`purpose` on `range`; `keep` wins
+once seen). A stream that ends because the friend stopped reading pauses the
+transfer. A stream that fails because the whole connection closed while
+bytes were still going out marks it `interrupted`, which clears when they
+reconnect. Counts are runtime only; the one fact kept across restarts is
+`receivedWhole`, set once every byte has been read.
+
+A share closes once the friend has kept it. After their "Add to library"
+copy passes its BLAKE3 check, the receiver sends `answer` again with
+`kept: true`. The sender marks the share `kept`, refuses every later range
+(watching or keeping), deletes its stream copy, and shows the check mark.
+The check mark means a confirmed copy, not just bytes sent: a copy that
+failed its check can still be fetched again. Sharing the clip again on
+purpose reopens it and asks the friend again. An older receiver never
+confirms, so its shares stay open as before.
+
+Access is also limited in time. A friend has 15 minutes (`SHARE_WINDOW_MS`)
+from accepting to watch the clip or start keeping it; the sender records
+`acceptedAtMs` and refuses every read that starts later (`admit_read`). A
+download that began inside the window (`keepStarted`) may finish and resume
+after it, so a large clip is never cut off near the end; watching may not.
+Older friends that never answer start the window with their first read, and
+shares from before the window count from when they were sent. Both sides
+show `availableUntilMs`; the sender's clock decides. Sharing again opens a
+new window.
+
+Cues are synthesized in the controller (`sounds/cues.rs`): incoming,
+accepted, declined, complete (keep only) and interrupted. They play with no
+WebView, never queue, and are silent in test mode.
+
+Compatibility: fields added to `range` and the store default when absent.
+Records written before this change read as accepted. An older sender rejects
+the unknown `answer` type; the receiver drops an answer that a reachable
+friend refused rather than retrying it forever, so the sender simply shows
+"waiting". An older receiver never answers, so the sender treats the first
+range it reads as acceptance.
 
 ### Streaming without saving
 

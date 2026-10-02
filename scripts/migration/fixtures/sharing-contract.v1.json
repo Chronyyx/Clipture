@@ -17,6 +17,7 @@
     { "method": "shareClip", "command": "sharing_share_clip", "args": ["friendId", "filePath"] },
     { "method": "revokeShare", "command": "sharing_revoke_share", "args": ["shareId"] },
     { "method": "dismissSharedClip", "command": "sharing_dismiss_clip", "args": ["shareId"] },
+    { "method": "answerSharedClip", "command": "sharing_answer_clip", "args": ["shareId", "accept"] },
     { "method": "saveSharedClip", "command": "sharing_save_clip", "args": ["shareId"] },
     { "method": "cancelDownload", "command": "sharing_cancel_download", "args": ["shareId"] },
     { "method": "streamUrl", "command": "sharing_stream_url", "args": ["shareId"], "ownerBound": true }
