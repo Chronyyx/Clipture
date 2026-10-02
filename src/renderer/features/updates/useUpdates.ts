@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { clipture } from '../../platform';
+import { clipture, userMessage } from '../../platform';
 import { defaultUpdateState } from './TitlebarUpdateControls';
 
 export function useUpdates(onNotice: (message: string, durationMs?: number) => void) {
@@ -18,7 +18,7 @@ export function useUpdates(onNotice: (message: string, durationMs?: number) => v
   }, []);
   async function run(action: () => Promise<unknown>) {
     try { await action(); }
-    catch (error) { onNotice(error instanceof Error ? error.message : 'Could not update Clipture.', 6000); }
+    catch (error) { onNotice(userMessage(error, 'Could not update Clipture.'), 6000); }
   }
   return { updateState,
     checkForUpdatesNow: () => run(async () => {

@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.6.2: Clip Requests, Live Send Status & Timed Access",
+  "releaseTitle": "Clipture 1.6.3: Reliable Update Installs",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

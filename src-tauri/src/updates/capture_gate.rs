@@ -87,25 +87,22 @@ impl UpdateGate for CaptureAwareUpdateGate {
         }
         if self.activity.save_in_progress() {
             return Some(format!(
-                "Update {} deferred until the active clip save finishes.",
+                "A clip is being saved. The update {} can start once it finishes.",
                 operation.label()
             ));
         }
+        // Installing is always the user's own click and stops capture anyway,
+        // so the frame queue's momentary pressure is no reason to refuse it;
+        // `reserve_installation` still keeps it from overlapping a save.
+        // Downloads run beside capture and are paced by pressure instead.
+        if operation == UpdateOperation::Install {
+            return None;
+        }
         match self.activity.pressure() {
-            CapturePressure::Healthy => None,
-            CapturePressure::Elevated | CapturePressure::Critical
-                if operation == UpdateOperation::Download =>
-            {
-                None
-            }
-            CapturePressure::Elevated => Some(format!(
-                "Update {} deferred until capture pressure returns to healthy.",
-                operation.label()
-            )),
-            CapturePressure::Critical | CapturePressure::Unknown => Some(format!(
-                "Update {} deferred because capture pressure is not safe.",
-                operation.label()
-            )),
+            CapturePressure::Healthy | CapturePressure::Elevated | CapturePressure::Critical => None,
+            CapturePressure::Unknown => Some(
+                "Clipture can't read the recorder's state yet. Try the update download again in a moment.".into(),
+            ),
         }
     }
 }
@@ -159,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn saves_block_transfer_and_pressure_blocks_install_but_allows_paced_downloads() {
+    fn only_an_active_save_blocks_install_and_downloads_run_under_pressure() {
         let activity = Arc::new(FakeActivity::new(CapturePressure::Healthy, false));
         let gate = CaptureAwareUpdateGate::new(activity.clone(), false);
         assert_eq!(gate.block_reason(UpdateOperation::Download), None);
@@ -168,18 +165,15 @@ mod tests {
         assert!(gate
             .block_reason(UpdateOperation::Install)
             .unwrap()
-            .contains("active clip save"));
+            .contains("clip is being saved"));
 
         activity.saving.store(false, Ordering::Release);
-        activity.pressure.store(
-            encode_pressure(CapturePressure::Elevated),
-            Ordering::Release,
-        );
-        assert_eq!(gate.block_reason(UpdateOperation::Download), None);
-        assert!(gate
-            .block_reason(UpdateOperation::Install)
-            .unwrap()
-            .contains("capture pressure"));
+        for pressure in [CapturePressure::Elevated, CapturePressure::Critical] {
+            activity.pressure.store(encode_pressure(pressure), Ordering::Release);
+            assert_eq!(gate.block_reason(UpdateOperation::Download), None);
+            // A momentary queue reading never refuses an explicit install.
+            assert_eq!(gate.block_reason(UpdateOperation::Install), None);
+        }
     }
 
     #[test]

@@ -320,7 +320,8 @@ pub enum UpdateError {
     NoPendingUpdate,
     #[error("the pending update has not been downloaded")]
     UpdateNotDownloaded,
-    #[error("update deferred: {0}")]
+    /// The reason is a complete sentence for people.
+    #[error("{0}")]
     Blocked(String),
 }
 

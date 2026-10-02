@@ -13,6 +13,8 @@ function detailFrom(error: unknown) {
 export class HostCapabilityError extends Error {
   readonly cause: unknown;
   readonly retryable: boolean;
+  /** The host's own reason, without the capability and route, for people. */
+  readonly detail: string;
 
   constructor(
     readonly host: HostKind,
@@ -30,7 +32,18 @@ export class HostCapabilityError extends Error {
     this.name = 'HostCapabilityError';
     this.cause = error;
     this.retryable = busy;
+    this.detail = busy ? this.message : detailFrom(error);
   }
+}
+
+/** A message fit to show: the host's reason as a sentence, not the
+ * diagnostic form with host, capability and command names. */
+export function userMessage(error: unknown, fallback: string): string {
+  const text = error instanceof HostCapabilityError ? error.detail : error instanceof Error ? error.message : '';
+  const trimmed = text.trim();
+  if (!trimmed) return fallback;
+  const sentence = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/.test(sentence) ? sentence : sentence + '.';
 }
 
 export function isHostBusyError(error: unknown): boolean {
