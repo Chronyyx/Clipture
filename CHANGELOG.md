@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Dependency Updates
+
+- **React 19** (`react`, `react-dom` and their types), with refs typed as nullable where the player passes its video element. **lucide-react 1.x** icons, **concurrently 10** (legacy dev script, Node 22+), **base64 0.23**, **minisign 0.10** (test signing only) and **actions/setup-node v7** in the release and site workflows.
+- Held back: Tauri 2.12 with its plugins and JS packages (needs a launch test of the real app first), `sha2` 0.11 (would rewrite the update hash checks for no gain), `auto-launch` 0.6 (must stay on the version `tauri-plugin-autostart` uses so the installer writes the same startup entry) and `@vitejs/plugin-react` 6 (requires Vite 8).
+
 ## [1.6.6] - 2026-10-03
 
 ### Removed Clips Stop Showing as Watched
