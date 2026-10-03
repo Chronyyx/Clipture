@@ -7,7 +7,7 @@ import { PlayerControls } from './PlayerControls';
 import { SeekFeedbackOverlay } from './SeekFeedbackOverlay';
 
 interface PlayerVideoSurfaceProps {
-  videoRef: RefObject<HTMLVideoElement>;
+  videoRef: RefObject<HTMLVideoElement | null>;
   sourceUrl: string;
   embedded: boolean;
   aspectWidth: number;

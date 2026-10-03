@@ -14,7 +14,7 @@ interface MixedAudioChunkRequest {
 }
 
 interface MixedAudioOptions {
-  videoRef: RefObject<HTMLVideoElement>;
+  videoRef: RefObject<HTMLVideoElement | null>;
   enabled: boolean;
   chunkUrl: string;
   chunkSeconds: number;

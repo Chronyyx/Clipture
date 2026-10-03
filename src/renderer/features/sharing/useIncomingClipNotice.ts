@@ -7,7 +7,7 @@ type Notify = (message: string, durationMs?: number) => void;
  * Clips already waiting when the UI opens are not announced again: the
  * Friends badge shows them, and the host already played the sound. */
 export function useIncomingClipNotice(snapshot: SharingSnapshot | undefined, notify: Notify) {
-  const seen = useRef<Set<string>>();
+  const seen = useRef<Set<string>>(undefined);
 
   useEffect(() => {
     if (!snapshot) return;
