@@ -10,7 +10,7 @@ interface MixedAudioControls {
 }
 
 interface PlayerInteractionOptions {
-  videoRef: RefObject<HTMLVideoElement>;
+  videoRef: RefObject<HTMLVideoElement | null>;
   duration: number;
   mixedEnabled: boolean;
   playbackRequestedRef: MutableRefObject<boolean>;
