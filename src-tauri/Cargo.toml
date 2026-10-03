@@ -24,7 +24,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 minisign-verify = "0.2"
 sha2 = "0.10"
 semver = "1"
