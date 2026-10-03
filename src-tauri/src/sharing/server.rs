@@ -263,15 +263,21 @@ fn answer(context: &PeerContext, peer: &str, request: Request) -> Response {
             share_id,
             accepted,
             kept,
+            removed,
         } => {
             let answer = core.update_when(|state| {
-                let answer = state.receive_answer(peer, &share_id, accepted, kept, now_ms());
+                let answer = state.receive_answer(peer, &share_id, accepted, kept, removed, now_ms());
                 (answer, answer.is_some())
             });
             match answer {
                 Ok(Some(AnswerChange::Declined)) => {
                     context.transfers.forget(&share_id);
                     core.events.cue(ShareCue::Declined);
+                    (context.on_closed)();
+                }
+                // No cue: nothing failed, they just let it go.
+                Ok(Some(AnswerChange::Removed)) => {
+                    context.transfers.forget(&share_id);
                     (context.on_closed)();
                 }
                 Ok(Some(AnswerChange::Kept)) => {

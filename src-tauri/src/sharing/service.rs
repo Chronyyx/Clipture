@@ -250,7 +250,9 @@ impl SharingService {
     }
 
     /// Removes a clip from the inbox; a kept library copy is untouched. A
-    /// clip still waiting for an answer is declined, so the sender knows.
+    /// clip still waiting for an answer is declined, and one already
+    /// accepted stops streaming and is reported removed, so the sender
+    /// does not keep showing it in progress.
     pub fn dismiss_shared_clip(self: &Arc<Self>, share_id: &str) -> AppResult<()> {
         let awaiting = self.core.read(|state| {
             state
@@ -261,8 +263,11 @@ impl SharingService {
             return self.answer_shared_clip(share_id, false);
         }
         self.cancel_download(share_id);
-        self.core
-            .update(|state| state.inbox.retain(|clip| clip.offer.share_id != share_id))
+        self.streams.release_share(share_id);
+        if let Some(friend_id) = self.core.update(|state| state.remove_clip(share_id))? {
+            self.deliver_to_soon(friend_id);
+        }
+        Ok(())
     }
 
     /// Returns an opaque stream id for the media protocol.

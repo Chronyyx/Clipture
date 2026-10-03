@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.6.6] - 2026-10-03
+
+### Removed Clips Stop Showing as Watched
+
+- **Deleting a clip mid-stream now reaches the sender:** When a friend trashed a clip they had accepted, nothing told your Clipture, so it kept showing them watching (or the last progress) and the share stayed open. Their Clipture now stops the stream right away and sends `answer` with `removed: true` (queued until you are reachable). Your side closes the share, stops serving it, and shows "<name> removed it". Sending it again asks them again. Older senders read this as a decline, which closes the share too.
+
 ## [1.6.5] - 2026-10-02
 
 ### Friend Nicknames, Smooth Playback & Instant Sends

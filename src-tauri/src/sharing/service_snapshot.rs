@@ -60,10 +60,12 @@ impl SharingService {
                         share.delivered,
                     );
                     view.answer = share.answer;
+                    view.removed = share.removed;
                     view.available_until_ms = (share.answer == ShareAnswer::Accepted)
                         .then(|| share.accepted_at_ms.unwrap_or(share.offer.created_at_ms) + window);
                     // Live counts are lost on restart; a finished one is kept.
-                    view.transfer = share.received_whole.then(|| TransferView {
+                    let open = share.answer == ShareAnswer::Accepted;
+                    view.transfer = (open && share.received_whole).then(|| TransferView {
                         sent_bytes: share.offer.size,
                         total_bytes: share.offer.size,
                         purpose: TransferPurpose::Keep,
@@ -122,7 +124,9 @@ impl SharingService {
             clip.streamed = self.streams.arrived(&clip.share_id);
             clip.all_audio_ready = self.streams.complete(&clip.share_id);
         }
-        for clip in &mut snapshot.outbox {
+        // A declined or removed share is closed; a send still finishing
+        // when it closed must not show as progress.
+        for clip in snapshot.outbox.iter_mut().filter(|clip| clip.answer == ShareAnswer::Accepted) {
             if let Some(live) = self.transfers.view(&clip.share_id) {
                 clip.transfer = Some(live);
             }
@@ -158,5 +162,6 @@ fn view(
         answer: ShareAnswer::Accepted,
         transfer: None,
         available_until_ms: None,
+        removed: false,
     }
 }

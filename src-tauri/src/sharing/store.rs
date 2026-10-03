@@ -92,6 +92,8 @@ pub enum AnswerChange {
     Declined,
     /// They saved a verified copy; the share is now closed.
     Kept,
+    /// They deleted it after accepting; the share is now closed.
+    Removed,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -275,7 +277,7 @@ impl StoredState {
             // A re-send of a clip we already took: tell them again.
             if !clip.awaiting_answer {
                 let kept = clip.saved_path.is_some();
-                self.queue_answer(from, &offer.share_id, true, kept);
+                self.queue_answer(from, &offer.share_id, true, kept, false);
             }
             return OfferOutcome::Known;
         }
@@ -314,8 +316,21 @@ impl StoredState {
         } else {
             self.inbox.remove(index);
         }
-        self.queue_answer(&friend_id, share_id, accept, false);
+        self.queue_answer(&friend_id, share_id, accept, false, false);
         Ok(friend_id)
+    }
+
+    /// Deletes a clip from the inbox. One that was accepted but never kept
+    /// is still open on the sender's side, so they are told it was removed.
+    /// Returns the sender's id when they need telling.
+    pub fn remove_clip(&mut self, share_id: &str) -> Option<String> {
+        let index = self.inbox.iter().position(|clip| clip.offer.share_id == share_id)?;
+        let clip = self.inbox.remove(index);
+        if clip.awaiting_answer || clip.saved_path.is_some() {
+            return None;
+        }
+        self.queue_answer(&clip.friend_id, share_id, false, false, true);
+        Some(clip.friend_id)
     }
 
     /// A verified copy of a friend's clip reached the library: tell them,
@@ -326,11 +341,11 @@ impl StoredState {
             .filter(|clip| clip.saved_path.is_some())?
             .friend_id
             .clone();
-        self.queue_answer(&friend_id, share_id, true, true);
+        self.queue_answer(&friend_id, share_id, true, true, false);
         Some(friend_id)
     }
 
-    fn queue_answer(&mut self, friend_id: &str, share_id: &str, accepted: bool, kept: bool) {
+    fn queue_answer(&mut self, friend_id: &str, share_id: &str, accepted: bool, kept: bool, removed: bool) {
         self.answers.retain(|answer| answer.share_id != share_id);
         if self.answers.len() >= MAX_ANSWERS {
             self.answers.remove(0);
@@ -340,6 +355,7 @@ impl StoredState {
             share_id: share_id.into(),
             accepted,
             kept,
+            removed,
         });
     }
 
@@ -351,6 +367,7 @@ impl StoredState {
         share_id: &str,
         accepted: bool,
         kept: bool,
+        removed: bool,
         now_ms: u64,
     ) -> Option<AnswerChange> {
         if !self.is_accepted(from) {
@@ -373,12 +390,16 @@ impl StoredState {
         } else {
             ShareAnswer::Declined
         };
-        if share.answer == answer || share.kept {
+        if share.kept || (share.answer == answer && share.removed == removed) {
             return None;
         }
         share.answer = answer;
         if accepted {
             share.accepted_at_ms = Some(now_ms);
+        }
+        if removed && !accepted {
+            share.removed = true;
+            return Some(AnswerChange::Removed);
         }
         Some(if accepted { AnswerChange::Accepted } else { AnswerChange::Declined })
     }
@@ -594,6 +615,7 @@ mod tests {
             accepted_at_ms: None,
             keep_started: false,
             linear: false,
+            removed: false,
         });
         assert!(state.outgoing_for("a", "s1").is_some());
         assert!(state.outgoing_for("b", "s1").is_none());
@@ -649,20 +671,61 @@ mod tests {
             accepted_at_ms: None,
             keep_started: false,
             linear: false,
+            removed: false,
         });
-        assert_eq!(state.receive_answer("b", "s1", false, false, 1), None);
-        assert_eq!(state.receive_answer("a", "s1", false, false, 1), Some(AnswerChange::Declined));
-        assert_eq!(state.receive_answer("a", "s1", false, false, 1), None);
+        assert_eq!(state.receive_answer("b", "s1", false, false, false, 1), None);
+        assert_eq!(state.receive_answer("a", "s1", false, false, false, 1), Some(AnswerChange::Declined));
+        assert_eq!(state.receive_answer("a", "s1", false, false, false, 1), None);
         assert!(state.outgoing_for("a", "s1").is_none());
 
         // Kept: closed for good, and a stale answer cannot reopen it.
         state.outbox[0].answer = ShareAnswer::Pending;
-        assert_eq!(state.receive_answer("a", "s1", true, false, 1), Some(AnswerChange::Accepted));
+        assert_eq!(state.receive_answer("a", "s1", true, false, false, 1), Some(AnswerChange::Accepted));
         assert!(state.outgoing_for("a", "s1").is_some());
-        assert_eq!(state.receive_answer("a", "s1", true, true, 1), Some(AnswerChange::Kept));
+        assert_eq!(state.receive_answer("a", "s1", true, true, false, 1), Some(AnswerChange::Kept));
         assert!(state.outgoing_for("a", "s1").is_none(), "they have it; it is not served again");
-        assert_eq!(state.receive_answer("a", "s1", true, false, 1), None);
+        assert_eq!(state.receive_answer("a", "s1", true, false, false, 1), None);
         assert!(state.outgoing_for("a", "s1").is_none());
+    }
+
+    #[test]
+    fn deleting_an_accepted_clip_tells_the_sender_who_stops_serving_it() {
+        // Recipient: deleting an accepted, unkept clip queues "removed".
+        let mut state = StoredState::default();
+        state.add_friend("a", "a", 1).unwrap();
+        state.receive_hello("a", "a", 2);
+        state.receive_offer("a", offer("s1"), 3);
+        assert_eq!(state.remove_clip("s1"), None, "an unanswered clip is declined instead");
+        state.receive_offer("a", offer("s2"), 4);
+        state.answer_offer("s2", true, 5).unwrap();
+        state.answers.clear();
+        assert_eq!(state.remove_clip("s2").as_deref(), Some("a"));
+        assert!(state.inbox_clip("s2").is_none());
+        assert!(matches!(&state.answers[..], [answer] if answer.removed && !answer.accepted));
+
+        // Sender: the share closes and shows as removed until sent again.
+        let mut sender = StoredState::default();
+        sender.add_friend("a", "a", 1).unwrap();
+        sender.receive_hello("a", "a", 2);
+        sender.add_outgoing(OutgoingShare {
+            offer: offer("s2"),
+            friend_id: "a".into(),
+            path: PathBuf::from("C:\\Fixture\\clip.mp4"),
+            delivered: true,
+            source: None,
+            source_blake3: None,
+            answer: ShareAnswer::Accepted,
+            received_whole: false,
+            kept: false,
+            accepted_at_ms: Some(5),
+            keep_started: false,
+            linear: false,
+            removed: false,
+        });
+        assert_eq!(sender.receive_answer("a", "s2", false, false, true, 6), Some(AnswerChange::Removed));
+        assert!(sender.outbox[0].removed);
+        assert!(sender.outgoing_for("a", "s2").is_none());
+        assert_eq!(sender.receive_answer("a", "s2", false, false, true, 7), None);
     }
 
     #[test]
@@ -683,11 +746,12 @@ mod tests {
             accepted_at_ms: None,
             keep_started: false,
             linear: false,
+            removed: false,
         };
         state.add_outgoing(share("s1"));
         state.add_outgoing(share("s2"));
-        state.receive_answer("a", "s1", true, false, 1_000);
-        state.receive_answer("a", "s2", true, false, 1_000);
+        state.receive_answer("a", "s1", true, false, false, 1_000);
+        state.receive_answer("a", "s2", true, false, false, 1_000);
         let read = |state: &mut StoredState, id: &str, keep: bool, now: u64| state.admit_read("a", id, keep, now, 100).0.open;
 
         assert!(read(&mut state, "s1", false, 1_099), "inside the window");

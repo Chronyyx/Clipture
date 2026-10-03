@@ -64,6 +64,9 @@ export interface SharedClip {
   /** 15 minutes after acceptance. After it the sender serves nothing new:
    * no watching, and no download that had not started. Null until accepted. */
   availableUntilMs: number | null;
+  /** Outbox: the friend deleted it after accepting; `answer` is then
+   * `declined` and the share is closed. */
+  removed: boolean;
 }
 
 export interface SharedClipResult {

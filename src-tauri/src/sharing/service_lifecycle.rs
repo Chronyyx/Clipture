@@ -367,6 +367,7 @@ impl SharingService {
                 share_id: answer.share_id.clone(),
                 accepted: answer.accepted,
                 kept: answer.kept,
+                removed: answer.removed,
             };
             // A failed request marks them offline, so ask first.
             let was_online = self.presence.is_online(friend_id);

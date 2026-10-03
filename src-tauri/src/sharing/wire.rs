@@ -48,6 +48,10 @@ pub enum Request {
         /// sender then stops serving the clip.
         #[serde(default)]
         kept: bool,
+        /// With `accepted: false`: they deleted a clip they had accepted.
+        /// Older senders read it as declined, which also closes the share.
+        #[serde(default)]
+        removed: bool,
     },
     /// The requester removed us from their friends.
     Goodbye {},

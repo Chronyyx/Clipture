@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.6.5",
+  "version": "1.6.6",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.6.5: Friend Nicknames, Smooth Playback & Instant Sends",
+  "releaseTitle": "Clipture 1.6.6: Removed Clips Stop Showing as Watched",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

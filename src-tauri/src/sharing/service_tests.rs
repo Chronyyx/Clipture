@@ -212,6 +212,38 @@ async fn scrambled_clips_are_sent_in_playing_order_without_a_copy() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_a_clip_mid_stream_tells_the_sender_and_stops_it() {
+    let (alice, bob, _lookup) = online_pair().await;
+    befriend(&alice, &bob).await;
+    let clip = write_clip(&alice._directory.path().join("clips"), "mid.mp4", 3 * 1024 * 1024, 5);
+    let share_id = share(&alice, &bob.code(), &clip).await;
+    receive(&bob, &share_id).await;
+
+    let service = bob.service.clone();
+    let id = share_id.clone();
+    let stream = tokio::task::spawn_blocking(move || {
+        let stream = service.open_stream("main", &id).unwrap();
+        service.read_video(&stream, "main", Some("bytes=0-")).unwrap();
+        stream
+    })
+    .await
+    .unwrap();
+    let outgoing = |alice: &Peer| alice.service.snapshot().outbox.into_iter().find(|c| c.share_id == share_id).unwrap();
+    until("alice sees bob watching", || outgoing(&alice).transfer.is_some()).await;
+
+    bob.service.dismiss_shared_clip(&share_id).unwrap();
+    until("alice hears it was removed", || outgoing(&alice).removed).await;
+    let shown = outgoing(&alice);
+    assert_eq!(shown.answer, ShareAnswer::Declined);
+    assert!(shown.transfer.is_none(), "no stale progress is shown");
+    assert!(bob.service.read_video(&stream, "main", Some("bytes=0-")).is_err(), "the stream is closed");
+
+    // Sending it again asks again, and the removal no longer shows.
+    assert_eq!(share(&alice, &bob.code(), &clip).await, share_id);
+    assert!(!outgoing(&alice).removed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sharing_again_brings_back_a_clip_the_friend_removed() {
     let (alice, bob, _lookup) = online_pair().await;
     befriend(&alice, &bob).await;

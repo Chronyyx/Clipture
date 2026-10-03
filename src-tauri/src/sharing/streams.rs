@@ -203,6 +203,14 @@ impl StreamRegistry {
         before - sessions.len()
     }
 
+    /// Ends every session of a clip, stopping its fetches.
+    pub fn release_share(&self, share_id: &str) -> usize {
+        let mut sessions = self.lock();
+        let before = sessions.len();
+        sessions.retain(|_, session| session.target.share_id != share_id);
+        before - sessions.len()
+    }
+
     pub fn clear(&self) {
         self.lock().clear();
     }

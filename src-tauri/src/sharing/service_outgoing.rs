@@ -61,6 +61,7 @@ impl SharingService {
                 share.kept = false;
                 share.accepted_at_ms = None;
                 share.keep_started = false;
+                share.removed = false;
                 (Some(share.offer.share_id.clone()), true)
             } else {
                 state.outbox.remove(index);
@@ -106,6 +107,7 @@ impl SharingService {
             source: None,
             source_blake3: Some(source_digest),
             linear: view.is_some(),
+            removed: false,
             answer: ShareAnswer::Pending,
             received_whole: false,
             kept: false,

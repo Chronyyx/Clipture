@@ -96,6 +96,9 @@ pub struct OutgoingShare {
     /// A download began inside the window, so it may finish after it.
     #[serde(default)]
     pub keep_started: bool,
+    /// The friend deleted it after accepting (`answer` is then declined).
+    #[serde(default)]
+    pub removed: bool,
 }
 
 fn accepted() -> ShareAnswer {
@@ -121,6 +124,9 @@ pub struct PendingAnswer {
     /// Also confirms a verified copy is in our library.
     #[serde(default)]
     pub kept: bool,
+    /// We deleted a clip we had accepted.
+    #[serde(default)]
+    pub removed: bool,
 }
 
 impl OutgoingShare {
@@ -235,6 +241,8 @@ pub struct SharedClipView {
     /// After this the sender serves nothing new: no watching, and no
     /// download that had not started. `None` until accepted.
     pub available_until_ms: Option<u64>,
+    /// Outbox only: the friend deleted it after accepting.
+    pub removed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]

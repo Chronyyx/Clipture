@@ -162,6 +162,13 @@ copy passes its BLAKE3 check, the receiver sends `answer` again with
 `kept: true`. The sender marks the share `kept`, refuses every later range
 (watching or keeping), deletes any stream copy an older build made for it,
 and shows the check mark.
+
+Deleting an accepted clip that was never kept also closes the share. The
+receiver ends its stream sessions (stopping their fetches) and queues
+`answer` with `accepted: false, removed: true`. The sender marks the share
+declined and `removed`, refuses later ranges, drops its progress, and shows
+that the friend removed it. Older senders ignore `removed` and read a
+decline, which closes the share just the same.
 The check mark means a confirmed copy, not just bytes sent: a copy that
 failed its check can still be fetched again. Sharing the clip again on
 purpose reopens it and asks the friend again. An older receiver never

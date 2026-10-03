@@ -112,7 +112,7 @@ export function createMockSharingAdapter(options: MockSharingOptions = {}): Shar
           shareId, friendId, friendName: friend(friendId).name, title, size: 48_000_000, durationSeconds: 30,
           resolution: '1920x1080', gameOrApp: 'Game', createdAtMs: Date.now(), sharedAtMs: Date.now(),
           saved: false, delivered: false, audioTracks: ['System audio'], streamed: [], allAudioReady: false,
-          answer: 'pending', transfer: null, availableUntilMs: null
+          answer: 'pending', transfer: null, availableUntilMs: null, removed: false
         });
       });
       simulateFriend(() => state, shareId, changed);
@@ -214,7 +214,7 @@ export function mockSharingSeed(search: string): MockSharingOptions | undefined 
     title, size: durationSeconds * 1_450_000, durationSeconds, resolution: '1920x1080', gameOrApp: game,
     createdAtMs: now - hoursAgo * hour, sharedAtMs: now - hoursAgo * hour, saved, delivered: true,
     audioTracks: ['System audio', 'Microphone'], streamed: [] as [number, number][], allAudioReady: false,
-    answer: 'accepted', transfer: null, availableUntilMs: now - hoursAgo * hour + 15 * 60_000
+    answer: 'accepted', transfer: null, availableUntilMs: now - hoursAgo * hour + 15 * 60_000, removed: false
   });
   const asking = { ...shared(5, 3, 'Ult into triple, Haven A', 'VALORANT', 38, 0.05), answer: 'pending' as const, availableUntilMs: null };
   const fresh = shared(1, 0, 'Operator flick through smoke', 'VALORANT', 45, 0.4);

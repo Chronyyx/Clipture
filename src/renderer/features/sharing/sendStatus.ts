@@ -33,6 +33,13 @@ export function describeSend(
       ? { tone: "working", headline: `Sending to ${name}`, detail: "Asking them to accept it.", progress: null }
       : { tone: "waiting", headline: `${name} is offline`, detail: "They'll be asked as soon as they're online. You can close this.", progress: null };
   }
+  if (clip.removed) {
+    return {
+      tone: "declined", headline: `${name} removed it`,
+      detail: "They deleted it from their list, so it no longer plays or downloads from your PC. Send it again to ask them again.",
+      progress: null
+    };
+  }
   if (clip.answer === "declined") {
     return { tone: "declined", headline: `${name} declined`, detail: "They didn't take this clip. Nothing was sent.", progress: null };
   }
