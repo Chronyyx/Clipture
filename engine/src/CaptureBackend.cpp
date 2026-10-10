@@ -1,5 +1,6 @@
 #include "CaptureBackend.hpp"
 #include "clipture/GpuTextureReadState.hpp"
+#include "clipture/CapturePipelinePolicy.hpp"
 
 #include "clipture/MediaClock.hpp"
 #include "clipture/DesktopDuplicationHelpers.hpp"
@@ -293,7 +294,7 @@ HRESULT createD3dDeviceForOutput(
 
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
     if (SUCCEEDED(device.As(&dxgiDevice)) && dxgiDevice) {
-        constexpr INT requestedGpuPriority = 1;
+        const INT requestedGpuPriority = capturePipelinePolicy().raisedGpuPriority ? 1 : 0;
         INT previousGpuPriority = 0;
         const HRESULT getBeforeHr = dxgiDevice->GetGPUThreadPriority(&previousGpuPriority);
         const HRESULT setHr = dxgiDevice->SetGPUThreadPriority(requestedGpuPriority);

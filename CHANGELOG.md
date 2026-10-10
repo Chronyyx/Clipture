@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Smooth Clips Through Smokes and Molotovs
+
+- **Whole-monitor Windows.Graphics.Capture is the default:** Inside CS2 smokes, Desktop Duplication only received ~35 new desktop images per second while the game presented 150-214 FPS, so 60 FPS clips repeated up to 28 frames per second. Monitor WGC records the same full desktop and received 145-210 frames per second in the same smokes, at no extra game cost. If WGC fails on an output, capture falls back to Desktop Duplication; `CLIPTURE_CAPTURE_BACKEND=dxgi` forces it (ADR 0016).
+- **No more frozen frames after a late recorder wake:** Since 1.6.4 a late encoder wake encodes the missed ticks back to back. The first took the newest captured frame and the rest repeated it, so every late wake in a grenade fight left one to three identical frames and pulled newer footage earlier. Every tick more than 2 ms late now takes the frame that was on screen at its own timestamp (`FrameQueue::consumeLatestAtOrBefore`, `CatchUpSelection.hpp`). In the stress trial at 60 FPS, stutter frames with injected 40 ms stalls went from 83-84 to 0-3, and with 65 ms stalls from 152 (83 ms freezes) to 0 (ADR 0015).
+- **Capture keeps its turn while the game is busy:** Games register their simulation threads with the Windows multimedia scheduler, the same class acquisition used. Acquisition now runs in its High class (`DisplayPostProcessing`); it needs about 0.5 ms of CPU per frame.
+- **Fewer full-screen copies:** Desktop Duplication reports every desktop update (up to the monitor's refresh rate), and every one was copied (FP16 under HDR) even though all but the newest before an encoder tick were thrown away. Acquisition now waits until 2 ms before the next tick and takes the newest image then. Copies per recorded frame fell from about 2.5 to 1.2 with the same freshness.
+- **Lower game cost:** Game frame-rate cost while recording at 60 FPS in the smoke phase fell from 16.3% to 11.9% (molly 10.6% to 8.6%).
+- **Stress trials without the game:** `clipture_stress_window` (engine tools) and `scripts/performance/run-stress-trial.cjs` record a frame-stamped synthetic workload with scripted smoke, molly and spike phases and count every repeated, missed and late frame per phase. `engine/tools/stress-window/README.md` lists the options that reproduce the CS2 losses.
+
 ### Dependency Updates
 
 - **React 19** (`react`, `react-dom` and their types), with refs typed as nullable where the player passes its video element. **lucide-react 1.x** icons, **concurrently 10** (legacy dev script, Node 22+), **base64 0.23**, **minisign 0.10** (test signing only) and **actions/setup-node v7** in the release and site workflows.

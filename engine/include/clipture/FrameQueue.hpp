@@ -4,6 +4,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -59,6 +60,14 @@ public:
     int64_t oldestFrameAge100ns() const;
     FrameQueueStats stats() const;
 
+    // The encoder cadence announces its next selection deadline (monotonic
+    // 100 ns; 0 when unknown) so capture can skip desktop updates that a newer
+    // update would supersede before that tick.
+    void announceNextDeadline(int64_t deadline100ns) {
+        nextDeadline100ns_.store(deadline100ns, std::memory_order_relaxed);
+    }
+    int64_t nextDeadline100ns() const { return nextDeadline100ns_.load(std::memory_order_relaxed); }
+
 private:
     std::size_t capacity_;
     mutable std::mutex mutex_;
@@ -67,6 +76,7 @@ private:
     bool stopped_ = false;
     FrameQueueStats stats_;
     FrameSelectionTrace selectionTrace_;
+    std::atomic<int64_t> nextDeadline100ns_ = 0;
 };
 
 }  // namespace clipture

@@ -54,7 +54,7 @@ inline CaptureBackendDecision decideCaptureBackend(
     CaptureBackendPreference preference,
     bool /*hdrEnabled*/,
     bool identityRotation,
-    bool dxgiQuarantined) {
+    bool wgcQuarantined) {
     if (preference == CaptureBackendPreference::Wgc) {
         return { CaptureBackendKind::Wgc, true, "forced by CLIPTURE_CAPTURE_BACKEND" };
     }
@@ -63,12 +63,11 @@ inline CaptureBackendDecision decideCaptureBackend(
         return { CaptureBackendKind::Dxgi, true, "forced by CLIPTURE_CAPTURE_BACKEND" };
     }
     if (!identityRotation) return { CaptureBackendKind::Wgc, true, "rotated output uses WGC" };
-    if (dxgiQuarantined) return { CaptureBackendKind::Wgc, true, "DXGI was quarantined after recovery failed" };
-    return {
-        CaptureBackendKind::Dxgi,
-        true,
-        "default high-performance DirectX Desktop Duplication",
-    };
+    if (wgcQuarantined) return { CaptureBackendKind::Dxgi, true, "WGC failed on this output; Desktop Duplication fallback" };
+    // Desktop Duplication only sees the composed desktop, which the compositor
+    // updates ~35 times/s under heavy game GPU load (CS2 smokes) while the game
+    // presents 150+ FPS. Monitor WGC receives every presented frame (ADR 0016).
+    return { CaptureBackendKind::Wgc, true, "default whole-monitor Windows.Graphics.Capture" };
 }
 
 inline constexpr std::array<int, 5> kDxgiRecoveryDelaysMs { 50, 100, 250, 500, 1000 };

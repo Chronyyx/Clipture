@@ -8,7 +8,8 @@ const readline = require('node:readline');
 const root = path.resolve(__dirname, '../..');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function probe(executable, fps, directory, seconds = 10, overrides = {}, configuration = {}) {
+// hooks.onMeasureStart runs when measurement begins; hooks.saveSeconds sets the saved clip length.
+async function probe(executable, fps, directory, seconds = 10, overrides = {}, configuration = {}, hooks = {}) {
   const startedAt = new Date().toISOString();
   fs.mkdirSync(directory);
   const child = spawn(executable, [], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
@@ -78,6 +79,7 @@ async function probe(executable, fps, directory, seconds = 10, overrides = {}, c
     const measuredFrom = new Date().toISOString();
     if (!before.captureReady || !before.engineRunning) throw Error(before.status || 'Capture not ready');
     const cpuStart = cpu();
+    hooks.onMeasureStart?.();
     const samples = [];
     for (let second = 0; second < seconds; ++second) {
       await delay(1000);
@@ -88,7 +90,7 @@ async function probe(executable, fps, directory, seconds = 10, overrides = {}, c
     const after = await request({ type: 'getDiagnostics' });
     const diagnosticElapsed = (performance.now() - diagnosticStart) / 1000;
     result = { executable, startedAt, measuredFrom, measuredUntil: new Date().toISOString(), fps, elapsed, diagnosticElapsed, cpuCoreEquivalents: (cpuEnd.cpu - cpuStart.cpu) / elapsed,
-      before, after, samples, save: await request({ type: 'saveClip', durationSeconds: 3, saveFolder: directory }) };
+      before, after, samples, save: await request({ type: 'saveClip', durationSeconds: hooks.saveSeconds ?? 3, saveFolder: directory }) };
     if (!result.save.ok) throw Error(result.save.message);
     const decoded = spawnSync(path.join(root, 'node_modules/ffmpeg-static/ffmpeg.exe'),
       ['-v', 'error', '-nostdin', '-threads', '2', '-i', result.save.clip.filePath, '-an', '-f', 'null', '-'],

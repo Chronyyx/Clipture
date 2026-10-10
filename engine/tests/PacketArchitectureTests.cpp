@@ -707,12 +707,12 @@ bool testCaptureBackendPolicyAndDxgiHelpers() {
         clipture::CaptureBackendPreference::Auto, false, true, true);
     const auto forcedHdr = clipture::decideCaptureBackend(
         clipture::CaptureBackendPreference::Dxgi, true, true, false);
-    if (!require(sdr.kind == clipture::CaptureBackendKind::Dxgi && sdr.supported,
-                 "auto SDR capture should prefer Desktop Duplication")) return false;
-    if (!require(hdr.kind == clipture::CaptureBackendKind::Dxgi && rotated.kind == clipture::CaptureBackendKind::Wgc,
-                 "HDR should use DXGI while rotated capture remains on WGC")) return false;
-    if (!require(quarantined.kind == clipture::CaptureBackendKind::Wgc,
-                 "a quarantined DXGI output should not oscillate back during the session")) return false;
+    if (!require(sdr.kind == clipture::CaptureBackendKind::Wgc && sdr.supported,
+                 "auto capture should prefer whole-monitor WGC")) return false;
+    if (!require(hdr.kind == clipture::CaptureBackendKind::Wgc && rotated.kind == clipture::CaptureBackendKind::Wgc,
+                 "HDR and rotated outputs should use WGC")) return false;
+    if (!require(quarantined.kind == clipture::CaptureBackendKind::Dxgi,
+                 "an output whose WGC failed should fall back to Desktop Duplication")) return false;
     if (!require(forcedHdr.supported && forcedHdr.kind == clipture::CaptureBackendKind::Dxgi,
                  "forced DXGI should support the validated FP16 HDR path")) return false;
     if (!require(

@@ -13,6 +13,10 @@ struct CapturePipelinePolicy {
     bool directTextureRead = true;
     bool earlySourceRetire = false;
     bool directFreshConversion = false;
+    bool tickAlignedAcquire = true;
+    bool raisedGpuPriority = true;
+    bool highPriorityCapture = true;
+    bool timedCatchUp = true;
 };
 inline const CapturePipelinePolicy& capturePipelinePolicy() {
     static const auto policy = [] {
@@ -32,6 +36,10 @@ inline const CapturePipelinePolicy& capturePipelinePolicy() {
         result.directTextureRead = flag(L"CLIPTURE_DIRECT_TEXTURE_READ", result.directTextureRead);
         result.earlySourceRetire = flag(L"CLIPTURE_EARLY_SOURCE_RETIRE", result.earlySourceRetire);
         result.directFreshConversion = flag(L"CLIPTURE_DIRECT_FRESH_CONVERSION", result.directFreshConversion);
+        result.tickAlignedAcquire = flag(L"CLIPTURE_TICK_ALIGNED_ACQUIRE", result.tickAlignedAcquire);
+        result.raisedGpuPriority = flag(L"CLIPTURE_RAISED_GPU_PRIORITY", result.raisedGpuPriority);
+        result.highPriorityCapture = flag(L"CLIPTURE_HIGH_PRIORITY_CAPTURE", result.highPriorityCapture);
+        result.timedCatchUp = flag(L"CLIPTURE_TIMED_CATCH_UP", result.timedCatchUp);
         return result;
     }();
     return policy;

@@ -3,6 +3,7 @@
 #include "clipture/FreshConversionPolicy.hpp"
 #include "Nv12ConversionTarget.hpp"
 #include "clipture/CapturePipelinePolicy.hpp"
+#include "clipture/CatchUpSelection.hpp"
 #include "clipture/DeferredFramePreparation.hpp"
 #include "clipture/EncoderCadence.hpp"
 #include "clipture/DeadlineWait.hpp"
@@ -32,6 +33,8 @@
 #include <chrono>
 #include <climits>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -63,6 +66,25 @@ constexpr bool kEnableEncoderGpuSchedulingHeadroom = true;
 constexpr bool kEnableRoundTransitionOutputHeadroom = true;
 constexpr INT kEncoderGpuPriority = 1;
 constexpr UINT kEncoderMaximumFrameLatency = 16;
+
+// Fault injection for stress trials: CLIPTURE_TEST_ENCODER_STALL="<ms>,<periodMs>"
+// delays one cadence wake by <ms> every <periodMs>, as a busy game does.
+void injectTestEncoderStall() {
+    static const auto config = [] {
+        std::pair<int, int> result {0, 0};
+        if (const char* value = std::getenv("CLIPTURE_TEST_ENCODER_STALL")) {
+            std::sscanf(value, "%d,%d", &result.first, &result.second);
+        }
+        return result;
+    }();
+    static int64_t lastStall100ns = 0;
+    if (config.first <= 0 || config.second <= 0) return;
+    const auto now = monotonicNow100ns();
+    if (now - lastStall100ns < int64_t {config.second} * 10'000) return;
+    lastStall100ns = now;
+    std::this_thread::sleep_for(std::chrono::milliseconds(config.first));
+}
+
 constexpr std::size_t kDefaultNvencOutputSlots = 32;
 constexpr std::size_t kRoundTransitionNvencOutputSlots = 32;
 constexpr std::size_t kDefaultSyncOutputDelay = 3;
@@ -1041,6 +1063,7 @@ private:
         }
 
         if constexpr (kEnableEncoderGpuSchedulingHeadroom) {
+            const INT encoderGpuPriority = capturePipelinePolicy().raisedGpuPriority ? kEncoderGpuPriority : 0;
             Microsoft::WRL::ComPtr<IDXGIDevice> encoderDxgiDevice;
             const HRESULT dxgiDeviceHr = device_.As(&encoderDxgiDevice);
             INT previousGpuPriority = 0;
@@ -1050,7 +1073,7 @@ private:
             HRESULT getPriorityAfterHr = E_NOINTERFACE;
             if (SUCCEEDED(dxgiDeviceHr) && encoderDxgiDevice) {
                 getPriorityBeforeHr = encoderDxgiDevice->GetGPUThreadPriority(&previousGpuPriority);
-                setPriorityHr = encoderDxgiDevice->SetGPUThreadPriority(kEncoderGpuPriority);
+                setPriorityHr = encoderDxgiDevice->SetGPUThreadPriority(encoderGpuPriority);
                 getPriorityAfterHr = encoderDxgiDevice->GetGPUThreadPriority(&activeGpuPriority);
             }
 
@@ -1061,7 +1084,7 @@ private:
                 : E_NOINTERFACE;
 
             std::cerr << "[encoder] D3D11 scheduling"
-                      << " gpuPriorityRequested=" << kEncoderGpuPriority
+                      << " gpuPriorityRequested=" << encoderGpuPriority
                       << " gpuPriorityPrevious="
                       << (SUCCEEDED(getPriorityBeforeHr) ? std::to_string(previousGpuPriority) : "unknown")
                       << " gpuPriorityActive="
@@ -2964,17 +2987,23 @@ void EncoderWorker::run() {
         if (fps != cadence.fps()) {
             cadence = EncoderCadence(fps, monotonicNow100ns());
         }
+        frames_.announceNextDeadline(cadence.deadline100ns());
         wait.until(cadence.deadline100ns(), [this] { return running_.load(std::memory_order_relaxed); });
         if (!running_.load(std::memory_order_relaxed)) break;
+        injectTestEncoderStall();
         const auto wokeAt100ns = monotonicNow100ns();
         const auto tick = cadence.advance(wokeAt100ns);
         recentSchedulerWakeLateness_.record(wokeAt100ns, tick.lateness100ns);
+        frames_.announceNextDeadline(cadence.deadline100ns());
         schedulerDroppedFrames_.fetch_add(static_cast<int>(std::min<uint64_t>(tick.skipped, INT_MAX)));
 
         if constexpr (kEnableFrameDuplication) {
-            if (auto newest = frames_.consumeAllAndGetLatest(tick.deadline100ns, fps)) {
-                heldFrame = std::move(newest);
-            }
+            // Late ticks take what was on screen at their own time (CatchUpSelection.hpp).
+            const bool moreTicksDue = cadence.deadline100ns() <= wokeAt100ns;
+            auto newest = capturePipelinePolicy().timedCatchUp && selectByDeadline(moreTicksDue, tick.lateness100ns)
+                ? frames_.consumeLatestAtOrBefore(mediaTimeFromSystemRelative100ns(tick.deadline100ns))
+                : frames_.consumeAllAndGetLatest(tick.deadline100ns, fps);
+            if (newest) heldFrame = std::move(newest);
             if (!heldFrame) continue;
 
             int outputWidth = targetWidth_.load(std::memory_order_relaxed);
@@ -3062,6 +3091,7 @@ void EncoderWorker::run() {
             });
         }
     }
+    frames_.announceNextDeadline(0);
 }
 
 void EncoderWorker::encodeLoop() {

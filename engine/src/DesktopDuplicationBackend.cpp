@@ -9,6 +9,7 @@
 #include "clipture/FixedRateFrameSampler.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/DeadlineWait.hpp"
+#include "clipture/TickAlignedAcquire.hpp"
 #include "clipture/Tonemapper.hpp"
 
 #include <avrt.h>
@@ -23,8 +24,16 @@ namespace {
 
 class MmcssCaptureRegistration {
 public:
-    explicit MmcssCaptureRegistration(bool enabled) {
+    explicit MmcssCaptureRegistration(bool enabled, bool highCategory) {
         if (!enabled) return;
+        if (highCategory) {
+            // Game engines register their threads with MMCSS too; in the same
+            // Medium category they starve acquisition under heavy effects and
+            // DXGI merges the updates. The loop needs ~0.5 ms of CPU per frame,
+            // so the High category costs the game nothing measurable.
+            handle_ = AvSetMmThreadCharacteristicsW(L"DisplayPostProcessing", &taskIndex_);
+            if (handle_) return;
+        }
         handle_ = AvSetMmThreadCharacteristicsW(L"Capture", &taskIndex_);
         // NVENC uses the same D3D device at high MMCSS priority. Keeping
         // acquisition at normal Capture priority prevents priority inversion.
@@ -314,17 +323,20 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
     // HDR still has to publish on cadence while its full-frame compute pass is
     // active. Matching the encoder's Capture scheduling class avoids starving
     // acquisition whenever a game or a save briefly loads the machine.
-    MmcssCaptureRegistration mmcss(true);
+    const auto policy = capturePipelinePolicy();
+    MmcssCaptureRegistration mmcss(true, policy.highPriorityCapture);
     bool bootstrapComplete = false;
     DeadlineWait idleWait(0);
-    const auto policy = capturePipelinePolicy();
     PipelineTimingTrace acquireSuccess("dxgi-success"), acquireTimeout("dxgi-timeout"),
         idleDuration("idle-total"), cycleGap("acquire-cycle"), slotDuration("capture-lease"),
         copySubmission("capture-copy-submit");
     GpuStageProbe copyProbe("capture-copy");
     int64_t lastAcquireStart = 0;
+    DeadlineWait tickAlignedWait(0);
     std::cerr << "[capture-pipeline] deferred=" << policy.deferPreparation
-              << " idleBackoff=" << policy.idleBackoff << '\n';
+              << " idleBackoff=" << policy.idleBackoff
+              << " tickAlignedAcquire=" << policy.tickAlignedAcquire
+              << " highPriorityCapture=" << policy.highPriorityCapture << '\n';
 
     while (!stopToken.stop_requested()) {
         auto* tickGate = state.shared->captureTickGate.load(std::memory_order_acquire);
@@ -337,6 +349,15 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             captureGeneration = *request;
         }
         CaptureTickCompletion tickCompletion(tickGate, captureGeneration);
+        if (policy.tickAlignedAcquire && bootstrapComplete && !encoderDriven) {
+            const auto* queue = state.shared->frameQueue.load(std::memory_order_acquire);
+            const int64_t notBefore = tickAlignedAcquireNotBefore(
+                monotonicNow100ns(), queue ? queue->nextDeadline100ns() : 0, kTickAlignedAcquireLead100ns);
+            if (notBefore > 0) {
+                tickAlignedWait.until(notBefore, [&] { return !stopToken.stop_requested(); });
+                continue;
+            }
+        }
 
         DXGI_OUTDUPL_FRAME_INFO frameInfo {};
         Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;

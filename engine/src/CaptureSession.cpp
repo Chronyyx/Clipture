@@ -88,10 +88,25 @@ struct CaptureSession::Impl {
         const bool identityRotation =
             output.desc.Rotation == DXGI_MODE_ROTATION_IDENTITY ||
             output.desc.Rotation == DXGI_MODE_ROTATION_UNSPECIFIED;
-        if (preference == CaptureBackendPreference::Wgc || !identityRotation) {
-            return CaptureBackendKind::Wgc;
+        if (preference == CaptureBackendPreference::Dxgi && identityRotation) return CaptureBackendKind::Dxgi;
+        if (preference == CaptureBackendPreference::Auto && identityRotation &&
+            quarantinedMonitorKey == output.monitorKey) {
+            return CaptureBackendKind::Dxgi;
         }
-        return CaptureBackendKind::Dxgi;
+        return CaptureBackendKind::Wgc;
+    }
+
+    // Auto mode uses monitor WGC and falls back to DXGI once per output. DXGI
+    // failures after that stop capture rather than oscillating between backends.
+    bool canFallBackToDxgi(
+        CaptureBackendKind kind,
+        CaptureBackendPreference preference,
+        const capture::SelectedOutput& output) const {
+        const bool identityRotation =
+            output.desc.Rotation == DXGI_MODE_ROTATION_IDENTITY ||
+            output.desc.Rotation == DXGI_MODE_ROTATION_UNSPECIFIED;
+        return kind == CaptureBackendKind::Wgc && preference == CaptureBackendPreference::Auto &&
+            identityRotation && quarantinedMonitorKey != output.monitorKey;
     }
 
     void runController(
@@ -142,13 +157,13 @@ struct CaptureSession::Impl {
                     fallBackFromWindow(startResult.message);
                     continue;
                 }
-                if (kind == CaptureBackendKind::Dxgi && preference == CaptureBackendPreference::Auto) {
+                if (canFallBackToDxgi(kind, preference, selectedOutput)) {
                     shared->setFallbackReason(startResult.message);
                     ++shared->fallbackCount;
                     quarantine(selectedOutput.monitorKey);
-                    std::cerr << "[capture] DXGI startup failed; falling back to WGC: "
+                    std::cerr << "[capture] WGC startup failed; falling back to DXGI: "
                               << startResult.message << '\n';
-                    kind = CaptureBackendKind::Wgc;
+                    kind = CaptureBackendKind::Dxgi;
                     continue;
                 }
                 shared->running.store(false, std::memory_order_release);
@@ -172,14 +187,12 @@ struct CaptureSession::Impl {
                 continue;
             }
 
-            if (kind == CaptureBackendKind::Dxgi &&
-                outcome == capture::BackendOutcome::RequestFallback &&
-                preference == CaptureBackendPreference::Auto) {
+            if (canFallBackToDxgi(kind, preference, selectedOutput)) {
                 quarantine(selectedOutput.monitorKey);
                 ++shared->fallbackCount;
                 shared->beginEpoch();
                 const auto fallback = shared->snapshot().fallbackReason;
-                std::cerr << "[capture] DXGI recovery exhausted; switching to WGC"
+                std::cerr << "[capture] WGC monitor capture stopped; switching to DXGI"
                           << (fallback.empty() ? ".\n" : ": " + fallback + "\n");
                 capture::SelectedOutput refreshedOutput;
                 if (capture::selectOutput(monitorId, refreshedOutput)) {
@@ -187,7 +200,7 @@ struct CaptureSession::Impl {
                     shared->setSelectedOutput(selectedOutput);
                     shared->setCaptureTarget("monitor", selectedOutput.displayName);
                 }
-                kind = CaptureBackendKind::Wgc;
+                kind = CaptureBackendKind::Dxgi;
                 continue;
             }
 
@@ -195,8 +208,10 @@ struct CaptureSession::Impl {
             if (outcome == capture::BackendOutcome::RequestFallback) {
                 const auto reason = shared->snapshot().fallbackReason;
                 shared->setStatus(
-                    (reason.empty() ? "DXGI capture failed" : reason) +
-                    "; automatic fallback is disabled by CLIPTURE_CAPTURE_BACKEND=dxgi.");
+                    (reason.empty() ? "Capture failed" : reason) +
+                    (preference == CaptureBackendPreference::Auto
+                        ? "; both capture backends failed on this output."
+                        : "; automatic fallback is disabled by CLIPTURE_CAPTURE_BACKEND."));
             }
             break;
         }
