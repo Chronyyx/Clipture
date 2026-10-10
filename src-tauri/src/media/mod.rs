@@ -1,3 +1,4 @@
+mod audio_extract;
 mod base64;
 mod ffmpeg;
 mod layout_probe;
@@ -5,6 +6,8 @@ mod layout_repair;
 mod linear_view;
 #[cfg(test)]
 mod linear_view_tests;
+mod mix;
+mod mp4_box;
 mod playback;
 mod protocol;
 mod range;
@@ -24,6 +27,8 @@ mod sessions;
 mod sparse_audio_native_tests;
 mod thumbnails;
 mod timeline;
+mod trim;
+mod waveform;
 
 pub(crate) use base64::encode as encode_base64;
 pub use ffmpeg::{
@@ -43,6 +48,9 @@ pub use range::{resolve_range, ByteRange, RangeError};
 pub use remote::{RemoteMediaFile, RemoteMediaSource, RemoteVideoChunk};
 pub use save_processor::MediaSaveProcessor;
 pub(crate) use sessions::random_token;
-pub use sessions::{MediaSessionRegistry, PlaybackDescriptor, ResolvedSession};
+pub use sessions::{MediaSessionRegistry, PlaybackDescriptor, ResolvedSession, MAXIMUM_TRACK_CHUNK_BYTES};
 pub use thumbnails::ThumbnailService;
+pub use mix::{ClipMixer, MixError, MixedClip, MAXIMUM_GAIN};
+pub use trim::{ClipTrimmer, TrimError, TrimmedClip};
+pub use waveform::WaveformBuilder;
 pub use timeline::{apply_patches, audio_edit_list_patches, audio_track_count, PlaybackPatch};

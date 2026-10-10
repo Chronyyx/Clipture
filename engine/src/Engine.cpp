@@ -1,5 +1,6 @@
 #include "clipture/Engine.hpp"
 #include "clipture/AudioProcessSpec.hpp"
+#include "clipture/CapturePipelinePolicy.hpp"
 #include "clipture/CaptureSession.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/Mp4Muxer.hpp"
@@ -861,6 +862,15 @@ void Engine::gameDetectionLoop() {
             } else if (captureSession_ && activeGameCaptureWindow_) {
                 captureSession_->preferMonitor();
                 activeGameCaptureWindow_ = nullptr;
+            } else if (captureSession_ && capturePipelinePolicy().hybridGameCapture) {
+                // The backend decides per frame whether the window covers the monitor.
+                const auto gameCaptureTarget = detectForegroundGameCaptureTarget(activeMonitor);
+                if (gameCaptureTarget.window) {
+                    hybridGameWindow_ = gameCaptureTarget.window;
+                } else if (hybridGameWindow_ && !IsWindow(static_cast<HWND>(hybridGameWindow_))) {
+                    hybridGameWindow_ = nullptr;
+                }
+                captureSession_->setHybridGameWindow(hybridGameWindow_);
             }
 
             std::lock_guard<std::mutex> lock(historyMutex_);
@@ -2266,6 +2276,16 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
 
     result.ok = true;
     consumedWindow_.commit(clipEnd);
+    if (settings_.saveInPlace && !settings_.saveInPlaceOverlap) {
+        // No later save shows this footage again, so stop holding the saved
+        // clip open for it (until now it stayed open, and could not be
+        // trimmed, until the footage expired). Only the keyframe preroll and
+        // AAC lookbehind the next save needs are copied back, at once.
+        if (videoReplayStore_) videoReplayStore_->discardBefore(clipEnd);
+        if (aacReplayStore_) aacReplayStore_->discardBefore(clipEnd - kAudioFrameLookbehind100ns);
+        if (videoReplayStore_) videoReplayStore_->scheduleInPlaceRehome(replay::BackfillPace::maximumMultiplier);
+        if (aacReplayStore_) aacReplayStore_->scheduleInPlaceRehome(replay::BackfillPace::maximumMultiplier);
+    }
     result.message = segmentFiles.empty()
         ? muxMessage
         : "Saved segmented MP4 clip for export stitching.";

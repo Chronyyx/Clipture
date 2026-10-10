@@ -42,6 +42,9 @@ pub(crate) fn library_input(path: &Path) -> [OsString; 6] {
     ]
 }
 
+/// The most output a job may ask to capture.
+pub(crate) const MAXIMUM_JOB_STDOUT_BYTES: usize = 64 * 1024 * 1024;
+
 #[derive(Clone, Debug)]
 pub struct FfmpegJob {
     pub label: &'static str,
@@ -195,7 +198,7 @@ fn validate_job(job: &FfmpegJob) -> AppResult<()> {
             "FFmpeg argument list is too large".into(),
         ));
     }
-    if job.maximum_stdout_bytes == 0 || job.maximum_stdout_bytes > 64 * 1024 * 1024 {
+    if job.maximum_stdout_bytes == 0 || job.maximum_stdout_bytes > MAXIMUM_JOB_STDOUT_BYTES {
         return Err(AppError::Integration(
             "FFmpeg output limit is invalid".into(),
         ));

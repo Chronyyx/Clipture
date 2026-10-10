@@ -1,0 +1,187 @@
+/* Edit decks: the trim and mixer modules dock under the player as more of
+   the same field-recorder face as its transport. In the library they run
+   flush to the frame, so no video black shows around them. */
+.edit-deck {
+  --deck-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--transport-edge);
+  border-radius: 8px;
+  color: var(--transport-ink);
+  background: linear-gradient(to bottom, var(--transport-highlight), transparent 28px), var(--transport-face);
+  box-shadow: inset 0 1px 0 var(--transport-highlight);
+  animation: deck-open 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes deck-open {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+
+/* Title and close key, the deck's controls, then its footer. */
+.deck-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.deck-title { margin: 0; color: var(--transport-ink); font: 650 14px/1.2 var(--font-ui); }
+.deck-key.deck-close { width: 30px; min-height: 30px; padding: 0; }
+.deck-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
+
+.deck-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.deck-spacer { flex: 1; }
+.deck-status { color: var(--transport-muted); font-size: 12.5px; }
+.deck-status.warning { color: var(--transport-ink); }
+.deck-error { color: var(--transport-marker); font-size: 12.5px; }
+
+/* Physical keys: lit from above, pressed in when held. */
+.deck-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 13px;
+  border: 1px solid var(--transport-edge);
+  border-radius: 5px;
+  color: var(--transport-ink);
+  background: linear-gradient(to bottom, var(--transport-highlight), transparent), var(--transport-key);
+  box-shadow: inset 0 1px 0 var(--transport-highlight), 0 1px 0 rgb(var(--transport-shade) / 30%);
+  font: 600 12.5px/1 var(--font-ui);
+  cursor: pointer;
+  transition: background-color 120ms ease, transform 60ms ease;
+}
+.deck-key svg { flex: 0 0 auto; stroke-width: 1.8; }
+.deck-key:hover:not(:disabled) { background-color: var(--transport-track); }
+.deck-key:active:not(:disabled) { transform: translateY(1px); box-shadow: inset 0 1px 3px rgb(var(--transport-shade) / 30%); }
+.deck-key:disabled { opacity: 0.45; cursor: default; }
+.deck-key.deck-primary {
+  color: var(--transport-on-action, var(--transport-on-marker));
+  border-color: color-mix(in srgb, var(--transport-action, var(--transport-marker)) 70%, #000);
+  background: linear-gradient(to bottom, rgb(255 255 255 / 16%), transparent), var(--transport-action, var(--transport-marker));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 25%), 0 1px 0 rgb(var(--transport-shade) / 35%);
+}
+.deck-key.deck-primary:hover:not(:disabled) { background-color: color-mix(in srgb, var(--transport-action, var(--transport-marker)) 88%, #fff); }
+.deck-key.active { color: var(--transport-marker); box-shadow: inset 0 1px 3px rgb(var(--transport-shade) / 35%); background: var(--transport-display); }
+.edit-deck :is(button, input, [tabindex]):focus-visible { outline: 2px solid var(--transport-marker); outline-offset: 2px; }
+
+/* The inset display the transport shows time in. */
+.deck-readout {
+  padding: 5px 8px;
+  border: 1px solid var(--transport-edge);
+  border-radius: 3px;
+  color: var(--transport-display-ink);
+  background: var(--transport-display);
+  box-shadow: inset 0 1px 3px rgb(var(--transport-shade) / 35%);
+  font: 11px/1 var(--deck-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.deck-spinner { animation: deck-spin 0.9s linear infinite; }
+@keyframes deck-spin { to { transform: rotate(360deg); } }
+
+/* While the file is rewritten, what is being written shimmers in place. */
+.edit-deck[data-saving] :is(.mixer-track, .trim-track) { position: relative; overflow: hidden; }
+.edit-deck[data-saving] :is(.mixer-track, .trim-track)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, var(--transport-highlight) 50%, transparent 70%) 0 0 / 250% 100%;
+  animation: deck-shimmer 1.3s linear infinite;
+}
+.edit-deck[data-saving] :is(.mixer-track, .trim-row:first-child) { opacity: 0.7; }
+@keyframes deck-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -100% 0; }
+}
+
+/* A finished edit: one line of the same face, with what changed. */
+.edit-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 10px 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--transport-edge);
+  border-radius: 8px;
+  color: var(--transport-ink);
+  background: var(--transport-face);
+  font-size: 13px;
+  animation: deck-open 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.edit-notice svg { flex: 0 0 auto; color: var(--transport-marker); stroke-width: 2.2; }
+
+/* In the library the decks are part of the player's frame: the frame keeps
+   its size and the video makes room, so opening one never moves the page. */
+.library-player-main:has(> .edit-deck) { grid-template-rows: minmax(0, 1fr) auto; }
+.library-player-main > .edit-deck {
+  margin: 0;
+  border-width: 1px 0 0;
+  border-radius: 0;
+}
+/* In the library an open editor takes the clip rail's place beside the
+   video: title on top, its controls scrolling in the middle, the footer
+   pinned to the bottom. */
+.library-player-sidebar.edit-rail {
+  grid-template-rows: minmax(0, 1fr);
+  border-left-color: var(--transport-edge);
+  background: var(--transport-face);
+}
+.edit-rail::after { display: none; }
+.edit-rail > .edit-deck {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 18px 16px 14px;
+  border: 0;
+  border-radius: 0;
+  animation: rail-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes rail-in {
+  from { opacity: 0; transform: translateX(10px); }
+}
+.edit-rail .deck-title { font-size: 17px; }
+.edit-rail .deck-body { overflow-y: auto; margin: 0 -16px; padding: 0 16px; overscroll-behavior: contain; }
+.edit-rail .deck-footer {
+  padding-top: 12px;
+  border-top: 1px solid rgb(var(--transport-shade) / 22%);
+  box-shadow: inset 0 1px 0 var(--transport-highlight);
+}
+.edit-rail .deck-status { flex-basis: 100%; }
+.edit-rail .deck-spacer { display: none; }
+.edit-rail .deck-footer .deck-key { flex: 1 1 0; }
+
+/* A finished edit shows over the top of the video for a moment. */
+.library-player-main { position: relative; }
+.library-player-main > .edit-notice {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: 4;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  padding: 8px 16px 8px 12px;
+  background: color-mix(in srgb, var(--transport-face) 88%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 20px rgb(var(--transport-shade) / 35%);
+  animation: notice-drop 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes notice-drop {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .edit-deck,
+  .edit-notice,
+  .edit-rail > .edit-deck,
+  .library-player-main > .edit-notice,
+  .deck-spinner,
+  .edit-deck[data-saving] :is(.mixer-track, .trim-track)::after { animation: none; }
+}

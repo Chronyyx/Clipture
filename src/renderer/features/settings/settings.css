@@ -130,33 +130,6 @@
   background: #a55e38;
 }
 
-.theme-preview.milate .theme-preview-sidebar {
-  background: #3f421e;
-}
-
-.theme-preview.milate .theme-preview-content {
-  background: #4b4e24;
-}
-
-.theme-preview.milate .theme-preview-line {
-  width: 100%;
-  height: 28px;
-  color: #f3e6bd;
-  background: transparent;
-  opacity: 1;
-}
-
-.theme-preview.milate .theme-preview-line::before {
-  content: "Milate";
-  font-family: var(--milate-local-font, "Clipture Milate"), "Bodoni MT", Didot, Georgia, serif;
-  font-size: 21px;
-  line-height: 1;
-}
-
-.theme-preview.milate .theme-preview-button {
-  background: #e1c675;
-}
-
 .theme-preview.maid-cafe {
   position: relative;
 }

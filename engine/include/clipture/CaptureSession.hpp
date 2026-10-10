@@ -69,6 +69,9 @@ public:
         const std::string& monitorId);
     bool preferGameWindow(void* window, const std::string& targetName);
     bool preferMonitor();
+    // Monitor WGC records this window's frames instead of the desktop while it
+    // covers the monitor unobstructed; null clears it. Never restarts capture.
+    void setHybridGameWindow(void* window);
     void setTargetFps(int fps);
     void stop();
 

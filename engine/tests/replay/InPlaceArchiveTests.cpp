@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <cmath>
+#include <deque>
 #include "TestSupport.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/replay/InPlacePacketArchive.hpp"
@@ -86,6 +88,41 @@ void testInPlaceArchive() {
     store.clear();
     store.stop();
     require(readPayload(snapshot[0], 0, actual), "retired store snapshot pins remain valid");
+
+    // A rolling window of packets whose sizes swing (busy and quiet scenes)
+    // stays in recording order on disk: one wrap, no bouncing between holes.
+    {
+        auto rolling = std::make_shared<replay::InPlacePacketArchive>();
+        rolling->configure(scratch.path / "rolling", true, 1ull << 32);
+        EncodedPacket audio;
+        audio.kind = PacketKind::Audio;
+        audio.codec = PacketCodec::AacLc;
+        std::deque<EncodedPacket> window;
+        uint64_t windowBytes = 0, largestWindow = 0;
+        for (int i = 0; i < 3000; ++i) {
+            const auto swing = 1.0 + 0.6 * std::sin(i / 170.0) * std::sin(i / 53.0);
+            const auto length = static_cast<std::size_t>((9'000 + (i * 7'919) % 23'000) * swing);
+            audio.payload = std::make_shared<PacketPayload>(length, std::byte{0x5a});
+            auto persisted = rolling->persist(audio);
+            require(persisted.has_value(), "the rolling arena accepts every packet");
+            window.push_back(std::move(*persisted));
+            windowBytes += length;
+            largestWindow = std::max(largestWindow, windowBytes);
+            // Expire a GOP's worth at a time once the window is full.
+            if (window.size() >= 400 && i % 30 == 0) {
+                for (int gop = 0; gop < 30; ++gop) {
+                    windowBytes -= payloadSize(window.front());
+                    window.pop_front();
+                }
+            }
+        }
+        std::size_t backward = 0;
+        for (std::size_t i = 1; i < window.size(); ++i) {
+            if (window[i].payloadReader->extent()->offset < window[i - 1].payloadReader->extent()->offset) ++backward;
+        }
+        require(backward <= 1, "a saved window reads front to back apart from one wrap");
+        require(rolling->diskBytes() <= largestWindow + largestWindow / 4 + (8u << 20), "next fit keeps the arena compact");
+    }
 
     replay::ConsumedWindow consumed;
     require(consumed.start() == 0, "default begins with full available buffer");

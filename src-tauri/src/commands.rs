@@ -5,6 +5,8 @@ mod media;
 mod picker;
 mod sharing;
 mod system;
+mod mix;
+mod trim;
 
 pub use core::*;
 pub use diagnostics::*;
@@ -12,6 +14,8 @@ pub use library::*;
 pub use media::*;
 pub use sharing::*;
 pub use system::*;
+pub use mix::*;
+pub use trim::*;
 
 use crate::error::AppResult;
 

@@ -568,9 +568,9 @@ struct ReplaySegmentStore::Impl {
         return bytes;
     }
 
-    void trimLocked() {
+    void trimLocked(int64_t floor100ns = std::numeric_limits<int64_t>::min()) {
         if (entries.empty()) return;
-        const int64_t oldestAllowed100ns = newestPts100ns - options.retention100ns;
+        const int64_t oldestAllowed100ns = std::max(newestPts100ns - options.retention100ns, floor100ns);
 
         auto retireEntry = [&](const std::shared_ptr<Entry>& entry) {
             if (entry->retired.exchange(true, std::memory_order_relaxed)) return;
@@ -990,6 +990,10 @@ void ReplaySegmentStore::setInPlaceArchive(std::shared_ptr<replay::InPlacePacket
 }
 void ReplaySegmentStore::push(const EncodedPacket& packet) { impl_->push(packet); }
 void ReplaySegmentStore::scheduleInPlaceRehome(double rateMultiplier) { impl_->scheduleRehome(rateMultiplier); }
+void ReplaySegmentStore::discardBefore(int64_t pts100ns) {
+    std::lock_guard lock(impl_->mutex);
+    impl_->trimLocked(pts100ns);
+}
 
 std::vector<EncodedPacket> ReplaySegmentStore::selectWindow(
     int64_t startPts100ns,

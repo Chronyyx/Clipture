@@ -50,6 +50,25 @@ pub async fn invoke(
             )
             .await?,
         ),
+        "mix_clip_audio" => encode(
+            commands::mix_clip_audio(
+                app.clone(),
+                state,
+                argument(&args, "id")?,
+                argument(&args, "gains")?,
+            )
+            .await?,
+        ),
+        "trim_clip" => encode(
+            commands::trim_clip(
+                app.clone(),
+                state,
+                argument(&args, "id")?,
+                argument(&args, "startSeconds")?,
+                argument(&args, "endSeconds")?,
+            )
+            .await?,
+        ),
         "clip_url" => {
             encode(commands::clip_url_for_owner(owner, state, argument(&args, "filePath")?).await?)
         }

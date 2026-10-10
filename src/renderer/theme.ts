@@ -21,18 +21,11 @@ const localThemeFontSpecs: Record<ThemeFontId, {
     source: 'local("Glitten"), local("Glitten Regular"), local("Glitten-Regular")',
     cssProperty: "--glitten-local-font",
     weight: "400"
-  },
-  milate: {
-    familyPrefix: "Clipture Milate Local",
-    source: 'local("Dh Milate"), local("Dh Milate DEMO"), local("Dh Milate Regular"), local("Milate"), local("Milate Regular")',
-    cssProperty: "--milate-local-font",
-    weight: "500"
   }
 };
 
 const localThemeFontStates: Record<ThemeFontId, LocalThemeFontState> = {
-  glitten: { generation: 0 },
-  milate: { generation: 0 }
+  glitten: { generation: 0 }
 };
 const customProperties = [
   "--app-bg",
@@ -116,7 +109,9 @@ function clearCustomProperties(root: HTMLElement): void {
 }
 
 function normalizeUiTheme(value: unknown): UiTheme {
-  return value === "light" || value === "glitten" || value === "milate" || value === "maid-cafe" || value === "halloween" || value === "custom" ? value : "graphite";
+  // Milate was retired for Aero; settings saved with it carry over.
+  if (value === "milate") return "aero";
+  return value === "light" || value === "glitten" || value === "aero" || value === "maid-cafe" || value === "halloween" || value === "custom" ? value : "graphite";
 }
 
 export function refreshLocalThemeFont(theme: ThemeFontId): Promise<boolean> {

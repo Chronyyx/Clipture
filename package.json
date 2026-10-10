@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.6.6",
+  "version": "1.7.0",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.6.6: Removed Clips Stop Showing as Watched",
+  "releaseTitle": "Clipture 1.7.0: Smooth Smokes, Trim & Audio Mixer",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

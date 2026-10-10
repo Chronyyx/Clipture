@@ -22,6 +22,17 @@ use super::{LinearView, PlaybackPatch};
 const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_SESSION_LIMIT: usize = 32;
 const AUDIO_CHUNK_SECONDS: u32 = 8;
+/// A chunk with every track apart: 16-bit stereo at 48 kHz per track.
+const TRACK_BYTES_PER_SECOND: usize = 2 * 2 * 48_000;
+/// Chunks with every track apart stay under this, so they cross the UI
+/// process's media transport (4 MiB frames) like the mixed ones do.
+pub const MAXIMUM_TRACK_CHUNK_BYTES: usize = 3_500_000;
+
+/// Longest chunk, in whole seconds, that holds `tracks` tracks apart.
+pub(crate) fn track_chunk_seconds(tracks: usize) -> u32 {
+    let fit = MAXIMUM_TRACK_CHUNK_BYTES / (tracks.max(1) * TRACK_BYTES_PER_SECOND);
+    (fit as u32).clamp(1, AUDIO_CHUNK_SECONDS)
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +43,14 @@ pub struct PlaybackDescriptor {
     pub message: String,
     pub audio_chunk_url: Option<String>,
     pub audio_chunk_seconds: Option<u32>,
+    /// The clip's audio tracks (by position) that playback mixes, in order.
+    /// A chunk asked for with `tracks=1` holds one stereo pair per track,
+    /// in this order, for mixing them live.
+    pub audio_track_indexes: Vec<u8>,
+    /// How long such a chunk may be (they are larger than mixed ones).
+    pub track_chunk_seconds: Option<u32>,
+    /// The clip's audio as peaks (JSON `Waveform`), when it has any.
+    pub waveform_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -129,7 +148,7 @@ impl MediaSessionRegistry {
             SessionEntry {
                 clip_id: clip_id.into(),
                 path,
-                selected_audio_indexes: indexes,
+                selected_audio_indexes: indexes.clone(),
                 playback_patches,
                 view,
                 owner: owner.into(),
@@ -148,6 +167,9 @@ impl MediaSessionRegistry {
             },
             audio_chunk_url: mixed.then(|| format!("{base}/audio")),
             audio_chunk_seconds: mixed.then_some(AUDIO_CHUNK_SECONDS),
+            track_chunk_seconds: mixed.then(|| track_chunk_seconds(indexes.len())),
+            waveform_url: (!indexes.is_empty()).then(|| format!("{base}/waveform")),
+            audio_track_indexes: indexes,
         })
     }
 
@@ -201,6 +223,17 @@ impl MediaSessionRegistry {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let before = sessions.len();
         sessions.retain(|_, session| session.owner != owner);
+        before - sessions.len()
+    }
+
+    /// Ends every session playing `path`, whoever owns it.
+    pub fn release_path(&self, path: &Path) -> usize {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let before = sessions.len();
+        sessions.retain(|_, session| session.path != path);
         before - sessions.len()
     }
 

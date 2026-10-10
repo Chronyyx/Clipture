@@ -2,12 +2,16 @@
 #include "clipture/replay/InPlaceExtent.hpp"
 #include "clipture/replay/Mp4SamplePacker.hpp"
 #include "clipture/platform/windows/InPlaceFile.hpp"
+#include <algorithm>
 #include <atomic>
 #include <map>
 
 namespace clipture::replay {
 namespace {
 using platform::windows::InPlaceFile;
+// The arena wraps back to its start only onto at least this much free room,
+// so packets do not bounce between the two ends filling slivers.
+constexpr uint64_t wrapHoleBytes = 4u * 1024u * 1024u;
 struct Arena;
 struct Range final : InPlaceExtent {
     std::shared_ptr<Arena> arena;
@@ -35,6 +39,7 @@ struct Arena : std::enable_shared_from_this<Arena> {
     std::mutex mutex;
     std::map<uint64_t, uint64_t> free; // Coalesced offset -> length, never leased.
     uint64_t end = InPlaceFile::mediaStart, maximum;
+    uint64_t cursor = InPlaceFile::mediaStart; // Just past the last write.
     explicit Arena(std::shared_ptr<InPlaceFile> value, uint64_t limit) : file(std::move(value)), maximum(limit) {}
     void release(uint64_t offset, uint64_t length) noexcept try {
         std::lock_guard lock(mutex);
@@ -58,12 +63,25 @@ struct Arena : std::enable_shared_from_this<Arena> {
         auto readers = writeRun(bytes, lengths);
         return readers.empty() ? PacketPayloadReaderPtr{} : std::move(readers.front());
     }
+    // Next fit: writing continues forward from the last write, so a saved clip
+    // is stored in recording order with one wrap per lap of the arena. (First
+    // fit put consecutive frames in whichever hole fit, all over the file, and
+    // players had to seek across it.) Room ahead, else a wrap onto real room,
+    // else the end; at the size cap, any hole that fits.
+    std::map<uint64_t, uint64_t>::iterator place(uint64_t size) {
+        const auto fits = [&](uint64_t need) { return [need](const auto& item) { return item.second >= need; }; };
+        auto slot = std::find_if(free.lower_bound(cursor), free.end(), fits(size));
+        if (slot != free.end()) return slot;
+        slot = std::find_if(free.begin(), free.end(), fits(std::max(size, wrapHoleBytes)));
+        if (slot != free.end() || (end <= maximum && size <= maximum - end)) return slot;
+        return std::find_if(free.begin(), free.end(), fits(size));
+    }
     // One contiguous slot and one write for several samples; each sample still
     // gets its own lease, so they expire and are reused independently.
     std::vector<PacketPayloadReaderPtr> writeRun(std::span<const std::byte> bytes, std::span<const std::size_t> lengths) {
         std::unique_lock lock(mutex);
         if (bytes.empty() || bytes.size() > 64u * 1024u * 1024u) return {};
-        auto slot = std::find_if(free.begin(), free.end(), [&](const auto& item) { return item.second >= bytes.size(); });
+        auto slot = place(bytes.size());
         const uint64_t offset = slot == free.end() ? end : slot->first;
         if (offset > maximum || bytes.size() > maximum - offset) return {};
         if (!file->writeSlot(offset, bytes)) return {};
@@ -73,6 +91,7 @@ struct Arena : std::enable_shared_from_this<Arena> {
             if (remaining) free.emplace(offset + bytes.size(), remaining);
         }
         end = std::max(end, offset + bytes.size());
+        cursor = offset + bytes.size();
         lock.unlock(); // A failed reader allocation can destroy/release its lease.
         std::vector<PacketPayloadReaderPtr> readers;
         readers.reserve(lengths.size());

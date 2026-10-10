@@ -1,6 +1,7 @@
 /* Field-recorder transport: etched scale, inset display, physical key shapes.
    Native range inputs retain keyboard, pointer and assistive-tech behavior. */
-.field-transport {
+/* The transport's face, shared by the edit decks docked under the player. */
+:is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
   --transport-face: #20201f;
   --transport-key: #292928;
   --transport-edge: #444441;
@@ -12,9 +13,26 @@
   --transport-highlight: rgb(255 255 255 / 7%);
   --transport-display: #10120f;
   --transport-display-ink: #e8ece2;
+  /* Text on the marker colour, and the channels shadows are cast in. */
+  --transport-on-marker: #ffffff;
+  --transport-shade: 0 0 0;
+}
+
+/* Graphite: monochrome, like the hardware it is drawn from. Marks are
+   aluminium; the playhead and the play light are lit white. */
+:root[data-theme="graphite"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
+  --transport-marker: #c9c9c0;
+  --transport-on-marker: #20211e;
+  --transport-playhead: #ffffff;
+}
+
+.field-transport {
   margin: 10px;
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  /* Trailing keys (trim, fullscreen) each get their own column. */
+  grid-auto-columns: auto;
+  grid-auto-flow: column;
   align-items: center;
   padding: 6px 8px;
   gap: 12px;
@@ -22,10 +40,10 @@
   border-radius: 8px;
   color: var(--transport-ink);
   background: var(--transport-face);
-  box-shadow: inset 0 1px 0 var(--transport-highlight), 0 3px 12px rgb(0 0 0 / 18%);
+  box-shadow: inset 0 1px 0 var(--transport-highlight), 0 3px 12px rgb(var(--transport-shade) / 18%);
 }
 
-:root[data-theme="light"] .field-transport {
+:root[data-theme="light"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
   --transport-face: #e5e5e3;
   --transport-key: #efefed;
   --transport-edge: #b7b7b2;
@@ -37,6 +55,40 @@
   --transport-highlight: rgb(255 255 255 / 85%);
   --transport-display: #c9cbc4;
   --transport-display-ink: #30332c;
+  --transport-shade: 60 62 56;
+}
+
+/* Glitten: a parchment deck with a burnt-sienna marker. */
+:root[data-theme="glitten"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
+  --transport-face: #efe5d4;
+  --transport-key: #f8f1e5;
+  --transport-edge: #b9a68d;
+  --transport-ink: #352b23;
+  --transport-muted: #706356;
+  --transport-track: #cdbb9f;
+  --transport-fill: #6b5644;
+  --transport-marker: #a55e38;
+  --transport-highlight: rgb(255 252 245 / 75%);
+  --transport-display: #ddd0bb;
+  --transport-display-ink: #3a2e24;
+  --transport-on-marker: #fffaf2;
+  --transport-shade: 61 45 31;
+}
+
+/* A custom theme: built from its own colours (all plain hex). */
+:root[data-theme="custom"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
+  --transport-face: var(--surface-deep);
+  --transport-key: var(--surface-control);
+  --transport-edge: var(--border-strong);
+  --transport-ink: var(--text);
+  --transport-muted: var(--text-muted);
+  --transport-track: var(--border);
+  --transport-fill: var(--text-muted);
+  --transport-marker: var(--accent);
+  --transport-highlight: var(--inset-highlight);
+  --transport-display: var(--surface-row);
+  --transport-display-ink: var(--text-strong);
+  --transport-on-marker: var(--on-accent);
 }
 
 .transport-timeline { display: flex; align-items: center; min-width: 0; gap: 10px; }
@@ -108,7 +160,7 @@
 
 .field-transport .yt-pill.icon-button { width: 38px; height: 34px; padding: 0; }
 .field-transport .yt-pill.icon-button:hover { background: var(--transport-track); }
-.field-transport .yt-pill.icon-button:active { box-shadow: inset 0 1px 3px rgb(0 0 0 / 25%); }
+.field-transport .yt-pill.icon-button:active { box-shadow: inset 0 1px 3px rgb(var(--transport-shade) / 25%); }
 .field-transport .yt-pill svg { width: 16px; height: 16px; stroke-width: 1.7; }
 .field-transport .yt-pill.transport-playback { padding: 0; gap: 0; }
 .field-transport .transport-play {
@@ -125,7 +177,7 @@
   background: transparent;
 }
 .field-transport .transport-play:hover { background: var(--transport-track); }
-.field-transport .transport-play:active { box-shadow: inset 0 1px 3px rgb(0 0 0 / 25%); }
+.field-transport .transport-play:active { box-shadow: inset 0 1px 3px rgb(var(--transport-shade) / 25%); }
 .field-transport .transport-play svg { fill: currentColor; stroke-width: 1; }
 .field-transport .time-readout {
   min-width: 0;
@@ -138,11 +190,11 @@
   background: var(--transport-display);
   font: 11px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
   letter-spacing: 0.06em;
-  box-shadow: inset 0 1px 3px rgb(0 0 0 / 35%);
+  box-shadow: inset 0 1px 3px rgb(var(--transport-shade) / 35%);
 }
 
 .transport-led { width: 5px; height: 5px; border-radius: 50%; background: #64685f; }
-.transport-led.active { background: #f07836; }
+.transport-led.active { background: var(--transport-playhead, var(--transport-marker)); }
 .field-transport .volume-slider { accent-color: var(--transport-fill); }
 .field-transport .transport-mute {
   display: grid;

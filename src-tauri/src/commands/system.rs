@@ -81,7 +81,6 @@ pub fn open_theme_font_download(
 ) -> CommandResult<()> {
     let url = match theme.as_str() {
         "glitten" => "https://www.dafont.com/glitten.font",
-        "milate" => "https://www.dafont.com/dh-milate.font",
         _ => return Err(format!("Unknown theme font: {theme}")),
     };
     if state.paths.test_mode {

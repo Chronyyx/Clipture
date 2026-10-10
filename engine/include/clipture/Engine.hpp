@@ -128,6 +128,7 @@ private:
     std::mutex historyMutex_;
     std::deque<ForegroundHistoryEntry> foregroundHistory_;
     void* activeGameCaptureWindow_ = nullptr;
+    void* hybridGameWindow_ = nullptr;
 };
 
 }  // namespace clipture

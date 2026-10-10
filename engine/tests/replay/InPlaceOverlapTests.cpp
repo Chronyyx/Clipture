@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "TestSupport.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/replay/BackfillPace.hpp"
@@ -98,6 +99,45 @@ void testInPlaceOverlap() {
     store.scheduleInPlaceRehome(1000.0);
     require(store.waitUntilRehomed(std::chrono::seconds(5)) && store.stats().rehomedPackets == afterBackfill.size(),
         "rescheduling without a new save copies nothing");
+
+    // Overlap off: footage before a save's end is never selected again. Dropping
+    // it and copying back only the keyframe preroll closes the saved clip at
+    // once, instead of when that footage would have expired.
+    {
+        ScratchDirectory consumedScratch;
+        auto consumedArchive = std::make_shared<replay::InPlacePacketArchive>();
+        consumedArchive->configure(consumedScratch.path, true, 64u * 1024u * 1024u);
+        auto consumedOptions = options;
+        consumedOptions.rootDirectory = consumedScratch.path / "legacy-fallback";
+        consumedOptions.alignSegmentsToKeyframes = true;
+        ReplaySegmentStore consumed(consumedOptions);
+        consumed.setInPlaceArchive(consumedArchive);
+        consumed.start();
+        auto packet = fixturePacket();
+        for (int i = 0; i < 12; ++i) {
+            packet.payload = std::make_shared<PacketPayload>(*fixturePacket().payload);
+            packet.payload->back() = static_cast<std::byte>(i + 1);
+            require(analyzeH264Packet(packet), "consumed fixture must analyze");
+            packet.keyframe = i % 4 == 0;
+            consumed.push(packet);
+            packet.pts100ns += 333'333;
+        }
+        require(consumed.waitUntilIdle(std::chrono::seconds(5)), "consumed packets persist into the arena");
+        std::weak_ptr<platform::windows::InPlaceFile> savedClip = fileOf(consumed.snapshot().front());
+        require(consumedArchive->takeForSave() != nullptr, "the save detaches the arena");
+        const auto boundary = consumed.snapshot()[6].pts100ns;
+        consumed.discardBefore(boundary);
+        consumed.scheduleInPlaceRehome(replay::BackfillPace::maximumMultiplier);
+        require(consumed.waitUntilRehomed(std::chrono::seconds(5)), "the preroll is copied back");
+        const auto kept = consumed.snapshot();
+        require(kept.size() == 8 && kept.front().keyframe && kept.front().pts100ns < boundary,
+            "the keyframe at or before the saved end and everything after it stay");
+        require(std::none_of(kept.begin(), kept.end(), [&](const auto& item) { return consumedArchive->isDetached(item); }),
+            "nothing kept still lives in the saved clip");
+        require(consumed.stats().rehomedPackets == kept.size(), "only the preroll is copied, not the saved footage");
+        require(savedClip.expired(), "the saved clip is closed right after the save");
+        consumed.stop();
+    }
 
     // The overlapping second save reuses backfilled offsets: no media is copied.
     auto second = archive->takeForSave();

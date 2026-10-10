@@ -1,5 +1,5 @@
 export type EncoderName = "NVENC" | "Media Foundation Hardware" | "Software" | "Unavailable";
-export type ThemeFontId = "glitten" | "milate";
+export type ThemeFontId = "glitten";
 
 export interface FrameDropReasonDeltas {
   reportedDroppedFrames: number;
@@ -388,7 +388,7 @@ export interface EngineDiagnostics {
 }
 
 export interface ClipSettings {
-  uiTheme: "graphite" | "light" | ThemeFontId | "maid-cafe" | "halloween" | "custom";
+  uiTheme: "graphite" | "light" | ThemeFontId | "aero" | "maid-cafe" | "halloween" | "custom";
   customMainColor: string;
   customAccentColor: string;
   clipLengthSeconds: number;
@@ -547,6 +547,20 @@ export type ClipRepairPhase = "idle" | "checking" | "checked" | "repairing" | "d
 
 /** Host-owned "Fix clips" job: rewrites clips whose audio is stored far from
  * their video into an interleaved layout (lossless remux, verified first). */
+/** A finished destructive trim: the clip's file now holds only the kept part. */
+export interface ClipTrimResult {
+  durationSeconds: number;
+  bytesBefore: number;
+  bytesAfter: number;
+}
+
+/** A finished audio mix: the re-encoded tracks now carry their new levels. */
+export interface ClipMixResult {
+  tracksChanged: number;
+  bytesBefore: number;
+  bytesAfter: number;
+}
+
 export interface ClipRepairStatus {
   phase: ClipRepairPhase;
   checked: number;
@@ -600,7 +614,11 @@ export interface CliptureApi {
   clipIconUrl(clip: ClipRecord, preferredLabels?: string[]): Promise<string>;
   processIconUrl(processName: string, executablePath?: string): Promise<string>;
   clipThumbnailUrl(filePath: string): Promise<string>;
-  clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise<{ url: string; mixed: boolean; message: string; audioChunkUrl?: string; audioChunkSeconds?: number }>;
+  /** `audioTrackIndexes`: the clip's audio tracks (by position) the mixed
+   * chunks contain; with `tracks=1` a chunk holds one stereo pair per track,
+   * in that order, and may be at most `trackChunkSeconds` long.
+   * `waveformUrl` serves the clip's audio as peaks (`{ seconds, peaks }`). */
+  clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise<{ url: string; mixed: boolean; message: string; audioChunkUrl?: string; audioChunkSeconds?: number; audioTrackIndexes?: number[]; trackChunkSeconds?: number; waveformUrl?: string }>;
   releasePlaybackCache(): Promise<boolean>;
   getClipRepairStatus(): Promise<ClipRepairStatus>;
   /** Reads each clip's index only; never modifies files. */
@@ -615,6 +633,13 @@ export interface CliptureApi {
   revealSoundsFolder: () => Promise<void>;
   revealClip: (filePath: string) => Promise<void>;
   renameClip: (id: string, newTitle: string) => Promise<boolean>;
+  /** Keeps `[startSeconds, endSeconds)` of a Clipture clip and permanently
+   * deletes the rest from its file. There is no undo. */
+  trimClip: (id: string, startSeconds: number, endSeconds: number) => Promise<ClipTrimResult>;
+  /** Re-encodes each audio track of a Clipture clip at `gains[k]` (0 is
+   * silence, 1 unchanged, at most 10, +20 dB) in its file. There is
+   * no undo. */
+  mixClipAudio: (id: string, gains: number[]) => Promise<ClipMixResult>;
   getUpdateState(): Promise<UpdateState>;
   checkForUpdates(): Promise<UpdateState>;
   downloadUpdate(): Promise<void>;

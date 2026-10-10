@@ -107,6 +107,27 @@ returned; that grant is single-use. A compromised page therefore cannot widen
 which files the library may list, rename or delete. The renderer already only
 changes these through those commands, so no adapter change was needed.
 
+`trimClip(id, startSeconds, endSeconds)` keeps that part of one of Clipture's
+own single-file clips and permanently deletes the rest from its file
+(`trim_clip`, ADR 0013). The id is resolved through the authorized library
+snapshot; imported videos and multi-part clips are refused. It resolves with
+the kept length and the file size before and after, and emits
+`library:changed`. The Electron reference rejects it.
+
+`mixClipAudio(id, gains)` re-encodes each audio track of the same kind of clip
+at `gains[k]` (by track position: 0 is silence, 1 leaves the track as it is,
+at most 10, +20 dB) in its file (`mix_clip_audio`, `media::mix`). Video and unchanged
+tracks are not touched. It resolves with the number of tracks re-encoded and
+the file size before and after, and emits `library:changed` when anything
+changed. The Electron reference rejects it. `clipPlaybackUrl` results gain the
+optional `audioTrackIndexes` and `trackChunkSeconds`; the Tauri host's audio
+chunks accept `tracks=1` for one stereo pair per listed track, which the
+player's mixer balances live. Such a chunk may be at most `trackChunkSeconds`
+long, so it stays under the UI process transport's 4 MiB frames. The optional
+`waveformUrl` serves the clip's audio in audiowaveform's JSON format (version
+2, one channel, 8-bit min/max pairs per 10 ms) for the trim editor's waveform
+views; the host builds it on request from the clip's audio packets alone; the Electron reference omits it.
+
 The additive `ClipRecord.segmentAudioTracks` field describes each segment's
 actual audio stream order; `audioTracks` is their ordered union. Empty entries
 mean no audio exists in that segment. The host pads absent spans and remaps by

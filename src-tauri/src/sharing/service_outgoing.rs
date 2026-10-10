@@ -120,6 +120,23 @@ impl SharingService {
         Ok(share_id)
     }
 
+    /// Ends every share of the library clip at `path`: it was trimmed, so it
+    /// no longer matches what friends were offered.
+    pub fn revoke_shares_of(&self, path: &std::path::Path) -> AppResult<()> {
+        let ended: Vec<String> = self.core.read(|state| {
+            state
+                .outbox
+                .iter()
+                .filter(|share| share.original() == path)
+                .map(|share| share.offer.share_id.clone())
+                .collect()
+        });
+        for share_id in ended {
+            self.revoke_share(&share_id)?;
+        }
+        Ok(())
+    }
+
     /// Stops a friend from streaming or downloading a clip we shared.
     pub fn revoke_share(&self, share_id: &str) -> AppResult<()> {
         self.core.update(|state| {

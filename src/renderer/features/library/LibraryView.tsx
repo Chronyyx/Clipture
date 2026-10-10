@@ -67,6 +67,13 @@ export function LibraryView({
     if (folderFilter && !folderFilters.includes(folderFilter)) setFolderFilter("");
   }, [folderFilter, folderFilters]);
 
+  // The open clip follows its refreshed record (a trim changes its length).
+  useEffect(() => {
+    if (!selectedClip) return;
+    const fresh = clips.find((clip) => clip.id === selectedClip.id);
+    if (fresh && fresh !== selectedClip && JSON.stringify(fresh) !== JSON.stringify(selectedClip)) setSelectedClip(fresh);
+  }, [clips]);
+
   useEffect(() => {
     cancelSelection();
     if (selectedClip) {

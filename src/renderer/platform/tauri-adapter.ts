@@ -4,6 +4,8 @@ import type {
   AudioInputDevice,
   ClipRecord,
   ClipRepairStatus,
+  ClipMixResult,
+  ClipTrimResult,
   ClipSettings,
   ClipSoundOption,
   CliptureApi,
@@ -48,6 +50,8 @@ const commands = {
   revealSoundsFolder: 'reveal_sounds_folder',
   revealClip: 'reveal_clip',
   renameClip: 'rename_clip',
+  trimClip: 'trim_clip',
+  mixClipAudio: 'mix_clip_audio',
   getUpdateState: 'get_update_state',
   checkForUpdates: 'check_for_updates',
   downloadUpdate: 'download_update',
@@ -103,7 +107,8 @@ export function createTauriAdapter(): CliptureApi {
       return {
         ...result,
         url: resourceUrl(result.url),
-        audioChunkUrl: result.audioChunkUrl ? resourceUrl(result.audioChunkUrl) : undefined
+        audioChunkUrl: result.audioChunkUrl ? resourceUrl(result.audioChunkUrl) : undefined,
+        waveformUrl: result.waveformUrl ? resourceUrl(result.waveformUrl) : undefined
       };
     },
     releasePlaybackCache: () => call<boolean>('releasePlaybackCache'),
@@ -121,6 +126,8 @@ export function createTauriAdapter(): CliptureApi {
     revealSoundsFolder: () => call<void>('revealSoundsFolder'),
     revealClip: (filePath) => call<void>('revealClip', { filePath }),
     renameClip: (id, newTitle) => call<boolean>('renameClip', { id, newTitle }),
+    trimClip: (id, startSeconds, endSeconds) => call<ClipTrimResult>('trimClip', { id, startSeconds, endSeconds }),
+    mixClipAudio: (id, gains) => call<ClipMixResult>('mixClipAudio', { id, gains }),
     getUpdateState: () => call<UpdateState>('getUpdateState'),
     checkForUpdates: () => call<UpdateState>('checkForUpdates'),
     downloadUpdate: () => call<void>('downloadUpdate'),

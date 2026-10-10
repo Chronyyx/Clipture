@@ -1,4 +1,4 @@
-import { Maximize2, Pause, Play, Volume2, VolumeX } from 'lucide-react';
+import { Maximize2, Pause, Play, Scissors, SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
 import { useEffect, useRef, type CSSProperties } from 'react';
 import { formatDuration } from '../../shared/clips/clipMetadata';
 
@@ -11,6 +11,12 @@ interface PlayerControlsProps {
   onTogglePlayback: () => void;
   onToggleFullscreen: () => void;
   onVolumeChange: (volume: number) => void;
+  /** Shown only for clips that can be trimmed. */
+  onToggleTrim?: () => void;
+  trimming?: boolean;
+  /** Shown only for clips whose audio can be remixed. */
+  onToggleMixer?: () => void;
+  mixing?: boolean;
 }
 
 export function PlayerControls({
@@ -21,7 +27,11 @@ export function PlayerControls({
   onSeek,
   onTogglePlayback,
   onToggleFullscreen,
-  onVolumeChange
+  onVolumeChange,
+  onToggleTrim,
+  trimming = false,
+  onToggleMixer,
+  mixing = false
 }: PlayerControlsProps) {
   const previousVolume = useRef(volume > 0 ? volume : 1);
   const muted = volume === 0;
@@ -61,6 +71,14 @@ export function PlayerControls({
         </div>
         <span className='transport-time'>−{formatDuration(Math.max(0, duration - currentTime))}</span>
       </div>
+      {onToggleMixer && (
+        <button className={`yt-pill icon-button${mixing ? ' active' : ''}`} title={mixing ? 'Close the audio mixer' : 'Balance the audio tracks'}
+          aria-label='Audio mixer' aria-pressed={mixing} onClick={onToggleMixer}><SlidersHorizontal size={22} /></button>
+      )}
+      {onToggleTrim && (
+        <button className={`yt-pill icon-button${trimming ? ' active' : ''}`} title={trimming ? 'Close the trim editor' : 'Trim this clip'}
+          aria-label='Trim' aria-pressed={trimming} onClick={onToggleTrim}><Scissors size={22} /></button>
+      )}
       <button className='yt-pill icon-button' title='Fullscreen' aria-label='Fullscreen' onClick={onToggleFullscreen}><Maximize2 size={22} /></button>
     </div>
   );

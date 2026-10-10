@@ -23,6 +23,7 @@ use crate::error::{AppError, AppResult};
 use super::{
     apply_patches,
     layout_probe::{layout_from_moov, needs_stream_layout},
+    mp4_box::{box_header_len, boxed, boxes, find, top_level_boxes, u32_at, u64_at},
     PlaybackPatch,
 };
 
@@ -77,20 +78,21 @@ impl LinearView {
         };
         let mut file = File::open(path).map_err(io)?;
         let stamp = stamp_of(&file).map_err(io)?;
-        let Some(top) = top_level(&mut file, stamp.len).map_err(io)? else {
+        let Some(top) = top_level_boxes(&mut file, stamp.len).map_err(io)? else {
             return Ok(None);
         };
-        let Some((moov_at, moov_len)) = top.moov else {
+        let located = |kind: &[u8; 4]| top.iter().rev().find(|item| &item.kind == kind).map(|item| (item.at, item.size));
+        let Some((moov_at, moov_len)) = located(b"moov") else {
             return Ok(None);
         };
-        if top.fragmented || moov_len > MAXIMUM_INDEX_BYTES {
+        if top.iter().any(|item| &item.kind == b"moof") || moov_len > MAXIMUM_INDEX_BYTES {
             return Ok(None);
         }
         let mut moov = vec![0_u8; moov_len as usize];
         file.seek(SeekFrom::Start(moov_at)).map_err(io)?;
         file.read_exact(&mut moov).map_err(io)?;
         apply_patches(moov_at, &mut moov, patches);
-        let ftyp = match top.ftyp {
+        let ftyp = match located(b"ftyp") {
             Some((at, len)) if len <= 4096 => {
                 let mut bytes = vec![0_u8; len as usize];
                 file.seek(SeekFrom::Start(at)).map_err(io)?;
@@ -269,7 +271,9 @@ fn rewrite_moov(body: &[u8], offsets: &[Vec<u64>]) -> Option<Vec<u8>> {
     tracks.next().is_none().then(|| boxed(b"moov", &out))
 }
 
-fn rewrite_path(body: &[u8], path: &[&[u8; 4]], offsets: &[u64]) -> Option<Vec<u8>> {
+/// The box at `path` under `body` with its chunk offset table replaced by
+/// `offsets` (as 64-bit offsets).
+pub(super) fn rewrite_path(body: &[u8], path: &[&[u8; 4]], offsets: &[u64]) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(body.len() + offsets.len() * 4);
     let mut replaced = false;
     for item in boxes(body)? {
@@ -337,115 +341,12 @@ fn track_shift(trak: &[u8], movie_scale: f64) -> Option<f64> {
     Some(delay)
 }
 
-struct Item<'a> {
-    kind: [u8; 4],
-    full: &'a [u8],
-    body: &'a [u8],
-}
-
-/// Every child box of `data`, or `None` when the boxes do not exactly fill it.
-fn boxes(data: &[u8]) -> Option<Vec<Item<'_>>> {
-    let mut items = Vec::new();
-    let mut rest = data;
-    while !rest.is_empty() {
-        let header = box_header_len(rest)?;
-        let size = match u32_at(rest, 0)? {
-            1 => usize::try_from(u64_at(rest, 8)?).ok()?,
-            0 => rest.len(),
-            size => size as usize,
-        };
-        if size < header || size > rest.len() {
-            return None;
-        }
-        let (full, next) = rest.split_at(size);
-        items.push(Item {
-            kind: full[4..8].try_into().ok()?,
-            full,
-            body: &full[header..],
-        });
-        rest = next;
-    }
-    Some(items)
-}
-
-fn find<'a>(data: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
-    boxes(data)?.into_iter().find(|item| &item.kind == kind).map(|item| item.body)
-}
-
-fn box_header_len(data: &[u8]) -> Option<usize> {
-    data.get(4..8)?;
-    Some(if u32_at(data, 0)? == 1 { 16 } else { 8 })
-}
-
-fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(body.len() + 16);
-    match u32::try_from(body.len() + 8) {
-        Ok(size) => out.extend_from_slice(&size.to_be_bytes()),
-        Err(_) => {
-            out.extend_from_slice(&1_u32.to_be_bytes());
-            out.extend_from_slice(kind);
-            out.extend_from_slice(&(body.len() as u64 + 16).to_be_bytes());
-            out.extend_from_slice(body);
-            return out;
-        }
-    }
-    out.extend_from_slice(kind);
-    out.extend_from_slice(body);
-    out
-}
-
-fn u32_at(data: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?))
-}
-
-fn u64_at(data: &[u8], at: usize) -> Option<u64> {
-    Some(u64::from_be_bytes(data.get(at..at + 8)?.try_into().ok()?))
-}
-
 fn stamp_of(file: &File) -> io::Result<Stamp> {
     let metadata = file.metadata()?;
     Ok(Stamp {
         len: metadata.len(),
         modified: metadata.modified().ok(),
     })
-}
-
-struct TopLevel {
-    ftyp: Option<(u64, u64)>,
-    moov: Option<(u64, u64)>,
-    fragmented: bool,
-}
-
-/// Where the top-level `ftyp` and `moov` boxes are; `None` for a file whose
-/// box headers do not add up.
-fn top_level(file: &mut File, end: u64) -> io::Result<Option<TopLevel>> {
-    let mut top = TopLevel { ftyp: None, moov: None, fragmented: false };
-    let mut position = 0_u64;
-    while position + 8 <= end {
-        let mut header = [0_u8; 16];
-        file.seek(SeekFrom::Start(position))?;
-        file.read_exact(&mut header[..8])?;
-        let mut size = u64::from(u32::from_be_bytes(header[..4].try_into().unwrap()));
-        let mut header_len = 8;
-        if size == 1 {
-            file.read_exact(&mut header[8..])?;
-            size = u64::from_be_bytes(header[8..].try_into().unwrap());
-            header_len = 16;
-        } else if size == 0 {
-            size = end - position;
-        }
-        if size < header_len || position + size > end {
-            return Ok(None);
-        }
-        match &header[4..8] {
-            b"ftyp" => top.ftyp = Some((position, size)),
-            b"moov" => top.moov = Some((position, size)),
-            b"moof" => top.fragmented = true,
-            _ => {}
-        }
-        position += size;
-    }
-    Ok(Some(top))
 }
 
 /// The tracks the view's own index describes.

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { MutableRefObject, RefObject } from 'react';
 import { watchPlaybackActivity } from './playbackActivity';
+import { createTrackLevels } from './trackLevels';
 
 interface MixedAudioChunk {
   start: number;
@@ -23,6 +24,9 @@ interface MixedAudioOptions {
   volume: number;
   playbackRequestedRef: MutableRefObject<boolean>;
   onPlayingChange: (playing: boolean) => void;
+  /** Levels for chunks that hold each track apart (one stereo pair per
+   * track, in order); applied live. */
+  trackGains?: number[];
 }
 
 const scheduleLookaheadSeconds = 0.5;
@@ -36,14 +40,18 @@ export function useMixedAudioPlayback({
   sourceUrl,
   volume,
   playbackRequestedRef,
-  onPlayingChange
+  onPlayingChange,
+  trackGains
 }: MixedAudioOptions) {
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const connectedVideoRef = useRef<HTMLVideoElement | null>(null);
   const chunkCacheRef = useRef(new Map<number, MixedAudioChunk>());
   const chunkRequestsRef = useRef(new Map<number, MixedAudioChunkRequest>());
-  const scheduledChunksRef = useRef(new Map<number, AudioBufferSourceNode[]>());
+  const scheduledChunksRef = useRef(new Map<number, AudioNode[]>());
+  const trackLevelsRef = useRef<ReturnType<typeof createTrackLevels>>(null);
+  trackLevelsRef.current ??= createTrackLevels();
+  const trackLevels = trackLevelsRef.current;
   const generationRef = useRef(0);
   const playRequestRef = useRef(0);
   const primingPlayRef = useRef(false);
@@ -54,6 +62,7 @@ export function useMixedAudioPlayback({
       audioContextRef.current = new AudioContextCtor();
       gainNodeRef.current = null;
       connectedVideoRef.current = null;
+      trackLevels.reset();
     }
     if (!gainNodeRef.current || gainNodeRef.current.context !== audioContextRef.current) {
       gainNodeRef.current = audioContextRef.current.createGain();
@@ -62,9 +71,11 @@ export function useMixedAudioPlayback({
     return audioContextRef.current;
   }
 
-  function stopNodes(nodes: AudioBufferSourceNode[]) {
+  function stopNodes(nodes: AudioNode[]) {
     for (const node of nodes) {
-      try { node.stop(); } catch { /* already stopped */ }
+      if (node instanceof AudioBufferSourceNode) {
+        try { node.stop(); } catch { /* already stopped */ }
+      }
       try { node.disconnect(); } catch { /* already disconnected */ }
     }
   }
@@ -153,8 +164,7 @@ export function useMixedAudioPlayback({
     const source = context.createBufferSource();
     source.buffer = chunk.buffer;
     source.playbackRate.value = rate;
-    source.connect(gain);
-    const nodes = [source];
+    const nodes: AudioNode[] = [source, ...trackLevels.route(context, source, gain)];
     source.onended = () => { try { source.disconnect(); } catch { /* generation cleanup won */ } };
     scheduledChunksRef.current.set(index, nodes);
     chunk.lastUsedAt = performance.now();
@@ -264,6 +274,9 @@ export function useMixedAudioPlayback({
     if (gainNodeRef.current) gainNodeRef.current.gain.value = enabled ? volume : Math.max(1, volume);
   }, [enabled, volume]);
 
+  const trackGainsKey = trackGains?.join(',') ?? '';
+  useEffect(() => { trackLevels.setGains(trackGains); }, [trackGainsKey]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !sourceUrl) return;
@@ -291,11 +304,12 @@ export function useMixedAudioPlayback({
     audioContextRef.current = null;
     gainNodeRef.current?.disconnect();
     gainNodeRef.current = null;
+    trackLevels.reset();
     connectedVideoRef.current = null;
     if (context && context.state !== 'closed') void context.close().catch(() => {});
   }, []);
 
-  return { cancelPlayRequest, clear, ensureBuffered, hasChunk: (index: number) => chunkCacheRef.current.has(index), indexForTime, playWhenReady, primingPlayRef, resetTimeline, restart, stop };
+  return { trackPeaks: trackLevels.peaks, cancelPlayRequest, clear, ensureBuffered, hasChunk: (index: number) => chunkCacheRef.current.has(index), indexForTime, playWhenReady, primingPlayRef, resetTimeline, restart, stop };
 }
 
 export type MixedAudioPlayback = ReturnType<typeof useMixedAudioPlayback>;

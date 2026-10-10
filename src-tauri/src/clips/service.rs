@@ -84,6 +84,21 @@ impl ClipService {
         })
     }
 
+    /// Records a clip's new length after its file was trimmed. `path` may be
+    /// canonical (as authorized paths are) or as stored.
+    pub fn set_trimmed_duration(&self, path: &Path, seconds: f64) -> AppResult<bool> {
+        let key = |path: &Path| path_key(&fs::canonicalize(path).unwrap_or_else(|_| path.to_owned()));
+        let wanted = key(path);
+        let seconds = seconds.max(0.0).round() as u32;
+        self.repository.update(|records| {
+            let Some(record) = records.iter_mut().find(|record| key(Path::new(&record.file_path)) == wanted) else {
+                return Ok(false);
+            };
+            record.duration_seconds = seconds;
+            Ok(true)
+        })
+    }
+
     pub fn rename_saved(&self, id: &str, requested_title: &str) -> AppResult<bool> {
         let title = requested_title.trim();
         if title.is_empty() || id.starts_with("imported:") {

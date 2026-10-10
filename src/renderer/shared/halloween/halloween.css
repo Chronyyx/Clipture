@@ -213,7 +213,7 @@
   background: var(--surface-deep);
 }
 
-:root[data-theme="halloween"] .field-transport {
+:root[data-theme="halloween"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
   --transport-face: #171325;
   --transport-key: #211c33;
   --transport-edge: #3b3357;
@@ -225,8 +225,10 @@
   --transport-highlight: rgb(255 244 220 / 4%);
   --transport-display: #0e0b16;
   --transport-display-ink: #f0a868;
-  border-radius: 12px;
+  --transport-on-marker: #1c1008;
+  --transport-shade: 3 2 8;
 }
+:root[data-theme="halloween"] .field-transport { border-radius: 12px; }
 
 /* --- Recorder: a candle flame for a tally light. --- */
 :root[data-theme="halloween"] .recorder-status {

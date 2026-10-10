@@ -26,9 +26,17 @@
   --text: #e4e4dd;
   --text-muted: #aaa99f;
   --text-subtle: #96958b;
-  --accent-soft: #30241c;
-  --accent-border: #805537;
-  --accent-text: #ffc294;
+  /* Monochrome hardware: what is on is lit white, and colour is left to
+     the red of recording. */
+  --accent: #ecece6;
+  --accent-hover: #ffffff;
+  --accent-soft: #2b2b28;
+  --accent-border: #5a5a53;
+  --accent-text: #f4f4ee;
+  --on-accent: #1a1a18;
+  --selection: #d8d8d0;
+  --selection-ring: rgb(236 236 230 / 22%);
+  --toggle-on: #ecece6;
   --primary-bg: #deded5;
   --primary-text: #20211e;
   --inset-highlight: rgb(255 255 255 / 7%);
@@ -130,6 +138,8 @@
 :root:is([data-theme="graphite"], [data-theme="light"]) .primary:hover:not(:disabled) { color: var(--primary-text); background: var(--primary-bg); filter: brightness(1.1); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .primary:active:not(:disabled) { box-shadow: inset 0 2px 4px rgb(0 0 0 / 25%); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .primary svg { color: #db5a18; }
+/* Graphite keeps one colour, the red of the record key. */
+:root[data-theme="graphite"] .primary svg { color: #e5484d; }
 :root:is([data-theme="graphite"], [data-theme="light"]) .titlebar-update-button { border: 1px solid var(--border-strong); border-radius: var(--field-radius); background: var(--surface-control); }
 
 :root:is([data-theme="graphite"], [data-theme="light"]) :is(.library-tabs, .settings-tabs) {
@@ -177,7 +187,7 @@
 
 .theme-preview.graphite .theme-preview-sidebar { background: #181817; }
 .theme-preview.graphite .theme-preview-content { background: #111110; }
-.theme-preview.graphite .theme-preview-button { background: #f07836; }
+.theme-preview.graphite .theme-preview-button { background: #ecece6; }
 .theme-preview.light .theme-preview-sidebar { background: #dfdfda; }
 .theme-preview.light .theme-preview-content { background: #f1f1ed; }
 .theme-preview.light .theme-preview-line { background: #acafa4; }

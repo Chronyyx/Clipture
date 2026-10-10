@@ -69,6 +69,10 @@ public:
     // clip so they are copied back newest-first in the background, at
     // rateMultiplier x the rate this store's footage arrives (see BackfillPace).
     void scheduleInPlaceRehome(double rateMultiplier);
+    // Drops footage no save can select any more: before pts100ns, keeping the
+    // keyframe at or before it in a keyframe-aligned store. Their leases on a
+    // saved clip end with them.
+    void discardBefore(int64_t pts100ns);
     std::vector<EncodedPacket> selectWindow(int64_t startPts100ns, int64_t endPts100ns) const;
     std::vector<EncodedPacket> snapshot() const;
     void clear();

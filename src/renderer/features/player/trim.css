@@ -1,0 +1,120 @@
+/* Trim deck: the kept part between two handles, over an inset strip. The
+   deck itself (keys, readouts, footer, saving) is edit-deck.css. */
+.field-transport .yt-pill.icon-button.active {
+  color: var(--transport-marker);
+  background: var(--transport-track);
+  box-shadow: inset 0 1px 3px rgb(var(--transport-shade) / 25%);
+}
+
+.trim-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.trim-label { margin-right: 10px; color: var(--transport-ink); font-size: 12.5px; font-weight: 600; }
+/* Room for the handles, which sit just outside the kept part. */
+.trim-length { min-width: 64px; margin-left: 10px; }
+.trim-span { color: var(--transport-muted); }
+
+.trim-track {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  border: 1px solid var(--transport-edge);
+  border-radius: 5px;
+  background: var(--transport-display);
+  box-shadow: inset 0 1px 4px rgb(var(--transport-shade) / 40%);
+  cursor: ew-resize;
+  touch-action: none;
+}
+/* The whole clip's audio behind the strip (WaveformOverview); what will be
+   cut reads dimmer. The strip's own handles take the pointer. */
+.trim-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 240ms ease;
+}
+.trim-wave.ready { opacity: 1; }
+
+/* The detail view: a few seconds around the playhead, zoomable, where the
+   kept part's edges can be dragged precisely. */
+.trim-detail { display: flex; flex-direction: column; gap: 8px; }
+.trim-detail-head { display: flex; align-items: center; gap: 8px; }
+.trim-detail-label { flex: 1; color: var(--transport-ink); font-size: 12.5px; font-weight: 600; }
+.deck-key.trim-zoom { width: 30px; min-height: 28px; padding: 0; }
+.trim-zoomview {
+  display: block;
+  width: 100%;
+  height: 96px;
+  touch-action: none;
+  overflow: hidden;
+  border: 1px solid var(--transport-edge);
+  border-radius: 5px;
+  background: var(--transport-display);
+  box-shadow: inset 0 1px 4px rgb(var(--transport-shade) / 40%);
+  opacity: 0.4;
+  transition: opacity 240ms ease;
+}
+.trim-zoomview.ready { opacity: 1; cursor: pointer; }
+
+.trim-kept,
+.trim-cut { position: absolute; top: 0; bottom: 0; }
+.trim-kept {
+  left: var(--trim-start);
+  right: calc(100% - var(--trim-end));
+  border-block: 2px solid var(--transport-region, var(--transport-marker));
+  background: color-mix(in srgb, var(--transport-region, var(--transport-marker)) 14%, transparent);
+}
+/* What will be deleted reads as struck out. */
+.trim-cut {
+  background: repeating-linear-gradient(135deg, rgb(var(--transport-shade) / 38%) 0 4px, transparent 4px 8px), rgb(var(--transport-shade) / 40%);
+}
+.trim-cut-before { left: 0; width: var(--trim-start); border-radius: 4px 0 0 4px; }
+.trim-cut-after { left: var(--trim-end); right: 0; border-radius: 0 4px 4px 0; }
+.trim-playhead {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: var(--trim-playhead);
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--transport-playhead, var(--transport-display-ink));
+  box-shadow: 0 0 0 1px rgb(var(--transport-shade) / 35%);
+  pointer-events: none;
+}
+.trim-handle {
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  width: 12px;
+  border-radius: 3px;
+  background: linear-gradient(to bottom, rgb(255 255 255 / 18%), transparent), var(--transport-marker);
+  box-shadow: 0 1px 3px rgb(var(--transport-shade) / 40%);
+  cursor: ew-resize;
+}
+.trim-handle::after {
+  content: "";
+  position: absolute;
+  inset: 11px 4px;
+  border-inline: 1px solid rgb(255 255 255 / 70%);
+}
+.trim-handle-start { left: calc(var(--trim-start) - 12px); }
+.trim-handle-end { left: var(--trim-end); }
+
+/* In the library's rail: the strip across the rail (inset for the handles),
+   the length and the keys under it. */
+.edit-rail .trim-body { gap: 14px; }
+.edit-rail .trim-row:first-child { flex-wrap: wrap; row-gap: 10px; }
+.edit-rail .trim-label { display: none; }
+.edit-rail .trim-track { flex: 1 1 100%; height: 72px; margin: 6px 12px 0; }
+.edit-rail .trim-length { margin-left: auto; }
+.edit-rail .trim-marks { flex-wrap: wrap; row-gap: 8px; }
+.edit-rail .trim-marks .deck-key { flex: 1 1 0; }
+.edit-rail .trim-span { flex-basis: 100%; text-align: center; }
+
+@media (max-width: 640px) {
+  .trim-span { display: none; }
+}

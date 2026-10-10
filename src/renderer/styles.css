@@ -22,6 +22,12 @@
 @import './features/diagnostics/recorder-status.css';
 @import './app/shell-motion.css';
 @import './features/player/transport.css';
+@import './features/player/edit-deck.css';
+@import './features/player/trim.css';
+@import './features/player/mixer.css';
+@import './shared/aluminium.css';
+@import './app/window-controls.css';
+@import './shared/aero.css';
 @import './shared/maid-cafe/maid-cafe.css';
 @import './shared/maid-cafe/mascots.css';
 @import './shared/halloween/halloween.css';

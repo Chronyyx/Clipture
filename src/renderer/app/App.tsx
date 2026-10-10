@@ -7,6 +7,8 @@ import type { ClipRecord, ClipSettings } from "../../shared/types";
 import { useCaptureActions } from "../features/capture";
 import { DiagnosticsView, RecorderStatus, useDiagnostics } from "../features/diagnostics";
 import { appVersion } from "./appVersion";
+import { WindowControls } from "./WindowControls";
+import { drawsWindowControls } from "../platform";
 import { LibraryView, useClipLibrary } from "../features/library";
 import { SettingsView, useClipPreferences } from "../features/settings";
 import { FriendsSidebar, FriendsView, InviteDialog, ShareClipDialog, friendsWaiting, useSharing } from "../features/sharing";
@@ -56,6 +58,8 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
     setFocusFriendId(friendId);
     setActiveTab("friends");
   };
+  // Light is drawn without the system frame: its own lights, its own drag strip.
+  const ownFrame = drawsWindowControls && settings?.uiTheme === "light";
   const { updateState, checkForUpdatesNow, downloadUpdate, installUpdate } = useUpdates(globalNotice);
   const updateControls = <TitlebarUpdateControls
     updateState={updateState}
@@ -80,7 +84,8 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
   return (
     <MotionConfig reducedMotion="user">
     <div className="app-shell">
-      <div className="titlebar-drag-region" aria-hidden="true" />
+      <div className="titlebar-drag-region" aria-hidden="true" data-tauri-drag-region={ownFrame || undefined} />
+      {ownFrame && <WindowControls />}
       <HalloweenAmbience />
       <aside className="sidebar">
         <div className="brand">

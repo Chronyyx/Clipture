@@ -78,7 +78,8 @@ impl MediaAdmission {
         }
     }
 
-    /// Blocks briefly for a video slot; the mixed-audio loader tolerates a
+    /// Blocks briefly for a video slot (waveforms queue there too: they are
+    /// built once per clip); the mixed-audio loader tolerates a
     /// failed chunk and retries, so audio fails fast.
     pub fn admit(&self, uri: &Uri) -> Option<RequestPermit> {
         if matches!(
@@ -168,10 +169,23 @@ pub(crate) fn handle_request(
                 Err(error) => service_error_response(&error),
             }
         }
+        Route::Waveform { session_id } => {
+            if request.method() != Method::GET && request.method() != Method::HEAD {
+                return method_not_allowed("GET, HEAD, OPTIONS");
+            }
+            if request.method() == Method::HEAD {
+                return binary_response(StatusCode::OK, "application/json", Vec::new());
+            }
+            match media.waveform(session_id, owner) {
+                Ok(bytes) => binary_response(StatusCode::OK, "application/json", bytes),
+                Err(error) => service_error_response(&error),
+            }
+        }
         Route::Audio {
             session_id,
             start_seconds,
             duration_seconds,
+            tracks,
         } => {
             if request.method() != Method::GET && request.method() != Method::HEAD {
                 return method_not_allowed("GET, HEAD, OPTIONS");
@@ -179,7 +193,7 @@ pub(crate) fn handle_request(
             if request.method() == Method::HEAD {
                 return binary_response(StatusCode::OK, "audio/wav", Vec::new());
             }
-            match media.mixed_audio_chunk(session_id, owner, start_seconds, duration_seconds) {
+            match media.mixed_audio_chunk(session_id, owner, start_seconds, duration_seconds, tracks) {
                 Ok(bytes) => binary_response(StatusCode::OK, "audio/wav", bytes),
                 Err(error) => service_error_response(&error),
             }
@@ -206,6 +220,12 @@ enum Route<'a> {
         session_id: &'a str,
         start_seconds: f64,
         duration_seconds: f64,
+        /// Every track apart instead of mixed.
+        tracks: bool,
+    },
+    /// The clip's audio as peaks, for the trim strip.
+    Waveform {
+        session_id: &'a str,
     },
 }
 
@@ -224,7 +244,10 @@ fn parse_route(uri: &Uri) -> Result<Route<'_>, &'static str> {
                 stream_id: segments[3],
             }),
             "audio" => {
-                let (start_seconds, duration_seconds) = parse_audio_query(uri.query())?;
+                let (start_seconds, duration_seconds, tracks) = parse_audio_query(uri.query())?;
+                if tracks {
+                    return Err("a friend's clip plays mixed");
+                }
                 Ok(Route::RemoteAudio {
                     stream_id: segments[3],
                     start_seconds,
@@ -240,12 +263,14 @@ fn parse_route(uri: &Uri) -> Result<Route<'_>, &'static str> {
     let session_id = segments[3];
     match segments[4] {
         "video" if uri.query().is_none() => Ok(Route::Video { session_id }),
+        "waveform" if uri.query().is_none() => Ok(Route::Waveform { session_id }),
         "audio" => {
-            let (start_seconds, duration_seconds) = parse_audio_query(uri.query())?;
+            let (start_seconds, duration_seconds, tracks) = parse_audio_query(uri.query())?;
             Ok(Route::Audio {
                 session_id,
                 start_seconds,
                 duration_seconds,
+                tracks,
             })
         }
         _ => Err("invalid media route"),
@@ -259,7 +284,7 @@ fn valid_session_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn parse_audio_query(query: Option<&str>) -> Result<(f64, f64), &'static str> {
+fn parse_audio_query(query: Option<&str>) -> Result<(f64, f64, bool), &'static str> {
     let Some(query) = query else {
         return Err("audio chunk parameters are required");
     };
@@ -268,6 +293,7 @@ fn parse_audio_query(query: Option<&str>) -> Result<(f64, f64), &'static str> {
     }
     let mut start = None;
     let mut duration = None;
+    let mut tracks = None;
     for item in query.split('&') {
         let Some((name, value)) = item.split_once('=') else {
             return Err("invalid audio chunk parameters");
@@ -281,6 +307,7 @@ fn parse_audio_query(query: Option<&str>) -> Result<(f64, f64), &'static str> {
         match name {
             "start" if start.replace(parsed).is_none() => {}
             "duration" if duration.replace(parsed).is_none() => {}
+            "tracks" if (parsed == 0.0 || parsed == 1.0) && tracks.replace(parsed == 1.0).is_none() => {}
             _ => return Err("invalid audio chunk parameters"),
         }
     }
@@ -290,7 +317,7 @@ fn parse_audio_query(query: Option<&str>) -> Result<(f64, f64), &'static str> {
     if !(0.0..=MAXIMUM_AUDIO_START_SECONDS).contains(&start) || !(0.25..=20.0).contains(&duration) {
         return Err("audio chunk parameters are out of range");
     }
-    Ok((start, duration))
+    Ok((start, duration, tracks.unwrap_or(false)))
 }
 
 fn trusted_protocol_uri(uri: &Uri) -> bool {
@@ -646,6 +673,10 @@ mod tests {
         .parse()
         .unwrap();
         assert!(matches!(parse_route(&audio), Ok(Route::Audio { .. })));
+        let waveform: Uri = format!("clipture-media://localhost/v1/session/{token}/waveform").parse().unwrap();
+        assert!(matches!(parse_route(&waveform), Ok(Route::Waveform { .. })));
+        let queried: Uri = format!("clipture-media://localhost/v1/session/{token}/waveform?x=1").parse().unwrap();
+        assert!(parse_route(&queried).is_err());
 
         let traversal: Uri = "clipture-media://localhost/v1/session/../../secret/video"
             .parse()

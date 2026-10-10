@@ -1,0 +1,250 @@
+/* Aero: Frutiger Aero as Windows 7 had it. A glass city of the future
+   under a blue sky with soap bubbles drifting over it; frosted glass panes
+   with a bright reflection across their top half; Windows 7 buttons and
+   selection highlights; and the player as dark taskbar glass. The scene
+   is a bitmap and the glass is painted over it (layered gradients), not
+   blurred, so nothing recomputes while the library scrolls or a clip
+   plays. */
+:root[data-theme="aero"] {
+  --font-ui: "Segoe UI", "Frutiger", "Myriad Pro", system-ui, sans-serif;
+  --font-display: var(--font-ui);
+  --app-bg: #cfe7f8;
+  --sidebar-bg: #d8ecfa;
+  --surface: #f5faff;
+  --surface-deep: #e6f2fb;
+  --surface-row: #eef6fd;
+  --surface-control: #ffffff;
+  --surface-hover: #e5f3fd;
+  --surface-active: #cce8fb;
+  --surface-video: #050d18;
+  --border: #b5d3ec;
+  --border-strong: #8cb4d8;
+  --text: #1e395b;
+  --text-strong: #0b2440;
+  --text-muted: #4a6584;
+  --text-subtle: #627d9a;
+  --icon: #2c5c8f;
+  --accent: #1f7fe0;
+  --accent-hover: #1468c0;
+  --accent-soft: #dcefff;
+  --accent-border: #84acdd;
+  --accent-text: #1561b0;
+  --on-accent: #ffffff;
+  --primary-bg: #1f7fe0;
+  --primary-text: #ffffff;
+  --selection: #3399ff;
+  --selection-ring: rgb(51 153 255 / 30%);
+  --toggle-on: #39b54a;
+  --scrollbar: #a9c8e4;
+  --scrollbar-hover: #7fabd6;
+  --scrollbar-active: #4f8bc9;
+  --shadow: rgb(10 50 100 / 18%);
+  --inset-highlight: rgb(255 255 255 / 90%);
+  color-scheme: light;
+
+  /* The desktop: a glass city under a deep blue sky (skyline.webp,
+     drawn by scripts/assets/render-aero-scene.cjs) with soap bubbles
+     drawn over it as vectors, both framed the same way. */
+  --aero-sky:
+    url("../../../assets/aero/bubbles.svg") center / cover no-repeat,
+    url("../../../assets/aero/skyline.webp") center / cover no-repeat,
+    #2f8fea;
+
+  /* Glass panes: a bright reflection on the upper half, a white rim. */
+  --aero-pane: linear-gradient(to bottom, rgb(255 255 255 / 94%), rgb(255 255 255 / 80%) 46%, rgb(255 255 255 / 70%) 47%, rgb(255 255 255 / 84%));
+  --aero-pane-edge: inset 0 0 0 1px rgb(255 255 255 / 85%), 0 0 0 1px rgb(20 70 130 / 30%), 0 6px 18px rgb(10 50 100 / 22%);
+  --aero-frost: linear-gradient(to bottom, rgb(255 255 255 / 74%), rgb(255 255 255 / 58%) 40%, rgb(255 255 255 / 68%));
+
+  /* Windows 7 command buttons: resting, hot, pressed. */
+  --aero-button: linear-gradient(to bottom, #f2f2f2 0%, #ebebeb 49%, #dddddd 50%, #cfcfcf 100%);
+  --aero-button-hot: linear-gradient(to bottom, #eaf6fd 0%, #d9f0fc 49%, #bee6fd 50%, #a7d9f5 100%);
+  --aero-button-down: linear-gradient(to bottom, #e5f4fc 0%, #c4e5f6 49%, #98d1ef 50%, #68b3db 100%);
+  /* The default button: glossy azure. */
+  --aero-orb: linear-gradient(to bottom, #8fd6ff 0%, #3aa3f2 46%, #0b6fd4 50%, #2b90ea 100%);
+  --aero-orb-hot: linear-gradient(to bottom, #a8e0ff 0%, #52b2f7 46%, #157ee2 50%, #3ea2f3 100%);
+  --aero-orb-down: linear-gradient(to bottom, #2b86d9 0%, #0d63bf 50%, #1f80dc 100%);
+  /* Windows 7 list selection. */
+  --aero-selected: linear-gradient(to bottom, #f2f9fe 0%, #dcf0fd 49%, #c7e6fb 50%, #d9effc 100%);
+}
+
+/* The desktop behind the glass. */
+:root[data-theme="aero"] body { background: var(--aero-sky); }
+:root[data-theme="aero"] .app-shell { background: transparent; }
+:root[data-theme="aero"] .workspace { background: transparent; }
+
+/* The navigation pane and the header: frosted glass over the sky. */
+:root[data-theme="aero"] .sidebar {
+  border-right: 1px solid rgb(255 255 255 / 80%);
+  background: var(--aero-frost);
+  box-shadow: 1px 0 0 rgb(20 70 130 / 25%);
+}
+:root[data-theme="aero"] .library-top {
+  border-bottom: 1px solid rgb(20 70 130 / 22%);
+  background: linear-gradient(to bottom, rgb(250 253 255 / 97%), rgb(226 241 252 / 96%) 50%, rgb(213 234 250 / 96%) 51%, rgb(225 240 252 / 96%));
+  box-shadow: inset 0 -1px 0 rgb(255 255 255 / 80%), 0 2px 10px rgb(10 50 100 / 12%);
+}
+:root[data-theme="aero"] :is(h1, .library-title h1) {
+  color: #1e5ba8;
+  font-weight: 300;
+  letter-spacing: -0.5px;
+}
+:root[data-theme="aero"] .library-title-icon { color: #1e5ba8; }
+
+/* Type that sits straight on the sky is white with a soft glow, the way
+   Windows 7 set captions over glass. */
+:root[data-theme="aero"] :is(.topbar, .settings-section-header, .share-header-title) :is(h1, h2, h3, p, span, small),
+:root[data-theme="aero"] :is(.share-toggle > span, .diagnostics-selected-only > span, .diagnostics-count, .diagnostics-clear) {
+  color: #ffffff;
+  text-shadow: 0 0 10px rgb(0 40 110 / 55%), 0 1px 1px rgb(0 30 80 / 45%);
+}
+:root[data-theme="aero"] .topbar h1 { font-weight: 300; }
+
+/* The settings rail is a frosted pane of its own. */
+:root[data-theme="aero"] .settings-rail {
+  align-self: start;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--aero-frost);
+  box-shadow: var(--aero-pane-edge);
+}
+:root[data-theme="aero"] .settings-rail-item { border: 1px solid transparent; border-radius: 3px; }
+:root[data-theme="aero"] .settings-rail-item:hover:not(.active) { border-color: #b8d6fb; background: linear-gradient(to bottom, #fafdff, #ebf4fd); }
+:root[data-theme="aero"] .settings-rail-item.active { border-color: #84acdd; color: var(--text-strong); background: var(--aero-selected); }
+:root[data-theme="aero"] .settings-rail-indicator { display: none; }
+
+/* Panes of glass. */
+:root[data-theme="aero"] :is(.settings-group, .panel:not(.player), .audio-source-card, .modal, .recorder-status, .library-player-sidebar, .clip-card) {
+  border: 0;
+  border-radius: 8px;
+  background: var(--aero-pane);
+  box-shadow: var(--aero-pane-edge);
+}
+:root[data-theme="aero"] .library-player-sidebar { border-radius: 0 8px 8px 0; }
+/* Panes that hold their own heading and lists get room inside the glass. */
+:root[data-theme="aero"] .settings-group.single-column { padding: 18px 20px; }
+:root[data-theme="aero"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, rgb(243 249 255 / 97%) 88%); }
+:root[data-theme="aero"] .clip-card:hover { box-shadow: inset 0 0 0 1px #ffffff, 0 0 0 1px #3c7fb1, 0 0 12px rgb(51 153 255 / 45%); }
+:root[data-theme="aero"] :is(.clip-card.active, .clip-card.selected) { box-shadow: inset 0 0 0 1px #ffffff, 0 0 0 2px #3399ff, 0 0 14px rgb(51 153 255 / 50%); }
+
+/* Command buttons. */
+:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .add-source, .titlebar-update-button, .chip, .icon-button:not(.yt-pill)) {
+  border: 1px solid #707070;
+  border-radius: 3px;
+  color: #1b1b1b;
+  background: var(--aero-button);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 75%);
+}
+:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .add-source, .titlebar-update-button, .chip, .icon-button:not(.yt-pill)):hover:not(:disabled) {
+  border-color: #3c7fb1;
+  color: #000000;
+  background: var(--aero-button-hot);
+}
+:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .add-source, .titlebar-update-button, .chip, .icon-button:not(.yt-pill)):active:not(:disabled) {
+  border-color: #2c628b;
+  background: var(--aero-button-down);
+  box-shadow: inset 0 1px 2px rgb(0 40 80 / 25%);
+}
+:root[data-theme="aero"] :is(.primary, .chip.active) {
+  border: 1px solid #0a4f9c;
+  border-radius: 4px;
+  color: #ffffff;
+  background: var(--aero-orb);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 70%), inset 0 0 0 1px rgb(255 255 255 / 25%), 0 1px 4px rgb(10 80 160 / 35%);
+  text-shadow: 0 1px 1px rgb(0 30 80 / 45%);
+}
+:root[data-theme="aero"] :is(.primary, .chip.active):hover:not(:disabled) {
+  color: #ffffff;
+  background: var(--aero-orb-hot);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 75%), 0 0 12px rgb(80 180 255 / 70%);
+  filter: none;
+}
+:root[data-theme="aero"] .primary:active:not(:disabled) { background: var(--aero-orb-down); box-shadow: inset 0 2px 4px rgb(0 30 80 / 40%); }
+:root[data-theme="aero"] .primary svg { color: #ffffff; filter: drop-shadow(0 1px 1px rgb(0 30 80 / 40%)); }
+
+/* Text boxes. */
+:root[data-theme="aero"] :is(.library-search, .diagnostics-search, input:not([type="range"], [type="checkbox"], [type="radio"]), select, textarea) {
+  border: 1px solid #abadb3;
+  border-top-color: #8e8f8f;
+  border-radius: 3px;
+  background: #ffffff;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 8%);
+}
+:root[data-theme="aero"] :is(.library-search, .diagnostics-search):focus-within,
+:root[data-theme="aero"] :is(input:not([type="range"], [type="checkbox"], [type="radio"]), select, textarea):focus { border-color: #3d7bad; box-shadow: 0 0 0 1px rgb(61 123 173 / 25%); }
+:root[data-theme="aero"] .library-search input { border: 0; background: transparent; box-shadow: none; }
+
+/* Tabs: a segmented switch with the current tab selected. */
+:root[data-theme="aero"] .library-tabs {
+  width: fit-content;
+  max-width: 100%;
+  gap: 2px;
+  margin: 0;
+  padding: 3px;
+  border: 1px solid #8cb4d8;
+  border-radius: 5px;
+  background: linear-gradient(to bottom, rgb(255 255 255 / 70%), rgb(220 238 252 / 70%));
+}
+:root[data-theme="aero"] .library-tab {
+  min-width: 0;
+  min-height: 30px;
+  padding: 6px 18px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+:root[data-theme="aero"] :is(.library-tab, .settings-tab):hover:not(.active) { border-color: #b8d6fb; background: linear-gradient(to bottom, #fafdff, #ebf4fd); }
+:root[data-theme="aero"] :is(.library-tab.active, .settings-tab.active),
+:root[data-theme="aero"] .nav.active {
+  border: 1px solid #84acdd;
+  border-radius: 3px;
+  color: var(--text-strong);
+  background: var(--aero-selected);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 80%);
+}
+:root[data-theme="aero"] .nav { border: 1px solid transparent; border-radius: 3px; }
+:root[data-theme="aero"] .nav:hover:not(.active) { border-color: #b8d6fb; background: linear-gradient(to bottom, rgb(250 253 255 / 90%), rgb(235 244 253 / 90%)); }
+:root[data-theme="aero"] .nav.active svg { color: var(--accent); }
+:root[data-theme="aero"] .nav-indicator { display: none; }
+
+/* Status readouts: dark glass with a cool glow. */
+:root[data-theme="aero"] .encoder {
+  border: 1px solid #0d2a4a;
+  border-radius: 4px;
+  color: #c4ecff;
+  background: linear-gradient(to bottom, rgb(255 255 255 / 12%), rgb(255 255 255 / 0%) 50%), #071528;
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 50%), 0 1px 0 rgb(255 255 255 / 80%);
+}
+:root[data-theme="aero"] .encoder > span { color: #7fc4f2; }
+:root[data-theme="aero"] .encoder small { color: #a9d8f7; }
+:root[data-theme="aero"] .duration-badge { border-radius: 3px; color: #ffffff; background: rgb(5 20 40 / 78%); }
+
+/* The transport and edit decks: dark taskbar glass, an aqua marker. */
+:root[data-theme="aero"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
+  --transport-face: #142c47;
+  --transport-key: #1d3a5c;
+  --transport-edge: #3a5a7c;
+  --transport-ink: #ffffff;
+  --transport-muted: #a9c3dd;
+  --transport-track: #2b4a6b;
+  --transport-fill: #bfe3ff;
+  --transport-marker: #36b4ff;
+  --transport-on-marker: #04243f;
+  --transport-highlight: rgb(255 255 255 / 18%);
+  --transport-display: #050d18;
+  --transport-display-ink: #c4ecff;
+  --transport-playhead: #ffffff;
+  --transport-region: #c4ecff;
+  --transport-shade: 0 16 36;
+}
+:root[data-theme="aero"] :is(.field-transport, .edit-deck) {
+  background: linear-gradient(to bottom, rgb(255 255 255 / 22%), rgb(255 255 255 / 8%) 48%, rgb(255 255 255 / 0%) 50%), linear-gradient(to bottom, #1d3d62, #0b1c30);
+}
+:root[data-theme="aero"] .field-transport { border-color: rgb(255 255 255 / 25%); border-radius: 6px; box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%), 0 4px 14px rgb(0 20 50 / 40%); }
+:root[data-theme="aero"] .library-player-sidebar.edit-rail { background: linear-gradient(to bottom, #1d3d62, #0b1c30); }
+
+.theme-preview.aero .theme-preview-sidebar { background: linear-gradient(to bottom, rgb(255 255 255 / 75%), rgb(255 255 255 / 45%)), #5fb0ec; }
+.theme-preview.aero .theme-preview-content { background: url("../../../assets/aero/skyline.webp") center / cover no-repeat, #2f8fea; }
+.theme-preview.aero .theme-preview-line { background: rgb(255 255 255 / 85%); }
+.theme-preview.aero .theme-preview-button { background: linear-gradient(to bottom, #8fd6ff, #3aa3f2 46%, #0b6fd4 50%, #2b90ea); }

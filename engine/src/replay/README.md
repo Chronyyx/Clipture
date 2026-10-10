@@ -7,13 +7,20 @@ no Tauri, frontend, user-library or installer dependencies belong here.
 
 - `InPlacePacketArchive.cpp`: shared video/AAC arena, bounded slot reuse, immutable
   range leases, spill-worker integration and detach-on-save. No capture-thread I/O.
+  Next-fit placement: each write goes to the first free slot at or after the
+  previous write, wrapping to the start only onto 4 MiB of room (or any slot
+  once the arena is at its cap), so a saved clip is stored in recording order
+  with one wrap per lap.
 - `InPlaceExtent.hpp`: a lease identifies its native file and protects one range.
 - `InPlaceMediaBuffer.cpp`: adopts a sealed arena, reuses same-file sample offsets,
   and appends missing/resident/foreign decoder-preroll samples one at a time. The
   path constructor and append API remain useful for standalone fixtures.
 - `ConsumedWindow.cpp`: pure visible-window selection and success-only consumption.
   Keeps necessary keyframe preroll without showing already-saved footage. Active
-  only when `saveInPlaceOverlap` is off.
+  only when `saveInPlaceOverlap` is off. After such a save the stores drop the
+  consumed footage (`ReplaySegmentStore::discardBefore`) and copy back only the
+  preroll at the top backfill pace, so the saved clip is closed at once rather
+  than when its footage expires.
 - Overlap backfill (`InPlacePacketArchive::rehome`, `ReplaySegmentStore` rehome
   queue): after an in-place save, retained packets still leased from the saved
   file are copied back into the new arena by the spill worker, only while no

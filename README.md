@@ -28,7 +28,7 @@ Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 - Viewport-aware 480x270 thumbnails with bounded extraction concurrency and compressed RAM caching.
 - Persistent separate-app audio capture that follows supported multi-process application trees and reconnects after restarts.
 - Format-aware microphone processing that respects PCM container width and valid-bit depth while feeding RNNoise its expected S16-scaled samples.
-- Native Windows Raw Input save hotkey for background and fullscreen games, plus tray operation, startup-on-login, notifications, customizable UI themes (Graphite, Light, Glitten, Milate, Maid café, Halloween, Custom), and capture-aware, signed block-delta runtime updates (ADR 0009).
+- Native Windows Raw Input save hotkey for background and fullscreen games, plus tray operation, startup-on-login, notifications, customizable UI themes (Graphite, Light, Glitten, Aero, Maid café, Halloween, Custom), and capture-aware, signed block-delta runtime updates (ADR 0009).
 
 ## Architecture
 
@@ -205,7 +205,7 @@ none are copied into the Tauri payload.
 
 Development builds can temporarily use substantial CPU, disk, and memory and should not be used to judge installed-app startup performance.
 
-The Customize settings tab includes Glitten and Milate themes. Their personal-use demo fonts are opened from their download pages rather than bundled with Clipture. After installing a font, return to Clipture or use Refresh font; the typeface is detected and applied without restarting the app.
+The Customize settings tab includes the Glitten theme. Its personal-use demo font is opened from its download page rather than bundled with Clipture. After installing it, return to Clipture or use Refresh font; the typeface is detected and applied without restarting the app.
 
 The Maid café theme is the playful one: a pastel café with a striped awning, gingham, lace and heart details, set in the bundled M PLUS Rounded 1c typeface (OFL). Four original mascots live in it: Mochi the bunny head maid perches on the recorder panel and greets you, Azuki the shy kitten peeks over the clip preview and ducks when you come close, Purin the sleepy pudding naps while clips load and at the foot of Settings, and Pip the star chick cheers in notices. They only mount under this theme and respect reduced-motion settings.
 

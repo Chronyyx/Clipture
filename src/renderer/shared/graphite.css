@@ -1,5 +1,5 @@
 /* Default theme: warm, restrained desktop surfaces inspired by the references.
-   Scoped so Light, Glitten, Milate and custom themes retain their own design. */
+   Scoped so Light, Glitten, Aero and custom themes retain their own design. */
 :root:is([data-theme="graphite"], :not([data-theme])) {
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", sans-serif;
   --app-bg: #111110;

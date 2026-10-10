@@ -10,7 +10,9 @@ pub enum UiTheme {
     Graphite,
     Light,
     Glitten,
-    Milate,
+    /// Frutiger Aero. Settings saved with the retired Milate theme load as it.
+    #[serde(alias = "milate")]
+    Aero,
     MaidCafe,
     Halloween,
     Custom,
@@ -391,6 +393,9 @@ mod tests {
         assert_eq!(serde_json::to_value(&settings).unwrap()["uiTheme"], "maid-cafe");
         let spooky: ClipSettings = serde_json::from_str(r#"{"uiTheme":"halloween"}"#).unwrap();
         assert_eq!(spooky.ui_theme, UiTheme::Halloween);
+        let retired: ClipSettings = serde_json::from_str(r#"{"uiTheme":"milate"}"#).unwrap();
+        assert_eq!(retired.ui_theme, UiTheme::Aero);
+        assert_eq!(serde_json::to_value(&retired).unwrap()["uiTheme"], "aero");
 
         let future: ClipSettings = serde_json::from_str(r#"{"uiTheme":"neon"}"#).unwrap();
         assert_eq!(future.normalize("C:\\Clips").ui_theme, UiTheme::Graphite);

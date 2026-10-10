@@ -17,6 +17,7 @@ struct CapturePipelinePolicy {
     bool raisedGpuPriority = true;
     bool highPriorityCapture = true;
     bool timedCatchUp = true;
+    bool hybridGameCapture = true;
 };
 inline const CapturePipelinePolicy& capturePipelinePolicy() {
     static const auto policy = [] {
@@ -40,6 +41,7 @@ inline const CapturePipelinePolicy& capturePipelinePolicy() {
         result.raisedGpuPriority = flag(L"CLIPTURE_RAISED_GPU_PRIORITY", result.raisedGpuPriority);
         result.highPriorityCapture = flag(L"CLIPTURE_HIGH_PRIORITY_CAPTURE", result.highPriorityCapture);
         result.timedCatchUp = flag(L"CLIPTURE_TIMED_CATCH_UP", result.timedCatchUp);
+        result.hybridGameCapture = flag(L"CLIPTURE_HYBRID_GAME_CAPTURE", result.hybridGameCapture);
         return result;
     }();
     return policy;

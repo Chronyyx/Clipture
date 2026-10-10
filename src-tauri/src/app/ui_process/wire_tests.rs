@@ -83,3 +83,9 @@ fn non_media_binary_and_unknown_message_fields_are_rejected() {
     frame.extend(json);
     assert!(read_frame(&mut Cursor::new(frame)).is_err());
 }
+
+#[test]
+fn audio_chunks_with_tracks_apart_fit_one_frame() {
+    // The player's mixer gets them through this transport, like mixed chunks.
+    assert!(crate::media::MAXIMUM_TRACK_CHUNK_BYTES + 4096 <= MAXIMUM_BINARY_BYTES);
+}

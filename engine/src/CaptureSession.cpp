@@ -386,6 +386,10 @@ bool CaptureSession::preferMonitor() {
     return impl_->startTarget(nullptr, {});
 }
 
+void CaptureSession::setHybridGameWindow(void* window) {
+    impl_->shared->hybridGameWindow.store(window, std::memory_order_release);
+}
+
 void CaptureSession::setTargetFps(int fps) {
     if (impl_ && impl_->shared) {
         impl_->shared->targetFps.store(std::clamp(fps, 1, 240), std::memory_order_relaxed);

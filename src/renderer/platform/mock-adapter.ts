@@ -68,6 +68,26 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+/** A made-up but steady waveform for the preview, in the host's format
+ * (audiowaveform JSON): talk and game noise with a few loud moments, the
+ * same for the same clip every time. */
+function sampleWaveform(seed: string, seconds: number) {
+  let state = [...seed].reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0, 7);
+  const next = () => ((state = (state * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+  const length = Math.max(1, Math.round(seconds * 100));
+  const data: number[] = [];
+  let burst = 0;
+  for (let pair = 0; pair < length; pair += 1) {
+    if (next() > 0.997) burst = 1;
+    burst *= 0.93;
+    const talk = Math.max(0, Math.sin(pair / 23) * Math.sin(pair / 151)) * 0.35;
+    const level = Math.min(1, 0.04 + talk + burst * 0.9 + next() * 0.05);
+    data.push(-Math.round(127 * level * (0.6 + next() * 0.4)), Math.round(127 * level * (0.6 + next() * 0.4)));
+  }
+  const waveform = { version: 2, channels: 1, sample_rate: 8000, samples_per_pixel: 80, bits: 8, length, data };
+  return 'data:application/json,' + encodeURIComponent(JSON.stringify(waveform));
+}
+
 export function createMockCliptureController(seed: MockCliptureState = {}): MockCliptureController {
   const unavailable = (capability: string): never => {
     if (seed.demo) throw new Error("This needs the Clipture desktop app. The web demo can't reach your PC.");
@@ -129,7 +149,14 @@ export function createMockCliptureController(seed: MockCliptureState = {}): Mock
     clipIconUrl: async () => '',
     processIconUrl: async () => '',
     clipThumbnailUrl: async (filePath) => { await delay(seed.latencyMs); return seed.thumbnails?.[filePath] ?? ''; },
-    clipPlaybackUrl: async (filePath) => ({ url: playable(filePath), mixed: false, message: 'Mock playback' }),
+    clipPlaybackUrl: async (filePath, audioTracks) => ({
+      url: playable(filePath),
+      mixed: false,
+      message: 'Mock playback',
+      waveformUrl: audioTracks.length > 0
+        ? sampleWaveform(filePath, clips.find((clip) => clip.filePath === filePath)?.durationSeconds ?? 60)
+        : undefined
+    }),
     releasePlaybackCache: async () => true,
     getClipRepairStatus: async () => ({ phase: 'idle', checked: 0, total: 0, needsRepair: 0, needsRepairBytes: 0, repaired: 0, failed: 0 }),
     checkClipLayouts: async () => unavailable('checkClipLayouts'),
@@ -147,6 +174,24 @@ export function createMockCliptureController(seed: MockCliptureState = {}): Mock
       clip.title = newTitle;
       libraryChanged.emit(clone(clip));
       return true;
+    },
+    // The preview keeps the kept length; its sample files stay as they are.
+    trimClip: async (id, startSeconds, endSeconds) => {
+      const clip = clips.find((candidate) => candidate.id === id);
+      if (!clip) throw new Error('That clip is no longer in the library.');
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      const before = 40_000_000;
+      clip.durationSeconds = Math.max(1, Math.round(endSeconds - startSeconds));
+      libraryChanged.emit(clone(clip));
+      return { durationSeconds: endSeconds - startSeconds, bytesBefore: before, bytesAfter: Math.round(before * (endSeconds - startSeconds) / 60) };
+    },
+    // The preview's sample files stay as they are.
+    mixClipAudio: async (id, gains) => {
+      if (!clips.some((candidate) => candidate.id === id)) throw new Error('That clip is no longer in the library.');
+      // About as long as re-encoding a short clip's tracks takes.
+      await new Promise((resolve) => setTimeout(resolve, 1400));
+      const before = 40_000_000;
+      return { tracksChanged: gains.filter((gain) => Math.abs(gain - 1) > 0.005).length, bytesBefore: before, bytesAfter: before + 12_000 };
     },
     getUpdateState: async () => clone(update),
     checkForUpdates: async () => clone(update),

@@ -31,6 +31,8 @@
     { "method": "revealSoundsFolder", "transport": "invoke", "channel": "sounds:reveal" },
     { "method": "revealClip", "transport": "invoke", "channel": "library:reveal" },
     { "method": "renameClip", "transport": "invoke", "channel": "library:rename" },
+    { "method": "trimClip", "transport": "invoke", "channel": "library:trim" },
+    { "method": "mixClipAudio", "transport": "invoke", "channel": "library:mixAudio" },
     { "method": "getUpdateState", "transport": "invoke", "channel": "updates:getState" },
     { "method": "checkForUpdates", "transport": "invoke", "channel": "updates:check" },
     { "method": "downloadUpdate", "transport": "invoke", "channel": "updates:download" },

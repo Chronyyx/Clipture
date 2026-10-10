@@ -59,6 +59,10 @@ add_executable(clipture_engine
   src/platform/windows/InPlaceFile.cpp
   src/RawInputHotkey.cpp
   src/Tonemapper.cpp
+  src/GameFrameProbe.cpp
+  src/GameWindowCoverage.cpp
+  src/OverlayCompositor.cpp
+  src/OverlayWindowCapture.cpp
   src/WgcCaptureBackend.cpp
   src/WgcFramePreparation.cpp
   third_party/rnnoise/src/celt_lpc.c
@@ -81,7 +85,7 @@ if(MSVC)
   target_compile_options(clipture_engine PRIVATE /W4 /permissive-)
 endif()
 
-target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 avrt mfplat mfreadwrite mfuuid winmm user32)
+target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 avrt mfplat mfreadwrite mfuuid winmm user32 dwmapi)
 
 if(BUILD_TESTING)
   add_executable(clipture_selection_trace_tests tests/FrameSelectionTraceTests.cpp)
@@ -144,7 +148,7 @@ if(BUILD_TESTING)
   set_tests_properties(clipture_gpu_frame_handoff PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
   add_executable(clipture_preparation_gpu_tests
     tests/DesktopPreparationGpuTests.cpp
-    src/DesktopFramePreparation.cpp src/WgcFramePreparation.cpp src/DesktopPointerCompositor.cpp
+    src/DesktopFramePreparation.cpp src/WgcFramePreparation.cpp src/OverlayCompositor.cpp src/DesktopPointerCompositor.cpp
     src/DesktopPointerShape.cpp src/Tonemapper.cpp src/CaptureBackend.cpp src/FrameQueue.cpp)
   target_include_directories(clipture_preparation_gpu_tests PRIVATE include src)
   target_compile_features(clipture_preparation_gpu_tests PRIVATE cxx_std_20)

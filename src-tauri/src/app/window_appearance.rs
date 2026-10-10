@@ -3,7 +3,7 @@ use crate::contracts::{ClipSettings, UiTheme};
 use tauri::{Listener, WebviewWindow, WindowEvent};
 
 pub fn watch(window: &WebviewWindow) {
-    apply_background(window, 0x111110);
+    apply_background(window, 0x111110, true);
     let themed_window = window.clone();
     let subscription = window.listen("settings://changed", move |event| {
         if let Ok(settings) = serde_json::from_str::<ClipSettings>(event.payload()) {
@@ -21,22 +21,24 @@ pub fn watch(window: &WebviewWindow) {
 pub fn apply(window: &WebviewWindow, settings: &ClipSettings) {
     #[cfg(windows)]
     {
+        // Light draws its own window controls, so it has no system frame.
+        let framed = !matches!(settings.ui_theme, UiTheme::Light);
         let background = match settings.ui_theme {
             UiTheme::Light => 0xf1f1ed,
-            UiTheme::Glitten => 0xe8decd,
-            UiTheme::Milate => 0x4b4e24,
+            UiTheme::Glitten => 0xe5dccb,
+            UiTheme::Aero => 0xd3e9f8,
             UiTheme::MaidCafe => 0xffe3ec,
             UiTheme::Halloween => 0x1b1530,
             UiTheme::Custom => parse_color(&settings.custom_main_color).unwrap_or(0x111110),
             _ => 0x111110,
         };
-        apply_background(window, background);
+        apply_background(window, background, framed);
     }
     #[cfg(not(windows))]
     let _ = (window, settings);
 }
 
-fn apply_background(window: &WebviewWindow, background: u32) {
+fn apply_background(window: &WebviewWindow, background: u32, framed: bool) {
     #[cfg(windows)]
     {
         let window = window.clone();
@@ -49,13 +51,18 @@ fn apply_background(window: &WebviewWindow, background: u32) {
                 background as u8,
                 255,
             )));
-            if let Ok(hwnd) = window.hwnd() {
-                crate::platform::windows::style_main_caption(hwnd.0, background);
+            if window.is_decorated().ok() != Some(framed) {
+                let _ = window.set_decorations(framed);
+            }
+            if framed {
+                if let Ok(hwnd) = window.hwnd() {
+                    crate::platform::windows::style_main_caption(hwnd.0, background);
+                }
             }
         });
     }
     #[cfg(not(windows))]
-    let _ = (window, background);
+    let _ = (window, background, framed);
 }
 
 #[cfg(windows)]

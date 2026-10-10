@@ -1,4 +1,7 @@
 #include "WgcCaptureBackend.hpp"
+#include "GameFrameProbe.hpp"
+#include "GameWindowCoverage.hpp"
+#include "OverlayWindowCapture.hpp"
 #include "WgcFramePreparation.hpp"
 #include "clipture/SourceTimestampGate.hpp"
 
@@ -82,6 +85,307 @@ struct WgcCaptureBackend::Impl {
     std::string failure() {
         std::lock_guard lock(failureMutex);
         return failureReason;
+    }
+
+    // Hybrid capture: a second WGC source on the detected game window. While
+    // the game covers the monitor unobstructed its frames stand in for the
+    // desktop, which the compositor stops refreshing under full GPU load
+    // (CS2 smokes). Anything else on screen switches back to the desktop.
+    struct GameSource {
+        HWND window = nullptr;
+        GraphicsCaptureItem item { nullptr };
+        Direct3D11CaptureFramePool framePool { nullptr };
+        GraphicsCaptureSession session { nullptr };
+        winrt::event_token frameArrivedToken {};
+        winrt::Windows::Graphics::SizeInt32 size {};
+        bool verified = false;  // a captured frame showed content (never black-only)
+        int64_t lastProbe100ns = 0;
+    };
+    GameSource game;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> probeStaging;
+    static constexpr int64_t kGameProbeInterval100ns = 2'500'000;  // 250 ms
+    HWND failedGameWindow = nullptr;
+    std::atomic<bool> recordGame = false;
+    int64_t coveredSince100ns = 0;
+    std::string lastCoverageReason;
+    std::shared_ptr<OverlayCompositor> overlayCompositor;
+    std::unique_ptr<OverlayWindowCapture> overlayCapture;
+    static constexpr int64_t kGameSwitchDelay100ns = 2'000'000;  // 200 ms of steady coverage
+
+    static void drain(Direct3D11CaptureFramePool const& pool) {
+        while (auto frame = pool.TryGetNextFrame()) {
+            try { frame.Close(); } catch (...) {}
+        }
+    }
+
+    void onFrames(Direct3D11CaptureFramePool const& sender, bool fromGame) {
+        try {
+            std::lock_guard callbackLock(callbackMutex);
+            if (!started.load(std::memory_order_acquire)) return;
+            if (fromGame && !game.verified) {
+                verifyGameFrames(sender);
+                return;
+            }
+            if (fromGame != recordGame.load(std::memory_order_acquire)) {
+                drain(sender);
+                return;
+            }
+
+            while (auto frame = sender.TryGetNextFrame()) {
+                ++shared->acquiredUpdates;
+
+                const auto size = frame.ContentSize();
+                if (size.Width <= 0 || size.Height <= 0) {
+                    try { frame.Close(); } catch (...) {}
+                    continue;
+                }
+                if (fromGame) {
+                    if (size.Width != game.size.Width || size.Height != game.size.Height) {
+                        try { frame.Close(); } catch (...) {}
+                        game.size = size;
+                        game.verified = false;
+                        sender.Recreate(direct3DDevice, framePoolPixelFormat, 4, size);
+                        return;
+                    }
+                    if (size.Width != framePoolSize.Width || size.Height != framePoolSize.Height) {
+                        try { frame.Close(); } catch (...) {}
+                        continue;
+                    }
+                } else if (size.Width != framePoolSize.Width || size.Height != framePoolSize.Height) {
+                    try { frame.Close(); } catch (...) {}
+                    frame = nullptr;
+                    framePoolSize = size;
+                    // Queued selected frames may still use the tone mapper.
+                    // Its bounded view cache owns old resources until retired.
+                    texturePool.reset();
+                    sourceClock.reset();
+                    sourceClockRejectionLogged = false;
+                    shared->beginEpoch();
+                    {
+                        std::lock_guard stateLock(shared->stateMutex);
+                        shared->resolution =
+                            std::to_string(size.Width) + "x" + std::to_string(size.Height);
+                    }
+                    sender.Recreate(direct3DDevice, framePoolPixelFormat, 4, size);
+                    return;
+                }
+
+                const int64_t sourceRelative100ns = frame.SystemRelativeTime().count();
+                if (!sourceClock.accept(sourceRelative100ns)) {
+                    ++shared->nonMonotonicTimestamps;
+                    if (!sourceClockRejectionLogged) {
+                        sourceClockRejectionLogged = true;
+                        std::cerr << "[capture] WGC rejected stale source timestamp=" << sourceRelative100ns
+                                  << " last=" << sourceClock.last() << '\n';
+                    }
+                    try { frame.Close(); } catch (...) {}
+                    continue;
+                }
+                ++shared->desktopPresents;
+                const int64_t sourceTimestamp100ns = mediaTimeFromSystemRelative100ns(sourceRelative100ns);
+                int64_t outputTimestamp100ns = 0;
+                if (!shared->selectFrameTimestamp(sourceTimestamp100ns, outputTimestamp100ns)) {
+                    try { frame.Close(); } catch (...) {}
+                    continue;
+                }
+                const int64_t frameProcessingStarted100ns = monotonicNow100ns();
+
+                auto access = frame.Surface().template as<
+                    ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                Microsoft::WRL::ComPtr<ID3D11Texture2D> sourceTexture;
+                if (FAILED(access->GetInterface(IID_PPV_ARGS(&sourceTexture))) || !sourceTexture) {
+                    ++shared->callbackErrors;
+                    try { frame.Close(); } catch (...) {}
+                    continue;
+                }
+
+                std::string slotError;
+                WgcOverlays overlays;
+                if (fromGame && overlayCapture) overlays = {overlayCompositor, overlayCapture->snapshot()};
+                auto prepared = prepareWgcFrame(sourceTexture.Get(), size.Width, size.Height,
+                    texturePool, tonemapper, shared, d3dDevice.Get(), d3dContext, copyProbe,
+                    capturePipelinePolicy(), slotError, std::move(overlays));
+                if (!prepared.owned.lease) {
+                    if (!slotError.empty()) {
+                        ++shared->callbackErrors;
+                        fail(slotError);
+                    }
+                    try { frame.Close(); } catch (...) {}
+                    continue;
+                }
+
+                sourceTexture.Reset();
+                try { frame.Close(); } catch (...) {}
+                frame = nullptr;
+                shared->publish(
+                    std::move(prepared.owned.texture),
+                    std::move(prepared.owned.lease),
+                    outputTimestamp100ns,
+                    size.Width,
+                    size.Height,
+                    true,
+                    false,
+                    std::move(prepared.preparation),
+                    std::move(prepared.owned.gpuReadState));
+                const int64_t frameProcessed100ns = monotonicNow100ns();
+                shared->frameProcessingLatency.record(
+                    frameProcessed100ns,
+                    frameProcessed100ns - frameProcessingStarted100ns);
+            }
+        } catch (const winrt::hresult_error& error) {
+            ++shared->callbackErrors;
+            fail("WGC frame callback failed: " + narrow(error.message().c_str()));
+        } catch (const std::exception& error) {
+            ++shared->callbackErrors;
+            fail("WGC frame callback failed: " + std::string(error.what()));
+        } catch (...) {
+            ++shared->callbackErrors;
+            fail("WGC frame callback failed with an unknown error.");
+        }
+    }
+
+    // Game frames are recorded only after one is seen with content; a window
+    // that captures black-only (hidden from capture, exclusive fullscreen)
+    // keeps the desktop. Called with callbackMutex held.
+    void verifyGameFrames(Direct3D11CaptureFramePool const& sender) {
+        winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame newest { nullptr };
+        while (auto frame = sender.TryGetNextFrame()) {
+            if (newest) { try { newest.Close(); } catch (...) {} }
+            newest = frame;
+        }
+        if (!newest) return;
+        const auto size = newest.ContentSize();
+        const int64_t now = monotonicNow100ns();
+        if (size.Width == game.size.Width && size.Height == game.size.Height &&
+            now - game.lastProbe100ns >= kGameProbeInterval100ns) {
+            game.lastProbe100ns = now;
+            auto access = newest.Surface().template as<
+                ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+            if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(&texture))) && texture &&
+                gameFrameHasContent(d3dDevice.Get(), d3dContext.Get(), texture.Get(),
+                    static_cast<UINT>(size.Width), static_cast<UINT>(size.Height), probeStaging)) {
+                game.verified = true;
+                std::cerr << "[capture] Hybrid capture verified game-window frames.\n";
+            }
+        }
+        try { newest.Close(); } catch (...) {}
+    }
+
+    void openGame(HWND gameWindow) {
+        try {
+            auto interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+            winrt::com_ptr<ABI::Windows::Graphics::Capture::IGraphicsCaptureItem> abiItem;
+            winrt::check_hresult(interop->CreateForWindow(
+                gameWindow,
+                __uuidof(ABI::Windows::Graphics::Capture::IGraphicsCaptureItem),
+                abiItem.put_void()));
+            game.item = abiItem.as<GraphicsCaptureItem>();
+            game.size = game.item.Size();
+            game.framePool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+                direct3DDevice, framePoolPixelFormat, 4, game.size);
+            game.frameArrivedToken = game.framePool.FrameArrived([this](auto const& sender, auto const&) {
+                onFrames(sender, true);
+            });
+            game.session = game.framePool.CreateCaptureSession(game.item);
+            game.session.IsCursorCaptureEnabled(true);
+            if (auto cadence = game.session.try_as<winrt::Windows::Graphics::Capture::IGraphicsCaptureSession5>()) {
+                try { cadence.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{0}); } catch (...) {}
+            }
+            try { game.session.IsBorderRequired(false); } catch (...) {}
+            game.window = gameWindow;
+            if (!overlayCompositor) {
+                auto compositor = std::make_shared<OverlayCompositor>(d3dDevice, d3dContext);
+                std::string error;
+                if (compositor->initialize(error)) overlayCompositor = std::move(compositor);
+                else std::cerr << "[capture] Overlay compositor unavailable: " << error << '\n';
+            }
+            if (!overlayCapture) {
+                overlayCapture = std::make_unique<OverlayWindowCapture>(
+                    d3dDevice, d3dContext, static_cast<IUnknown*>(winrt::get_abi(direct3DDevice)));
+            }
+            game.session.StartCapture();
+            std::cerr << "[capture] Hybrid capture watching game window " << game.size.Width << 'x'
+                      << game.size.Height << ".\n";
+        } catch (const winrt::hresult_error& error) {
+            closeGame();
+            failedGameWindow = gameWindow;
+            std::cerr << "[capture] Hybrid capture cannot capture the game window: "
+                      << hresultHex(error.code()) << '\n';
+        }
+    }
+
+    void closeGame() {
+        recordGame.store(false, std::memory_order_release);
+        if (game.framePool) {
+            try { game.framePool.FrameArrived(game.frameArrivedToken); } catch (...) {}
+        }
+        std::lock_guard callbackLock(callbackMutex);
+        if (game.session) {
+            try { game.session.Close(); } catch (...) {}
+        }
+        if (game.framePool) {
+            try { game.framePool.Close(); } catch (...) {}
+        }
+        game = {};
+        if (overlayCapture) overlayCapture->clear();
+        coveredSince100ns = 0;
+        lastCoverageReason.clear();
+    }
+
+    void setRecordGame(bool next, const std::string& reason) {
+        if (recordGame.exchange(next, std::memory_order_acq_rel) == next) return;
+        std::cerr << "[capture] Hybrid capture records "
+                  << (next ? "the game window" : "the desktop: " + reason) << ".\n";
+    }
+
+    // Runs on the backend thread every poll.
+    void updateHybrid() {
+        if (window || !capturePipelinePolicy().hybridGameCapture) return;
+        auto wanted = static_cast<HWND>(shared->hybridGameWindow.load(std::memory_order_acquire));
+        if (wanted && !IsWindow(wanted)) wanted = nullptr;
+        if (wanted != game.window) {
+            closeGame();
+            if (wanted && wanted != failedGameWindow) openGame(wanted);
+        }
+        if (!game.session) return;
+
+        auto coverage = gameWindowCoverage(game.window, output.desc.Monitor);
+        if (coverage.covers && !coverage.overlays.empty() && !overlayCompositor) {
+            coverage = { false, "overlays above game cannot be composited" };
+        }
+        if (coverage.covers && overlayCapture) {
+            MONITORINFO info { sizeof(info) };
+            GetMonitorInfoW(output.desc.Monitor, &info);
+            if (!overlayCapture->sync(coverage.overlays, info.rcMonitor)) {
+                coverage = { false, "overlay above game not captured yet" };
+            }
+        }
+        if (coverage.covers) {
+            std::lock_guard callbackLock(callbackMutex);
+            if (!game.verified) {
+                coverage = { false, "waiting for game-window frames with content" };
+            } else if (game.size.Width != framePoolSize.Width || game.size.Height != framePoolSize.Height) {
+                coverage = { false, "game window is " + std::to_string(game.size.Width) + "x" +
+                    std::to_string(game.size.Height) + ", monitor is " +
+                    std::to_string(framePoolSize.Width) + "x" + std::to_string(framePoolSize.Height) };
+            }
+        }
+        if (!coverage.covers) {
+            coveredSince100ns = 0;
+            if (coverage.reason != lastCoverageReason) {
+                lastCoverageReason = coverage.reason;
+                if (!recordGame.load(std::memory_order_acquire)) {
+                    std::cerr << "[capture] Hybrid capture stays on the desktop: " << coverage.reason << ".\n";
+                }
+            }
+            setRecordGame(false, coverage.reason);
+            return;
+        }
+        lastCoverageReason.clear();
+        const int64_t now = monotonicNow100ns();
+        if (!coveredSince100ns) coveredSince100ns = now;
+        if (now - coveredSince100ns >= kGameSwitchDelay100ns) setRecordGame(true, {});
     }
 };
 
@@ -178,115 +482,7 @@ BackendStartResult WgcCaptureBackend::start() {
             state.framePoolSize);
 
         state.frameArrivedToken = state.framePool.FrameArrived([this](auto const& sender, auto const&) {
-            auto& callbackState = *impl_;
-            try {
-                std::lock_guard callbackLock(callbackState.callbackMutex);
-                if (!callbackState.started.load(std::memory_order_acquire)) return;
-
-                while (auto frame = sender.TryGetNextFrame()) {
-                    ++callbackState.shared->acquiredUpdates;
-
-                    const auto size = frame.ContentSize();
-                    if (size.Width <= 0 || size.Height <= 0) {
-                        try { frame.Close(); } catch (...) {}
-                        continue;
-                    }
-                    if (size.Width != callbackState.framePoolSize.Width ||
-                        size.Height != callbackState.framePoolSize.Height) {
-                        try { frame.Close(); } catch (...) {}
-                        frame = nullptr;
-                        callbackState.framePoolSize = size;
-                        // Queued selected frames may still use the tone mapper.
-                        // Its bounded view cache owns old resources until retired.
-                        callbackState.texturePool.reset();
-                        callbackState.sourceClock.reset();
-                        callbackState.sourceClockRejectionLogged = false;
-                        callbackState.shared->beginEpoch();
-                        {
-                            std::lock_guard stateLock(callbackState.shared->stateMutex);
-                            callbackState.shared->resolution =
-                                std::to_string(size.Width) + "x" + std::to_string(size.Height);
-                        }
-                        sender.Recreate(
-                            callbackState.direct3DDevice,
-                            callbackState.framePoolPixelFormat,
-                            4,
-                            size);
-                        return;
-                    }
-
-                    const int64_t sourceRelative100ns = frame.SystemRelativeTime().count();
-                    if (!callbackState.sourceClock.accept(sourceRelative100ns)) {
-                        ++callbackState.shared->nonMonotonicTimestamps;
-                        if (!callbackState.sourceClockRejectionLogged) {
-                            callbackState.sourceClockRejectionLogged = true;
-                            std::cerr << "[capture] WGC rejected stale source timestamp=" << sourceRelative100ns
-                                      << " last=" << callbackState.sourceClock.last() << '\n';
-                        }
-                        try { frame.Close(); } catch (...) {}
-                        continue;
-                    }
-                    ++callbackState.shared->desktopPresents;
-                    const int64_t sourceTimestamp100ns = mediaTimeFromSystemRelative100ns(sourceRelative100ns);
-                    int64_t outputTimestamp100ns = 0;
-                    if (!callbackState.shared->selectFrameTimestamp(
-                            sourceTimestamp100ns, outputTimestamp100ns)) {
-                        try { frame.Close(); } catch (...) {}
-                        continue;
-                    }
-                    const int64_t frameProcessingStarted100ns = monotonicNow100ns();
-
-                    auto access = frame.Surface().template as<
-                        ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                    Microsoft::WRL::ComPtr<ID3D11Texture2D> sourceTexture;
-                    if (FAILED(access->GetInterface(IID_PPV_ARGS(&sourceTexture))) || !sourceTexture) {
-                        ++callbackState.shared->callbackErrors;
-                        try { frame.Close(); } catch (...) {}
-                        continue;
-                    }
-
-                    std::string slotError;
-                    auto prepared = prepareWgcFrame(sourceTexture.Get(), size.Width, size.Height,
-                        callbackState.texturePool, callbackState.tonemapper, callbackState.shared,
-                        callbackState.d3dDevice.Get(), callbackState.d3dContext, callbackState.copyProbe,
-                        capturePipelinePolicy(), slotError);
-                    if (!prepared.owned.lease) {
-                        if (!slotError.empty()) {
-                            ++callbackState.shared->callbackErrors;
-                            callbackState.fail(slotError);
-                        }
-                        try { frame.Close(); } catch (...) {}
-                        continue;
-                    }
-
-                    sourceTexture.Reset();
-                    try { frame.Close(); } catch (...) {}
-                    frame = nullptr;
-                    callbackState.shared->publish(
-                        std::move(prepared.owned.texture),
-                        std::move(prepared.owned.lease),
-                        outputTimestamp100ns,
-                        size.Width,
-                        size.Height,
-                        true,
-                        false,
-                        std::move(prepared.preparation),
-                        std::move(prepared.owned.gpuReadState));
-                    const int64_t frameProcessed100ns = monotonicNow100ns();
-                    callbackState.shared->frameProcessingLatency.record(
-                        frameProcessed100ns,
-                        frameProcessed100ns - frameProcessingStarted100ns);
-                }
-            } catch (const winrt::hresult_error& error) {
-                ++callbackState.shared->callbackErrors;
-                callbackState.fail("WGC frame callback failed: " + narrow(error.message().c_str()));
-            } catch (const std::exception& error) {
-                ++callbackState.shared->callbackErrors;
-                callbackState.fail("WGC frame callback failed: " + std::string(error.what()));
-            } catch (...) {
-                ++callbackState.shared->callbackErrors;
-                callbackState.fail("WGC frame callback failed with an unknown error.");
-            }
+            impl_->onFrames(sender, false);
         });
 
         state.session = state.framePool.CreateCaptureSession(state.item);
@@ -334,6 +530,7 @@ BackendStartResult WgcCaptureBackend::start() {
 
 BackendOutcome WgcCaptureBackend::run(std::stop_token stopToken) {
     while (!stopToken.stop_requested() && !impl_->failed.load(std::memory_order_acquire)) {
+        impl_->updateHybrid();
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
     if (stopToken.stop_requested()) return BackendOutcome::Stopped;
@@ -345,6 +542,7 @@ BackendOutcome WgcCaptureBackend::run(std::stop_token stopToken) {
 void WgcCaptureBackend::stop() {
     auto& state = *impl_;
     state.started.store(false, std::memory_order_release);
+    state.closeGame();
     if (state.framePool) {
         try {
             state.framePool.FrameArrived(state.frameArrivedToken);

@@ -12,12 +12,14 @@ use crate::{
 };
 
 use super::{
-    audio_edit_list_patches, library_input, resolve_range, ByteRange, FfmpegExecutor, FfmpegJob,
+    audio_edit_list_patches, library_input, resolve_range, ByteRange, ClipMixer, ClipTrimmer, FfmpegExecutor,
+    FfmpegJob, MixError, MixedClip, TrimError, TrimmedClip, WaveformBuilder,
     LinearView, MediaSessionRegistry, PlaybackDescriptor, PlaybackPatch, RemoteMediaSource,
     RemoteVideoChunk, ThumbnailService,
 };
 
 const MAXIMUM_AUDIO_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+const MAXIMUM_SPLIT_TRACKS: usize = 16;
 
 #[derive(Clone, Debug)]
 pub struct VideoStreamPlan {
@@ -34,6 +36,9 @@ pub struct MediaService {
     ffmpeg: Arc<dyn FfmpegExecutor>,
     thumbnails: ThumbnailService,
     remote: OnceLock<Arc<dyn RemoteMediaSource>>,
+    trimmer: Option<ClipTrimmer>,
+    mixer: Option<ClipMixer>,
+    waveforms: Option<WaveformBuilder>,
 }
 
 impl MediaService {
@@ -43,7 +48,58 @@ impl MediaService {
             thumbnails: ThumbnailService::new(ffmpeg.clone()),
             ffmpeg,
             remote: OnceLock::new(),
+            trimmer: None,
+            mixer: None,
+            waveforms: None,
         }
+    }
+
+    /// Builds clip waveforms with `ffmpeg` (its own slots, so a waveform
+    /// never holds up playback audio), using `scratch` while it works.
+    pub fn with_waveforms(mut self, scratch: PathBuf, ffmpeg: Arc<dyn FfmpegExecutor>) -> Self {
+        self.waveforms = Some(WaveformBuilder::new(scratch, ffmpeg));
+        self
+    }
+
+    /// Enables baking audio levels, with its crash journals kept in `journals`.
+    pub fn with_mix_journals(mut self, journals: PathBuf) -> Self {
+        self.mixer = Some(ClipMixer::new(journals, self.ffmpeg.clone()));
+        self
+    }
+
+    /// Completes audio mixes a crash interrupted. Call before clips are read.
+    pub fn finish_interrupted_mixes(&self) -> Vec<MixedClip> {
+        self.mixer.as_ref().map(ClipMixer::finish_interrupted).unwrap_or_default()
+    }
+
+    /// Re-encodes the clip's k-th audio track at `gains[k]` (0 silences it)
+    /// for good. Players of the clip are stopped first. Blocking.
+    pub fn mix(&self, path: &std::path::Path, gains: &[f64]) -> Result<MixedClip, MixError> {
+        let mixer = self.mixer.as_ref().ok_or(MixError::Unsupported("audio levels cannot be changed here"))?;
+        self.sessions.release_path(path);
+        mixer.mix(path, gains)
+    }
+
+    /// Enables trimming, with its crash journals kept in `journals`.
+    pub fn with_trim_journals(mut self, journals: PathBuf) -> Self {
+        self.trimmer = Some(ClipTrimmer::new(journals));
+        self
+    }
+
+    /// Completes trims a crash interrupted. Call before clips are read.
+    pub fn finish_interrupted_trims(&self) -> Vec<TrimmedClip> {
+        self.trimmer.as_ref().map(ClipTrimmer::finish_interrupted).unwrap_or_default()
+    }
+
+    /// Keeps `[start, end)` seconds of the clip at `path` and deletes the
+    /// rest of it from the file. Players of the clip are stopped first.
+    /// Blocking.
+    pub fn trim(&self, path: &std::path::Path, start: f64, end: f64) -> Result<TrimmedClip, TrimError> {
+        let trimmer = self.trimmer.as_ref().ok_or(TrimError::Unsupported("trimming is not available"))?;
+        self.sessions.release_path(path);
+        let result = trimmer.trim(path, start, end);
+        self.thumbnails.invalidate(path);
+        result
     }
 
     pub fn open_playback(
@@ -101,20 +157,40 @@ impl MediaService {
         })
     }
 
+    /// The session's audio, mixed; or with `tracks`, each track as its own
+    /// stereo pair (in `audio_track_indexes` order) for a live mixer.
     pub fn mixed_audio_chunk(
         &self,
         session_id: &str,
         owner: &str,
         start_seconds: f64,
         duration_seconds: f64,
+        tracks: bool,
     ) -> AppResult<Vec<u8>> {
         let session = self.sessions.resolve(session_id, owner)?;
-        self.mix_audio(
+        if tracks && session.selected_audio_indexes.len() > MAXIMUM_SPLIT_TRACKS {
+            return Err(AppError::Path("too many audio tracks to play apart".into()));
+        }
+        let longest = super::sessions::track_chunk_seconds(session.selected_audio_indexes.len());
+        if tracks && duration_seconds > f64::from(longest) + 0.001 {
+            return Err(AppError::Path("audio chunk is too long to hold its tracks apart".into()));
+        }
+        self.audio_chunk(
             &session.path,
             &session.selected_audio_indexes,
             start_seconds,
             duration_seconds,
+            tracks,
         )
+    }
+
+    /// The session's played tracks, mixed, as an audiowaveform JSON reply.
+    pub fn waveform(&self, session_id: &str, owner: &str) -> AppResult<Vec<u8>> {
+        let session = self.sessions.resolve(session_id, owner)?;
+        self.waveforms
+            .as_ref()
+            .ok_or_else(|| AppError::Path("waveforms are not available".into()))?
+            .build(&session.path, &session.selected_audio_indexes)
     }
 
     /// Every audio track of a friend's clip, mixed, once it has fully
@@ -132,15 +208,16 @@ impl MediaService {
             .ok_or_else(|| AppError::Path("remote media is unavailable".into()))?
             .complete_file(stream_id, owner)?;
         let indexes = super::sessions::selected_audio_indexes(&file.audio_tracks);
-        self.mix_audio(&file.path, &indexes, start_seconds, duration_seconds)
+        self.audio_chunk(&file.path, &indexes, start_seconds, duration_seconds, false)
     }
 
-    fn mix_audio(
+    fn audio_chunk(
         &self,
         path: &std::path::Path,
         indexes: &[u8],
         start_seconds: f64,
         duration_seconds: f64,
+        tracks: bool,
     ) -> AppResult<Vec<u8>> {
         if indexes.is_empty() {
             return Err(AppError::Path(
@@ -157,7 +234,9 @@ impl MediaService {
         } else {
             8.0
         };
-        let filter = mixed_audio_filter(indexes);
+        let filter = if tracks { track_audio_filter(indexes) } else { mixed_audio_filter(indexes) };
+        // Stereo out of the mix; with tracks apart, two channels per track.
+        let channels = if tracks { indexes.len() * 2 } else { 2 };
         let head = [
             OsString::from("-nostdin"),
             OsString::from("-hide_banner"),
@@ -180,7 +259,7 @@ impl MediaService {
                 OsString::from("-sn"),
                 OsString::from("-dn"),
                 OsString::from("-ac"),
-                OsString::from("2"),
+                OsString::from(channels.to_string()),
                 OsString::from("-ar"),
                 OsString::from("48000"),
                 OsString::from("-f"),
@@ -189,7 +268,7 @@ impl MediaService {
             ]),
         );
         job.timeout = Duration::from_secs(25);
-        job.maximum_stdout_bytes = MAXIMUM_AUDIO_CHUNK_BYTES;
+        job.maximum_stdout_bytes = if tracks { super::MAXIMUM_TRACK_CHUNK_BYTES + 4096 } else { MAXIMUM_AUDIO_CHUNK_BYTES };
         let output = self.ffmpeg.run(job)?;
         if output.success && !output.stdout.is_empty() {
             Ok(output.stdout)
@@ -249,6 +328,23 @@ impl MediaService {
             .get()
             .map_or(0, |remote| remote.release_owner(owner))
     }
+}
+
+/// Each track aligned like the mix, as stereo, side by side in one stream.
+fn track_audio_filter(indexes: &[u8]) -> String {
+    let aligned: Vec<_> = indexes
+        .iter()
+        .enumerate()
+        .map(|(position, index)| {
+            let label = if indexes.len() == 1 { "aout".to_owned() } else { format!("track{position}") };
+            format!("[0:a:{index}]aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo,apad[{label}]")
+        })
+        .collect();
+    if indexes.len() == 1 {
+        return aligned.join(";");
+    }
+    let inputs: String = (0..indexes.len()).map(|position| format!("[track{position}]")).collect();
+    format!("{};{}amerge=inputs={}[aout]", aligned.join(";"), inputs, indexes.len())
 }
 
 fn mixed_audio_filter(indexes: &[u8]) -> String {
@@ -324,5 +420,25 @@ mod tests {
         assert!(filter.contains("[0:a:0]aresample"));
         assert!(filter.contains("[0:a:2]aresample"));
         assert!(filter.contains("amix=inputs=2"));
+    }
+
+    #[test]
+    fn chunks_with_tracks_apart_fit_their_byte_budget() {
+        for tracks in 1..=MAXIMUM_SPLIT_TRACKS {
+            let seconds = super::super::sessions::track_chunk_seconds(tracks) as usize;
+            assert!(seconds >= 1);
+            assert!(seconds * tracks * 4 * 48_000 <= super::super::MAXIMUM_TRACK_CHUNK_BYTES, "{tracks} tracks");
+        }
+        assert_eq!(super::super::sessions::track_chunk_seconds(1), 8);
+        assert_eq!(super::super::sessions::track_chunk_seconds(5), 3);
+    }
+
+    #[test]
+    fn track_filter_keeps_each_track_apart_as_stereo() {
+        let filter = track_audio_filter(&[0, 2]);
+        assert!(filter.contains("[0:a:0]aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo,apad[track0]"));
+        assert!(filter.contains("[0:a:2]aresample"));
+        assert!(filter.ends_with("[track0][track1]amerge=inputs=2[aout]"));
+        assert!(track_audio_filter(&[1]).ends_with("apad[aout]"));
     }
 }

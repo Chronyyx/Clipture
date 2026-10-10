@@ -234,8 +234,10 @@ function normalizeSettings(settings: ClipSettings): ClipSettings {
   const nvencPreset = [1, 2, 3, 4, 5].includes(Number(settings.nvencPreset)) ? Number(settings.nvencPreset) as ClipSettings["nvencPreset"] : defaultSettings.nvencPreset;
   const validResolutionPresets = new Set(["system", "144p", "360p", "720p", "1080p", "1440p", "4k"]);
   const resolutionPreset = validResolutionPresets.has(settings.resolutionPreset) ? settings.resolutionPreset : defaultSettings.resolutionPreset;
-  const uiTheme = settings.uiTheme === "light" || settings.uiTheme === "glitten" || settings.uiTheme === "milate" || settings.uiTheme === "maid-cafe" || settings.uiTheme === "halloween" || settings.uiTheme === "custom"
-    ? settings.uiTheme
+  // Milate was retired for Aero; settings saved with it carry over.
+  const savedTheme = (settings.uiTheme as string) === "milate" ? "aero" : settings.uiTheme;
+  const uiTheme = savedTheme === "light" || savedTheme === "glitten" || savedTheme === "aero" || savedTheme === "maid-cafe" || savedTheme === "halloween" || savedTheme === "custom"
+    ? savedTheme
     : "graphite";
   const importedVideoDirectories = Array.from(new Set((settings.importedVideoDirectories ?? [])
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
@@ -2858,7 +2860,7 @@ function isLightHexColor(value: string): boolean {
 
 function windowAppearance(settings: ClipSettings): { backgroundColor: string; symbolColor: string } {
   const isGlitten = settings.uiTheme === "glitten";
-  const isMilate = settings.uiTheme === "milate";
+  const isAero = settings.uiTheme === "aero";
   const isMaidCafe = settings.uiTheme === "maid-cafe";
   const isHalloween = settings.uiTheme === "halloween";
   const isLight = settings.uiTheme === "light" || isGlitten || (settings.uiTheme === "custom" && isLightHexColor(settings.customMainColor));
@@ -2867,8 +2869,8 @@ function windowAppearance(settings: ClipSettings): { backgroundColor: string; sy
       ? "#f4f6f9"
       : isGlitten
         ? "#e8decd"
-        : isMilate
-          ? "#4b4e24"
+        : isAero
+          ? "#d3e9f8"
         : isMaidCafe
           ? "#ffe3ec"
         : isHalloween
@@ -2876,7 +2878,7 @@ function windowAppearance(settings: ClipSettings): { backgroundColor: string; sy
         : settings.uiTheme === "custom"
           ? settings.customMainColor
           : "#101114",
-    symbolColor: isGlitten ? "#4d4035" : isMilate ? "#f3e6bd" : isMaidCafe ? "#7a3f63" : isHalloween ? "#f3ead8" : isLight ? "#465265" : "#a5adba"
+    symbolColor: isGlitten ? "#4d4035" : isAero ? "#1e395b" : isMaidCafe ? "#7a3f63" : isHalloween ? "#f3ead8" : isLight ? "#465265" : "#a5adba"
   };
 }
 
@@ -3767,6 +3769,13 @@ ipcMain.handle("settings:save", (_event, settings: ClipSettings) => saveSettings
 ipcMain.handle("library:list", () => listLibraryClips());
 ipcMain.handle("library:delete", (_event, ids: string[]) => deleteClips(Array.isArray(ids) ? ids : []));
 ipcMain.handle("library:importVideoFolders", () => importVideoFolders());
+// Trimming rewrites clips in place and is implemented by the Tauri host only.
+ipcMain.handle("library:trim", () => {
+  throw new Error("Trimming needs the current Clipture app.");
+});
+ipcMain.handle("library:mixAudio", () => {
+  throw new Error("Changing audio levels needs the current Clipture app.");
+});
 ipcMain.handle("library:rename", async (_event, id: string, newTitle: string) => {
   const trimmedTitle = typeof newTitle === "string" ? newTitle.trim() : "";
   if (!trimmedTitle) return false;
@@ -3858,8 +3867,7 @@ ipcMain.handle("updates:check", () => performUpdateCheck());
 ipcMain.handle("updates:download", () => downloadAppUpdate());
 ipcMain.handle("updates:install", () => installDownloadedUpdate());
 const themeFontDownloadUrls: Record<ThemeFontId, string> = {
-  glitten: "https://www.dafont.com/glitten.font",
-  milate: "https://www.dafont.com/dh-milate.font"
+  glitten: "https://www.dafont.com/glitten.font"
 };
 
 ipcMain.handle("theme:openFontDownload", async (_event, theme: string) => {

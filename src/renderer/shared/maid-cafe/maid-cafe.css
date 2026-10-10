@@ -287,7 +287,7 @@
 :root[data-theme="maid-cafe"] .library-preview-play { color: var(--primary-bg); }
 
 /* The player transport becomes a pastel music box. */
-:root[data-theme="maid-cafe"] .field-transport {
+:root[data-theme="maid-cafe"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
   --transport-face: #fff6f9;
   --transport-key: #ffffff;
   --transport-edge: #f6c3d6;
@@ -299,6 +299,9 @@
   --transport-highlight: rgb(255 255 255 / 90%);
   --transport-display: #ffe1ec;
   --transport-display-ink: #3f1937;
+  --transport-shade: 91 42 78;
+}
+:root[data-theme="maid-cafe"] .field-transport {
   border-width: 2px;
   border-radius: 999px;
 }

@@ -1,0 +1,52 @@
+/* The window's own close / minimize / maximize lights, for themes drawn
+   without the system frame. They sit in the sidebar's top corner, above
+   the drag strip, which then spans the whole top of the window. */
+.window-controls {
+  position: absolute;
+  z-index: 10000;
+  top: 14px;
+  left: 18px;
+  display: flex;
+  gap: 9px;
+  -webkit-app-region: no-drag;
+}
+
+.window-control {
+  --light: #ff5f57;
+  --rim: #e2463f;
+  /* The glyph is a deep shade of its own light, as on macOS. */
+  --glyph: #6b0a04;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0.5px solid var(--rim);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--light) 80%, #fff), var(--light) 70%);
+  box-shadow: inset 0 -0.5px 0.5px rgb(0 0 0 / 12%);
+  cursor: default;
+}
+.window-control.minimize { --light: #febc2e; --rim: #dfa023; --glyph: #8a4f00; }
+.window-control.maximize { --light: #28c840; --rim: #1dad2b; --glyph: #035a12; }
+
+.window-control svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0;
+  fill: none;
+  stroke: var(--glyph);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+/* Solid triangles, outlined too so their points are not lost. */
+.window-control.maximize svg { fill: var(--glyph); stroke-width: 1; stroke-linejoin: round; }
+/* Each light shows its own glyph while it is pointed at. */
+.window-control:is(:hover, :focus-visible) svg { opacity: 1; }
+.window-control:active { filter: brightness(0.85); }
+.window-control:focus-visible { outline: 2px solid var(--selection-ring, rgb(0 0 0 / 30%)); outline-offset: 2px; }
+
+/* Room for the lights above the brand, and a drag strip the full width
+   (the system's buttons no longer take its right end). */
+:root[data-theme="light"] .app-shell:has(> .window-controls) .sidebar { padding-top: 44px; }
+.app-shell:has(> .window-controls) > .titlebar-drag-region { right: 0; height: 36px; }

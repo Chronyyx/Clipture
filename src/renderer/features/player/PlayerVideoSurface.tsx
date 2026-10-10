@@ -24,6 +24,10 @@ interface PlayerVideoSurfaceProps {
   setCurrentTime: Dispatch<SetStateAction<number>>;
   setDuration: Dispatch<SetStateAction<number>>;
   setVolume: Dispatch<SetStateAction<number>>;
+  onToggleTrim?: () => void;
+  trimming?: boolean;
+  onToggleMixer?: () => void;
+  mixing?: boolean;
 }
 
 export function PlayerVideoSurface({
@@ -43,7 +47,11 @@ export function PlayerVideoSurface({
   setPlaying,
   setCurrentTime,
   setDuration,
-  setVolume
+  setVolume,
+  onToggleTrim,
+  trimming,
+  onToggleMixer,
+  mixing
 }: PlayerVideoSurfaceProps) {
   useLayoutEffect(() => {
     // Capture the element: React clears object refs before passive cleanup.
@@ -159,6 +167,10 @@ export function PlayerVideoSurface({
         onTogglePlayback={interactions.togglePlayback}
         onToggleFullscreen={interactions.toggleFullscreen}
         onVolumeChange={setVolume}
+        onToggleTrim={onToggleTrim}
+        trimming={trimming}
+        onToggleMixer={onToggleMixer}
+        mixing={mixing}
       />
     </div>
   );

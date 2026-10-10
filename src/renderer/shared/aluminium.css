@@ -1,0 +1,252 @@
+/* Machined hardware, in two finishes. Light is bead-blasted aluminium;
+   Glitten is the same build in champagne anodising, keeping its editorial
+   type and its library layout. Surfaces carry a fine, even speckle (Perlin
+   noise at a high frequency, drawn once per tile, no runtime filter) under
+   soft studio light, edges are machined (a lit top, a shaded bottom), and
+   readouts are black OLED. Each finish sets the tokens; the rules after
+   them are shared. */
+:root[data-theme="light"] {
+  --app-bg: #d8d8d5;
+  --sidebar-bg: #cdcdca;
+  --surface: #e1e1de;
+  --surface-deep: #d0d0cd;
+  --surface-row: #dcdcd9;
+  --surface-control: #e7e7e4;
+  --surface-hover: #d3d3d0;
+  --surface-active: #c9c9c6;
+  --border: #bcbcb8;
+  --border-strong: #a2a29e;
+  --text: #2a2a29;
+  --text-strong: #121212;
+  --text-muted: #5c5c59;
+  --text-subtle: #6e6e6a;
+  --icon: #464644;
+  /* Marks are printed ink, as on the hardware; orange is kept for record. */
+  --accent: #222221;
+  --accent-hover: #000000;
+  --accent-soft: #cacac7;
+  --accent-border: #8c8c88;
+  --accent-text: #1a1a19;
+  --on-accent: #f1f1ee;
+  --selection: #2a2a29;
+  --selection-ring: rgb(0 0 0 / 16%);
+  --toggle-on: #2a2a29;
+  --primary-bg: #e9e9e6;
+  --primary-text: #1b1b1a;
+  --shadow: rgb(40 40 36 / 16%);
+  --inset-highlight: rgb(255 255 255 / 75%);
+  --field-display: #0e0e0e;
+  --field-display-ink: #f0f0ec;
+  --record: #ff5a14;
+  /* Bead-blast: a fine speckle with no direction, felt more than seen. */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.25' numOctaves='2' seed='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.16'/%3E%3C/svg%3E");
+  /* Studio light: a broad soft key from the upper left, falling off to
+     a cooler shade at the far edge. */
+  --sheen: radial-gradient(ellipse 90% 70% at 25% -10%, rgb(255 255 255 / 55%), rgb(255 255 255 / 0%) 70%), linear-gradient(to bottom right, rgb(255 255 255 / 0%) 55%, rgb(60 64 70 / 7%));
+  /* A machined edge: lit along the top, shaded along the bottom. */
+  --machined: inset 0 1px 0 rgb(255 255 255 / 80%), inset 0 -1px 0 rgb(0 0 0 / 7%), 0 1px 2px rgb(40 40 36 / 14%);
+  --plate-light: rgb(255 255 255 / 42%);
+  /* A milled key cap, resting, lit and pressed; and the ink-filled key. */
+  --key: linear-gradient(to bottom, #f2f2ef, #dcdcd9);
+  --key-lit: linear-gradient(to bottom, #f7f7f5, #e2e2df);
+  --key-pressed: linear-gradient(to bottom, #d2d2cf, #dededb);
+  --key-ink: linear-gradient(to bottom, #3a3a38, #1f1f1e);
+  --display-edge: #2a2a28;
+  --display-label: #9a9a96;
+  --display-small: #b8b8b4;
+}
+
+/* Glitten: champagne anodising; its sienna stays the mark colour. */
+:root[data-theme="glitten"] {
+  --app-bg: #e5dccb;
+  --sidebar-bg: #d8cbb3;
+  --surface: #efe7d8;
+  --surface-deep: #ddd1bc;
+  --surface-row: #eae1d0;
+  --surface-control: #f5efe3;
+  --surface-hover: #e3d7c2;
+  --surface-active: #d9cab1;
+  --border: #c4b298;
+  --border-strong: #a8937a;
+  --primary-bg: #f5efe3;
+  --primary-text: #2b231d;
+  --shadow: rgb(61 45 31 / 16%);
+  --inset-highlight: rgb(255 252 245 / 80%);
+  --field-display: #14100d;
+  --field-display-ink: #f6ecdc;
+  --record: #b8592a;
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.25' numOctaves='2' seed='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.16'/%3E%3C/svg%3E");
+  --sheen: radial-gradient(ellipse 90% 70% at 25% -10%, rgb(255 251 242 / 60%), rgb(255 251 242 / 0%) 70%), linear-gradient(to bottom right, rgb(255 255 255 / 0%) 55%, rgb(96 64 34 / 7%));
+  --machined: inset 0 1px 0 rgb(255 252 245 / 85%), inset 0 -1px 0 rgb(61 45 31 / 9%), 0 1px 2px rgb(61 45 31 / 16%);
+  --plate-light: rgb(255 251 242 / 45%);
+  --key: linear-gradient(to bottom, #fbf6ee, #e7dcc9);
+  --key-lit: linear-gradient(to bottom, #fffaf3, #ede3d2);
+  --key-pressed: linear-gradient(to bottom, #ddd0bb, #e8dece);
+  --key-ink: linear-gradient(to bottom, #b46a42, #92502d);
+  --display-edge: #3a2e24;
+  --display-label: #a8998a;
+  --display-small: #c4b5a5;
+}
+
+/* The shell's plates. */
+:root:is([data-theme="light"], [data-theme="glitten"]) body,
+:root:is([data-theme="light"], [data-theme="glitten"]) .workspace,
+:root:is([data-theme="light"], [data-theme="glitten"]) .library-top {
+  background: var(--sheen), var(--grain), var(--app-bg);
+  background-blend-mode: normal, normal, overlay, normal;
+}
+:root:is([data-theme="light"], [data-theme="glitten"]) .sidebar {
+  border-right: 1px solid var(--border-strong);
+  background: var(--grain), var(--sidebar-bg);
+  background-blend-mode: overlay, normal;
+  box-shadow: inset -1px 0 0 rgb(255 255 255 / 55%);
+}
+:root:is([data-theme="light"], [data-theme="glitten"]) .library-top { border-bottom-color: var(--border-strong); box-shadow: 0 1px 0 rgb(255 255 255 / 60%); }
+
+/* Panels are separate plates fixed to the face. */
+:root:is([data-theme="light"], [data-theme="glitten"]) :is(.settings-group, .panel:not(.player), .audio-source-card, .modal, .recorder-status, .library-player-sidebar) {
+  border-color: var(--border-strong);
+  background: radial-gradient(ellipse 120% 90% at 20% 0, var(--plate-light), transparent 65%), var(--grain), var(--surface);
+  background-blend-mode: normal, overlay, normal;
+  box-shadow: var(--machined);
+}
+:root:is([data-theme="light"], [data-theme="glitten"]) .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, var(--surface) 88%); }
+
+/* Keys: a milled cap, lit from above, pressed into the face when held. */
+:root:is([data-theme="light"], [data-theme="glitten"]) :is(.primary, .secondary-button, .keybind-button, .add-source, .titlebar-update-button, .chip, .icon-button:not(.yt-pill)) {
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  background: var(--key);
+  box-shadow: var(--machined);
+}
+:root:is([data-theme="light"], [data-theme="glitten"]) :is(.primary, .secondary-button, .keybind-button, .add-source, .titlebar-update-button, .chip, .icon-button:not(.yt-pill)):hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--key-lit);
+  filter: none;
+}
+:root:is([data-theme="light"], [data-theme="glitten"]) :is(.primary, .secondary-button, .keybind-button, .add-source, .titlebar-update-button, .chip, .icon-button:not(.yt-pill)):active:not(:disabled) {
+  background: var(--key-pressed);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 22%);
+}
+:root:is([data-theme="light"], [data-theme="glitten"]) .primary { color: var(--primary-text); font-weight: 600; }
+:root:is([data-theme="light"], [data-theme="glitten"]) .primary svg { color: var(--record); }
+:root:is([data-theme="light"], [data-theme="glitten"]) .chip.active {
+  border-color: var(--accent);
+  color: var(--on-accent);
+  background: var(--key-ink);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 14%), 0 1px 2px rgb(0 0 0 / 25%);
+}
+
+/* Milled recesses: the tab switch, search and inputs. */
+:root:is([data-theme="light"], [data-theme="glitten"]) :is(.library-tabs, .settings-tabs) {
+  border-color: var(--border-strong);
+  background: var(--surface-deep);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 14%), 0 1px 0 rgb(255 255 255 / 70%);
+}
+/* Glitten's tabs become the same rounded switch as Light's. */
+:root[data-theme="glitten"] .library-tabs {
+  width: fit-content;
+  max-width: 100%;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+}
+:root[data-theme="glitten"] .library-tab {
+  min-height: 30px;
+  padding: 6px 18px;
+  border: 0;
+  border-radius: 4px;
+}
+:root[data-theme="glitten"] .library-search { border: 1px solid var(--border-strong); border-radius: 6px; padding: 0 10px; }
+:root[data-theme="glitten"] .library-search input,
+:root[data-theme="glitten"] .library-search input:not([type="range"]) { min-height: 34px; }
+:root:is([data-theme="light"], [data-theme="glitten"]) :is(.library-search, .diagnostics-search, input:not([type="range"], [type="checkbox"], [type="radio"]), select, textarea) {
+  border-color: var(--border-strong);
+  background: var(--surface-deep);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 14%), 0 1px 0 rgb(255 255 255 / 70%);
+}
+:root:is([data-theme="light"], [data-theme="glitten"]) .library-search input { background: transparent; box-shadow: none; }
+:root:is([data-theme="light"], [data-theme="glitten"]) :is(.library-tab.active, .settings-tab.active) {
+  background: var(--key);
+  box-shadow: var(--machined), inset 0 -2px 0 var(--accent);
+}
+
+/* The active page is lit like a key, its mark printed in ink. */
+:root:is([data-theme="light"], [data-theme="glitten"]) .nav.active {
+  border-color: var(--border-strong);
+  background: var(--key);
+  box-shadow: var(--machined), inset 3px 0 0 var(--accent);
+}
+
+/* Light's clips sit in the face like inlays (Glitten keeps its
+   editorial cards). */
+:root[data-theme="light"] .clip-card {
+  border-color: var(--border);
+  background: linear-gradient(to bottom, rgb(255 255 255 / 35%), transparent), var(--surface);
+  box-shadow: var(--machined);
+}
+:root[data-theme="light"] .clip-card:hover { background: linear-gradient(to bottom, rgb(255 255 255 / 50%), transparent), var(--surface); }
+:root[data-theme="light"] :is(.clip-card.active, .clip-card.selected) { border-color: var(--accent); box-shadow: var(--machined), 0 0 0 1px var(--accent); }
+:root[data-theme="light"] .clip-rail-item.active { background: var(--surface-active); box-shadow: inset 0 1px 2px rgb(0 0 0 / 12%); }
+
+/* Readouts are OLED: black glass, white type. */
+:root:is([data-theme="light"], [data-theme="glitten"]) .encoder {
+  border-color: var(--display-edge);
+  color: var(--field-display-ink);
+  background: var(--field-display);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 60%), 0 1px 0 rgb(255 255 255 / 70%);
+}
+:root:is([data-theme="light"], [data-theme="glitten"]) .encoder > span { color: var(--display-label); }
+:root:is([data-theme="light"], [data-theme="glitten"]) .encoder small { color: var(--display-small); }
+
+/* The transport and edit decks: an aluminium face, OLED displays, an
+   orange marker, the playhead lit white on the display. */
+:root[data-theme="light"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
+  --transport-face: #dededb;
+  --transport-key: #e9e9e6;
+  --transport-edge: #a6a6a2;
+  --transport-ink: #222221;
+  --transport-muted: #5b5b58;
+  --transport-track: #b6b6b2;
+  --transport-fill: #2a2a29;
+  --transport-marker: #ff5a14;
+  --transport-on-marker: #ffffff;
+  --transport-highlight: rgb(255 255 255 / 80%);
+  --transport-display: #0e0e0e;
+  --transport-display-ink: #f0f0ec;
+  --transport-playhead: #ffffff;
+  /* On the OLED the kept part is lit white; the main key is printed ink. */
+  --transport-region: #f0f0ec;
+  --transport-action: #222221;
+  --transport-on-action: #f1f1ee;
+  --transport-shade: 40 40 36;
+}
+/* Glitten's deck: champagne face, OLED displays, its sienna marker. */
+:root[data-theme="glitten"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
+  --transport-face: #ebe2d2;
+  --transport-key: #f6efe3;
+  --transport-edge: #b09d83;
+  --transport-ink: #352b23;
+  --transport-muted: #706356;
+  --transport-track: #cdbb9f;
+  --transport-fill: #3a2e24;
+  --transport-marker: #b8592a;
+  --transport-on-marker: #fffaf2;
+  --transport-highlight: rgb(255 252 245 / 80%);
+  --transport-display: #14100d;
+  --transport-display-ink: #f6ecdc;
+  --transport-playhead: #ffffff;
+  --transport-region: #f6ecdc;
+  --transport-shade: 61 45 31;
+}
+:root:is([data-theme="light"], [data-theme="glitten"]) :is(.field-transport, .edit-deck) {
+  background: linear-gradient(to bottom, rgb(255 255 255 / 45%), transparent 40px), var(--grain), var(--transport-face);
+  background-blend-mode: normal, overlay, normal;
+}
+:root:is([data-theme="light"], [data-theme="glitten"]) .edit-rail .deck-footer { border-top-color: var(--transport-edge); }
+
+.theme-preview.light .theme-preview-sidebar { background: #cdcdca; }
+.theme-preview.light .theme-preview-content { background: linear-gradient(to bottom, #e6e6e3, #d8d8d5); }
+.theme-preview.light .theme-preview-line { background: #a2a29e; }
+.theme-preview.light .theme-preview-button { background: #ff5a14; }

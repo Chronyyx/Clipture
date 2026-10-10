@@ -1,4 +1,4 @@
-import { Check, ExternalLink, Feather, Ghost, Heart, Leaf, Moon, Palette, RefreshCw, Sun } from 'lucide-react';
+import { Check, Droplets, ExternalLink, Feather, Ghost, Heart, Moon, Palette, RefreshCw, Sun } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { ClipSettings, ThemeFontId } from '../../../../shared/types';
@@ -17,7 +17,7 @@ const themes = [
   { id: 'graphite', label: 'Graphite', Icon: Moon },
   { id: 'light', label: 'Light', Icon: Sun },
   { id: 'glitten', label: 'Glitten', Icon: Feather },
-  { id: 'milate', label: 'Milate', Icon: Leaf },
+  { id: 'aero', label: 'Aero', Icon: Droplets },
   { id: 'maid-cafe', label: 'Maid café', Icon: Heart },
   { id: 'halloween', label: 'Halloween', Icon: Ghost },
   { id: 'custom', label: 'Custom', Icon: Palette }
@@ -27,10 +27,8 @@ export function CustomizeSettings({ settings, onChange }: CustomizeSettingsProps
   const [mainColor, setMainColor] = useState(settings.customMainColor);
   const [accentColor, setAccentColor] = useState(settings.customAccentColor);
   const [themeFontAvailable, setThemeFontAvailable] = useState<boolean>();
-  const selectedThemeFont: ThemeFontId | undefined = settings.uiTheme === 'glitten' || settings.uiTheme === 'milate'
-    ? settings.uiTheme
-    : undefined;
-  const selectedThemeFontLabel = selectedThemeFont === 'glitten' ? 'Glitten' : 'Milate';
+  const selectedThemeFont: ThemeFontId | undefined = settings.uiTheme === 'glitten' ? settings.uiTheme : undefined;
+  const selectedThemeFontLabel = 'Glitten';
 
   useEffect(() => setMainColor(settings.customMainColor), [settings.customMainColor]);
   useEffect(() => setAccentColor(settings.customAccentColor), [settings.customAccentColor]);

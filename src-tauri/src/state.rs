@@ -73,7 +73,24 @@ impl AppState {
             })
             .expect("the built-in media endpoint must be valid"),
         );
-        let media = Arc::new(MediaService::new(sessions, ffmpeg.clone()));
+        let media = Arc::new(
+            MediaService::new(sessions, ffmpeg.clone())
+                .with_trim_journals(paths.data_dir.join("trims"))
+                .with_mix_journals(paths.data_dir.join("mixes"))
+                .with_waveforms(
+                    paths.data_dir.join("waveforms"),
+                    // A clip's tracks decode side by side.
+                    Arc::new(CommandFfmpeg::with_concurrency(resolve_ffmpeg_path(&paths), Arc::new(AlwaysReady), 4)),
+                ),
+        );
+        // So does an audio mix (the clip's length and records do not change).
+        let _ = media.finish_interrupted_mixes();
+        // A trim cut short by a crash finishes before anything reads clips.
+        for trimmed in media.finish_interrupted_trims() {
+            if let Err(error) = clips.set_trimmed_duration(&trimmed.path, trimmed.duration_seconds) {
+                tracing::warn!(%error, "could not record a finished trim");
+            }
+        }
         // Its own single FFmpeg slot: a long remux must never hold the slots
         // playback audio and thumbnails use.
         let clip_repair = Arc::new(ClipLayoutRepair::new(Arc::new(CommandFfmpeg::with_concurrency(

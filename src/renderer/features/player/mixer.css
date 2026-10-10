@@ -1,0 +1,139 @@
+/* Mixer deck: one channel per track. The fader moves in decibels with the
+   original level at the centre notch; a live meter runs under it. The deck
+   itself (keys, readouts, footer, saving) is edit-deck.css. */
+.mixer-tracks.deck-body { gap: 0; }
+
+.mixer-track {
+  --thumb: 14px;
+  display: grid;
+  grid-template-columns: auto minmax(72px, 136px) minmax(0, 1fr) 62px;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 3px 2px;
+  border-bottom: 1px solid rgb(var(--transport-shade) / 22%);
+  box-shadow: 0 1px 0 var(--transport-highlight);
+}
+.mixer-track:last-child { border-bottom: 0; box-shadow: none; }
+
+.deck-key.mixer-mute { width: 32px; min-height: 30px; padding: 0; }
+
+.mixer-name {
+  overflow: hidden;
+  color: var(--transport-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition: color 120ms ease;
+}
+.mixer-track.muted .mixer-name { color: var(--transport-muted); }
+
+/* The fader slot: etched marks at 25%, 50%, 200% and 400% of loudness (each
+   quarter of travel), the centre one the original level. */
+.mixer-strip { position: relative; height: 34px; min-width: 0; }
+.mixer-strip::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: calc(var(--thumb) / 2);
+  right: calc(var(--thumb) / 2);
+  height: 5px;
+  pointer-events: none;
+  opacity: 0.7;
+  background:
+    linear-gradient(var(--transport-marker), var(--transport-marker)) 50% 0 / 2px 100% no-repeat,
+    repeating-linear-gradient(to right, var(--transport-muted) 0 1px, transparent 1px 25%) 0 0 / calc(100% + 1px) 60% no-repeat;
+}
+
+.mixer-fader {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 34px;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+.mixer-fader:disabled { cursor: default; }
+/* The slot, filled from the original level to the fader: boost or cut. */
+.mixer-fader::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background:
+    linear-gradient(to right,
+      transparent min(50%, calc(var(--fader) * 100%)),
+      color-mix(in srgb, var(--transport-fill) 55%, transparent) min(50%, calc(var(--fader) * 100%)) max(50%, calc(var(--fader) * 100%)),
+      transparent max(50%, calc(var(--fader) * 100%))),
+    var(--transport-display);
+  box-shadow: inset 0 1px 2px rgb(var(--transport-shade) / 50%), 0 1px 0 var(--transport-highlight);
+}
+/* A console fader cap: lit edge, a centre line in the transport's orange. */
+.mixer-fader::-webkit-slider-thumb {
+  width: var(--thumb);
+  height: 24px;
+  margin-top: -9px;
+  border: 1px solid color-mix(in srgb, var(--transport-edge) 60%, #000);
+  border-radius: 3px;
+  background:
+    linear-gradient(var(--transport-marker), var(--transport-marker)) 50% 50% / 2px 60% no-repeat,
+    linear-gradient(to bottom, var(--transport-highlight), transparent 45%, rgb(var(--transport-shade) / 20%)),
+    var(--transport-key);
+  box-shadow: 0 2px 4px rgb(var(--transport-shade) / 45%);
+  appearance: none;
+  -webkit-appearance: none;
+  transition: transform 80ms ease;
+}
+.mixer-fader:active:not(:disabled)::-webkit-slider-thumb { transform: scaleY(1.06); }
+.mixer-track.muted .mixer-fader::-webkit-slider-thumb { background: var(--transport-key); }
+.mixer-track.muted .mixer-fader::-webkit-slider-runnable-track { background: var(--transport-display); }
+.mixer-fader::-moz-range-track { height: 6px; border-radius: 3px; background: var(--transport-display); }
+.mixer-fader::-moz-range-thumb { width: var(--thumb); height: 24px; border-radius: 3px; background: var(--transport-key); }
+.mixer-fader:focus-visible { outline: none; }
+.mixer-fader:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--transport-marker); outline-offset: 2px; }
+
+/* Live peak meter under the slot: neutral, amber near full scale, orange
+   past it (the saved track would clip there). Dark until audio plays. */
+.mixer-meter {
+  position: absolute;
+  bottom: 3px;
+  left: calc(var(--thumb) / 2);
+  right: calc(var(--thumb) / 2);
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--transport-display) 70%, transparent);
+  overflow: hidden;
+  pointer-events: none;
+}
+.mixer-meter::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to right, var(--transport-fill) 0 80%, #d9a441 80% 94%, var(--transport-marker) 94%);
+  clip-path: inset(0 calc((1 - var(--meter, 0)) * 100%) 0 0);
+}
+.mixer-track.muted .mixer-meter::after { opacity: 0.35; }
+.mixer-track[data-clipping] .mixer-value { color: var(--transport-marker); border-color: var(--transport-marker); }
+
+.mixer-value { min-width: 0; }
+
+/* Stacked: name and level on top, the fader across the full width under
+   them. In the library's rail, and on narrow windows. */
+.edit-rail .mixer-track {
+  grid-template-columns: auto minmax(0, 1fr) 58px;
+  grid-template-areas: "mute name value" "strip strip strip";
+  row-gap: 2px;
+  padding: 8px 0 6px;
+}
+.edit-rail .mixer-mute { grid-area: mute; }
+.edit-rail .mixer-name { grid-area: name; }
+.edit-rail .mixer-value { grid-area: value; }
+.edit-rail .mixer-strip { grid-area: strip; }
+
+@media (max-width: 640px) {
+  .mixer-track { grid-template-columns: auto minmax(0, 1fr) 58px; }
+  .mixer-strip { grid-column: 1 / -1; grid-row: 2; }
+}

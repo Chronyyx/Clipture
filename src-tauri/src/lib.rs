@@ -100,6 +100,8 @@ pub fn run() {
             commands::delete_clips,
             commands::import_video_folders,
             commands::rename_clip,
+            commands::trim_clip,
+            commands::mix_clip_audio,
             commands::clip_url,
             commands::clip_icon_url,
             commands::process_icon_url,

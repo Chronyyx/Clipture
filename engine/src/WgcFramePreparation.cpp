@@ -5,7 +5,7 @@ PreparedWgcFrame prepareWgcFrame(ID3D11Texture2D* source, UINT width, UINT heigh
     CaptureTexturePool& pool, std::shared_ptr<Tonemapper> tone,
     std::shared_ptr<CaptureSharedState> stats, ID3D11Device* device,
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context, GpuStageProbe& copyProbe,
-    const CapturePipelinePolicy& policy, std::string& error) {
+    const CapturePipelinePolicy& policy, std::string& error, WgcOverlays overlays) {
     if (!source || !width || !height) { error = "WGC source is empty."; return {}; }
     D3D11_TEXTURE2D_DESC desc {};
     source->GetDesc(&desc);
@@ -28,8 +28,23 @@ PreparedWgcFrame prepareWgcFrame(ID3D11Texture2D* source, UINT width, UINT heigh
     if (hdr) {
         preparation = deferDesktopPreparation(owned, std::move(tone), nullptr, {},
             std::move(stats), context, width, height);
-        if (!policy.deferPreparation && !preparation->prepare(error)) return {};
     }
+    if (overlays.compositor && !overlays.layers.empty()) {
+        // Overlays are SDR UI; draw them after tone mapping, as on screen.
+        preparation = std::make_shared<DeferredFramePreparation>(
+            [base = std::move(preparation), compositor = std::move(overlays.compositor),
+             layers = std::move(overlays.layers), output = owned.renderTargetView,
+             context, width, height](std::string& failure) {
+                if (base && !base->prepare(failure)) return false;
+                Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
+                context.As(&multithread);
+                if (multithread) multithread->Enter();
+                const bool ok = compositor->composite(layers, output.Get(), width, height, failure);
+                if (multithread) multithread->Leave();
+                return ok;
+            });
+    }
+    if (preparation && !policy.deferPreparation && !preparation->prepare(error)) return {};
     return {std::move(owned), std::move(preparation)};
 }
 }
