@@ -2,6 +2,7 @@ import { useEffect, useState, type RefObject } from 'react';
 import type { ClipRecord } from '../../../shared/types';
 import { clipture, userMessage } from '../../platform';
 import { formatDuration } from '../../shared/clips/clipMetadata';
+import { seekCoalesced } from './seekCoalesced';
 import { useTrimLoop, type TrimRange } from './TrimEditor';
 
 /** Only Clipture's own single-file clips are rewritten; imported videos
@@ -42,7 +43,7 @@ export function useClipTrim(clip: ClipRecord, videoRef: RefObject<HTMLVideoEleme
     change: setRange,
     seek: (seconds: number) => {
       const video = videoRef.current;
-      if (video) video.currentTime = seconds;
+      if (video) seekCoalesced(video, seconds);
     },
     apply: async () => {
       if (!range) return;

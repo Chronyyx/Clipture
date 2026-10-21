@@ -34,6 +34,9 @@ during playback, and hidden-document playback pauses without automatic resume.
 
 The performance-analysis pass verified the one-UI-process ownership and added
 `node scripts/migration/test-player-lifetime.cjs` for resource lifetime regressions.
+While trimming, each waveform view keeps one frame loop that runs only during
+playback, playhead frames copy a cached still layer, and handle drags keep one
+seek in flight; `node scripts/migration/test-trim-playback.cjs` covers these.
 These tests establish behavior, not a measured RAM saving on the installed app.
 Do not suspend the visible Settings WebView or lower the capture engine's priority
 to address UI memory. Closing the application window still destroys the UI worker.

@@ -2,6 +2,7 @@ import { LoaderCircle, Minus, Plus, Scissors, X } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import { formatDuration } from '../../shared/clips/clipMetadata';
 import type { ClipWaveform } from './clipWaveform';
+import { followPlayback } from './followPlayback';
 import { WaveformOverview } from './WaveformOverview';
 import { WaveformZoom, ZOOM_STEPS } from './WaveformZoom';
 
@@ -24,7 +25,6 @@ const precise = (seconds: number) => {
 export function TrimEditor({
   video,
   duration,
-  currentTime,
   range,
   waveform,
   busy,
@@ -37,7 +37,6 @@ export function TrimEditor({
   /** The player's video: the waveform views seek it and follow it. */
   video: RefObject<HTMLVideoElement | null>;
   duration: number;
-  currentTime: number;
   range: TrimRange;
   /** The clip's audio, drawn behind the strip and in the detail view. */
   waveform?: ClipWaveform;
@@ -68,6 +67,18 @@ export function TrimEditor({
   useEffect(() => { if (unchanged) setConfirming(false); }, [unchanged]);
 
   const percent = (seconds: number) => (duration > 0 ? (seconds / duration) * 100 : 0);
+  // The strip's playhead follows the video every frame, not at React's pace.
+  useEffect(() => {
+    const element = video.current;
+    const strip = track.current;
+    if (!element || !strip) return;
+    const place = () => strip.style.setProperty('--trim-playhead', `${percent(element.currentTime)}%`);
+    place();
+    return followPlayback(element, place);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [video, duration]);
+  // The frame on screen, not the last time React heard about.
+  const playhead = () => video.current?.currentTime ?? 0;
   const secondsAt = (event: ReactPointerEvent) => {
     const box = track.current?.getBoundingClientRect();
     if (!box || box.width === 0) return 0;
@@ -101,8 +112,7 @@ export function TrimEditor({
           className='trim-track'
           style={{
             '--trim-start': `${percent(range.start)}%`,
-            '--trim-end': `${percent(range.end)}%`,
-            '--trim-playhead': `${percent(currentTime)}%`
+            '--trim-end': `${percent(range.end)}%`
           } as CSSProperties}
           onPointerDown={(event) => {
             if (busy) return;
@@ -153,8 +163,8 @@ export function TrimEditor({
         </div>
       )}
       <div className='trim-row trim-marks'>
-        <button className='deck-key' type='button' disabled={busy} onClick={() => move('start', currentTime)}>Start here</button>
-        <button className='deck-key' type='button' disabled={busy} onClick={() => move('end', currentTime)}>End here</button>
+        <button className='deck-key' type='button' disabled={busy} onClick={() => move('start', playhead())}>Start here</button>
+        <button className='deck-key' type='button' disabled={busy} onClick={() => move('end', playhead())}>End here</button>
         <span className='deck-readout trim-span'>{precise(range.start)} – {precise(range.end)}</span>
       </div>
       </div>
@@ -223,16 +233,13 @@ function TrimHandle({ edge, at: position, duration, disabled, onMove }: {
 /** While editing, playback loops inside the kept part. */
 export function useTrimLoop(videoRef: RefObject<HTMLVideoElement | null>, range: TrimRange | null) {
   useEffect(() => {
-    if (!range) return;
-    let frame = 0;
-    const tick = () => {
-      const video = videoRef.current;
-      if (video && !video.paused && (video.currentTime >= range.end || video.currentTime < range.start - 0.25)) {
+    const video = videoRef.current;
+    if (!range || !video) return;
+    // Checked every frame while playing only; a paused video needs nothing.
+    return followPlayback(video, () => {
+      if (!video.paused && (video.currentTime >= range.end || video.currentTime < range.start - 0.25)) {
         video.currentTime = range.start;
       }
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    });
   }, [videoRef, range?.start, range?.end]);
 }

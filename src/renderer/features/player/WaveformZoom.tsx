@@ -1,5 +1,6 @@
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import type { ClipWaveform } from './clipWaveform';
+import { followPlayback } from './followPlayback';
 import type { TrimRange } from './TrimEditor';
 import { alpha, prepare, readPalette, useCanvasDrawing, wavePath, type WavePalette } from './waveformCanvas';
 
@@ -41,38 +42,28 @@ export function WaveformZoom({ waveform, duration, seconds, viewStart, onViewSta
   latest.current = { seconds, viewStart, range, duration, onViewStart };
   const clampStart = (start: number) => Math.max(0, Math.min(Math.max(0, duration - seconds), start));
 
-  const { size, redraw } = useCanvasDrawing(canvas, (width, height) => {
+  // Everything but the playhead, drawn once per change and copied each frame.
+  const still = useRef<{ layer: HTMLCanvasElement; colors: WavePalette }>(undefined);
+
+  const { size, redraw } = useCanvasDrawing(canvas, (width, height, changed) => {
     const element = canvas.current;
     if (!element) return;
+    const scale = window.devicePixelRatio || 1;
+    let current = still.current;
+    if (changed || !current || current.layer.width !== Math.max(1, Math.round(width * scale))) {
+      const layer = current?.layer ?? document.createElement('canvas');
+      const layerContext = prepare(layer, width, height);
+      if (!layerContext) return;
+      current = { layer, colors: readPalette(element) };
+      drawStill(layerContext, current.colors, waveform, viewStart, seconds, range, width, height);
+      still.current = current;
+    }
     const context = prepare(element, width, height);
     if (!context) return;
-    const colors = readPalette(element);
-    const x = (time: number) => ((time - viewStart) / seconds) * width;
-    drawAxis(context, colors, viewStart, seconds, width, height);
-    const shape = wavePath(waveform, viewStart, seconds, width, height);
-    context.fillStyle = colors.wave;
-    context.fill(shape);
-    // The kept part: tinted, outlined, its waveform brighter.
-    const left = Math.max(-2, x(range.start));
-    const right = Math.min(width + 2, x(range.end));
-    if (right > left) {
-      context.fillStyle = alpha(colors.region, 0.14);
-      context.fillRect(left, 0, right - left, height);
-      context.save();
-      context.beginPath();
-      context.rect(left, 0, right - left, height);
-      context.clip();
-      context.fillStyle = colors.kept;
-      context.fill(shape);
-      context.restore();
-      context.strokeStyle = colors.region;
-      context.lineWidth = 2;
-      context.strokeRect(left + 1, 1, right - left - 2, height - 2);
-    }
-    for (const time of [range.start, range.end]) drawMarker(context, colors.marker, x(time), height);
+    context.drawImage(current.layer, 0, 0, width, height);
     const playhead = video.current?.currentTime ?? 0;
-    context.fillStyle = colors.playhead;
-    context.fillRect(Math.round(x(playhead)) - 1, 0, 2, height);
+    context.fillStyle = current.colors.playhead;
+    context.fillRect(Math.round(((playhead - viewStart) / seconds) * width) - 1, 0, 2, height);
   }, [waveform, seconds, viewStart, range.start, range.end]);
 
   // While playing: redraw every frame for a smooth playhead, and turn the
@@ -80,8 +71,7 @@ export function WaveformZoom({ waveform, duration, seconds, viewStart, onViewSta
   useEffect(() => {
     const element = video.current;
     if (!element) return;
-    let frame = 0;
-    const tick = () => {
+    return followPlayback(element, () => {
       const now = latest.current;
       const time = element.currentTime;
       if (!drag.current && (time > now.viewStart + now.seconds * PAGE_AT || time < now.viewStart)) {
@@ -89,20 +79,7 @@ export function WaveformZoom({ waveform, duration, seconds, viewStart, onViewSta
         if (Math.abs(next - now.viewStart) > 0.001) now.onViewStart(next);
       }
       redraw();
-      if (!element.paused) frame = requestAnimationFrame(tick);
-    };
-    const start = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(tick); };
-    const once = () => requestAnimationFrame(tick);
-    element.addEventListener('play', start);
-    element.addEventListener('seeked', once);
-    element.addEventListener('timeupdate', once);
-    if (!element.paused) start();
-    return () => {
-      cancelAnimationFrame(frame);
-      element.removeEventListener('play', start);
-      element.removeEventListener('seeked', once);
-      element.removeEventListener('timeupdate', once);
-    };
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video]);
 
@@ -170,6 +147,33 @@ export function WaveformZoom({ waveform, duration, seconds, viewStart, onViewSta
       onPointerCancel={() => { drag.current = undefined; }}
     />
   );
+}
+
+/** The axis, the waveform, and the kept part (tinted, outlined, its waveform
+ * brighter) with its edges: all the detail view shows except the playhead. */
+function drawStill(context: CanvasRenderingContext2D, colors: WavePalette, waveform: ClipWaveform, start: number, seconds: number, range: TrimRange, width: number, height: number) {
+  const x = (time: number) => ((time - start) / seconds) * width;
+  drawAxis(context, colors, start, seconds, width, height);
+  const shape = wavePath(waveform, start, seconds, width, height);
+  context.fillStyle = colors.wave;
+  context.fill(shape);
+  const left = Math.max(-2, x(range.start));
+  const right = Math.min(width + 2, x(range.end));
+  if (right > left) {
+    context.fillStyle = alpha(colors.region, 0.14);
+    context.fillRect(left, 0, right - left, height);
+    context.save();
+    context.beginPath();
+    context.rect(left, 0, right - left, height);
+    context.clip();
+    context.fillStyle = colors.kept;
+    context.fill(shape);
+    context.restore();
+    context.strokeStyle = colors.region;
+    context.lineWidth = 2;
+    context.strokeRect(left + 1, 1, right - left - 2, height - 2);
+  }
+  for (const time of [range.start, range.end]) drawMarker(context, colors.marker, x(time), height);
 }
 
 /** Time ticks along the top and bottom, labelled at the bottom left. */

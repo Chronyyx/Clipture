@@ -90,10 +90,11 @@ export function wavePath(waveform: ClipWaveform, start: number, seconds: number,
   return path;
 }
 
-/** Calls `draw(width, height)` whenever the canvas is resized, the theme
- * changes, or `deps` change. Returns the size, and `redraw` to draw again now with the
- * latest `draw` (a moving playhead, say). */
-export function useCanvasDrawing(canvas: RefObject<HTMLCanvasElement | null>, draw: (width: number, height: number) => void, deps: unknown[]) {
+/** Calls `draw(width, height, true)` whenever the canvas is resized, the
+ * theme changes, or `deps` change. Returns the size, and `redraw` to draw
+ * again now with the latest `draw` (a moving playhead, say), which passes
+ * `changed` false: nothing but the moving part needs drawing again. */
+export function useCanvasDrawing(canvas: RefObject<HTMLCanvasElement | null>, draw: (width: number, height: number, changed: boolean) => void, deps: unknown[]) {
   const size = useRef({ width: 0, height: 0 });
   const latest = useRef(draw);
   latest.current = draw;
@@ -102,12 +103,12 @@ export function useCanvasDrawing(canvas: RefObject<HTMLCanvasElement | null>, dr
     if (!element) return;
     const observer = new ResizeObserver(([entry]) => {
       size.current = { width: entry.contentRect.width, height: entry.contentRect.height };
-      latest.current(size.current.width, size.current.height);
+      latest.current(size.current.width, size.current.height, true);
     });
     observer.observe(element);
     // A new theme (or custom colours) changes the palette under the canvas.
     const theme = new MutationObserver(() => {
-      if (size.current.width > 0) latest.current(size.current.width, size.current.height);
+      if (size.current.width > 0) latest.current(size.current.width, size.current.height, true);
     });
     theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'style'] });
     return () => {
@@ -116,11 +117,11 @@ export function useCanvasDrawing(canvas: RefObject<HTMLCanvasElement | null>, dr
     };
   }, [canvas]);
   useEffect(() => {
-    if (size.current.width > 0) latest.current(size.current.width, size.current.height);
+    if (size.current.width > 0) latest.current(size.current.width, size.current.height, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
   const redraw = useRef(() => {
-    if (size.current.width > 0) latest.current(size.current.width, size.current.height);
+    if (size.current.width > 0) latest.current(size.current.width, size.current.height, false);
   }).current;
   return { size, redraw };
 }

@@ -145,7 +145,6 @@ export function ClipPlayer({
     <TrimEditor
       video={videoRef}
       duration={duration}
-      currentTime={currentTime}
       range={trim.range}
       waveform={waveform}
       busy={trim.busy}
