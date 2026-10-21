@@ -216,8 +216,8 @@ export function mockSharingSeed(search: string): MockSharingOptions | undefined 
     audioTracks: ['System audio', 'Microphone'], streamed: [] as [number, number][], allAudioReady: false,
     answer: 'accepted', transfer: null, availableUntilMs: now - hoursAgo * hour + 15 * 60_000, removed: false
   });
-  const asking = { ...shared(5, 3, 'Ult into triple, Haven A', 'VALORANT', 38, 0.05), answer: 'pending' as const, availableUntilMs: null };
-  const fresh = shared(1, 0, 'Operator flick through smoke', 'VALORANT', 45, 0.4);
+  const asking = { ...shared(5, 3, 'Molly into triple, Ancient B', 'Counter-Strike 2', 38, 0.05), answer: 'pending' as const, availableUntilMs: null };
+  const fresh = shared(1, 0, 'AWP flick through smoke', 'Counter-Strike 2', 45, 0.4);
   fresh.availableUntilMs = now + 11 * 60_000;
   const sent = shared(4, 1, 'Deagle ace, Mirage B', 'Counter-Strike 2', 30, 3);
   sent.transfer = { sentBytes: sent.size, totalBytes: sent.size, purpose: 'keep', state: 'complete', bytesPerSecond: 0 };

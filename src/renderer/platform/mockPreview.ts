@@ -8,7 +8,7 @@ import type { MockCliptureState } from './mock-adapter';
 // Each row: game, title, thumbnail hue, resolution, duration in seconds.
 const games = [
   ['Counter-Strike 2', 'Smoke fight on Anubis B', 28, '2560x1440', 60],
-  ['VALORANT', 'Clutch 1v4 on Ascent', 352, '1920x1080', 30],
+  ['Counter-Strike 2', 'Clutch 1v4 on Inferno', 352, '2560x1440', 30],
   ['Rocket League', 'Ceiling shot overtime winner', 205, '1920x1080', 45],
   ['Apex Legends', 'Final ring third party', 12, '1920x1080', 60],
   ['Minecraft', 'Speedrun blaze rod RNG', 118, '1920x1080', 120],
@@ -104,7 +104,7 @@ export function mockPreviewSeed(search: string): MockCliptureState | undefined {
       { name: 'chrome.exe', pid: 4120 },
       { name: 'Discord.exe', pid: 8812 },
       { name: 'Spotify.exe', pid: 6124 },
-      { name: 'VALORANT-Win64-Shipping.exe', pid: 10244 }
+      { name: 'cs2.exe', pid: 10244 }
     ],
     sounds: [{ id: 'default.mp3', label: 'Default', builtIn: true }, { id: 'option2.wav', label: 'Soft chime', builtIn: true }]
   };
