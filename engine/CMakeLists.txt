@@ -87,7 +87,9 @@ target_compile_features(clipture_engine PRIVATE cxx_std_20)
 target_compile_definitions(clipture_engine PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 
 if(MSVC)
-  target_compile_options(clipture_engine PRIVATE /W4 /permissive-)
+  # /MP8: compile the engine's sources side by side. Capped, because an
+  # uncapped parallel build has frozen a development machine before.
+  target_compile_options(clipture_engine PRIVATE /W4 /permissive- /MP8)
 endif()
 
 target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 avrt mfplat mfreadwrite mfuuid winmm user32 dwmapi)
