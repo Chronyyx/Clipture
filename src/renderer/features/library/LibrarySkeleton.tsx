@@ -10,12 +10,14 @@ export function LibrarySkeleton() {
         <CafeNap />
         <SpookyBrew />
       </div>
-      <aside className="library-player-sidebar" aria-hidden="true">
+      <div className="library-player-details" aria-hidden="true">
         <div className="library-player-side-header">
           <span className="skeleton skeleton-text medium" style={{ height: 22 }} />
           <span className="skeleton skeleton-text short" />
-          <span className="skeleton skeleton-text medium" />
         </div>
+      </div>
+      <aside className="library-player-sidebar" aria-hidden="true">
+        <div className="clip-rail-heading"><span className="skeleton skeleton-text short" /></div>
         <div className="clip-rail">
           {[0, 1, 2, 3].map((row) => (
             <div className="clip-rail-item" key={row}>

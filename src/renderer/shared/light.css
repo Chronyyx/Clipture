@@ -72,7 +72,7 @@
 :root[data-theme="light"] :is(.settings-group, .panel:not(.player)) { border-radius: 8px; box-shadow: none; }
 :root[data-theme="light"] .settings-group { gap: 26px 24px; padding: 26px; }
 :root[data-theme="light"] :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]), select, textarea) { border-radius: 5px; }
-:root[data-theme="light"] .library-player-sidebar { background: var(--sidebar-bg); }
+:root[data-theme="light"] :is(.library-player-sidebar, .library-player-details) { background: var(--sidebar-bg); }
 :root[data-theme="light"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, var(--sidebar-bg) 88%); }
 :root[data-theme="light"] .library-player-side-title { font-size: 22px; font-weight: 600; line-height: 1.2; }
 :root[data-theme="light"] .clip-rail-item.active { background: var(--surface-active); box-shadow: none; }

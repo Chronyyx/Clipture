@@ -1,12 +1,16 @@
 .library-layout {
   min-width: 0;
+  min-height: 100%;
   display: grid;
   gap: 16px;
 }
 
+/* A column that fills the window: the player takes whatever height the
+   filters leave, so its clip list and editors reach the bottom. */
 .browse-surface {
   min-width: 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 18px;
   container-name: clip-library;
   container-type: inline-size;
@@ -145,6 +149,16 @@
   gap: 14px;
 }
 
+/* Importing and selecting sit with saving on the title row, so the games get
+   the whole filter row; on a narrow window the row wraps under the title. */
+.library-hero .save-actions { flex-wrap: wrap; justify-content: flex-end; }
+.library-hero .selection-bar { min-height: 46px; padding: 0 6px 0 14px; }
+
+@media (max-width: 900px) {
+  .library-hero .save-actions { display: flex; white-space: normal; }
+  .library-hero .save-actions > * { flex: 1 1 auto; }
+}
+
 .library-inline-actions {
   display: flex;
   align-items: center;
@@ -157,6 +171,19 @@
   flex-wrap: wrap;
   gap: 8px;
 }
+
+/* The games stay on one line and scroll sideways, fading at the edge, so a
+   long list never pushes the player down. */
+.library-actions-row .chip-row {
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+}
+.library-actions-row .chip-row::-webkit-scrollbar { display: none; }
+.library-actions-row .chip-row > .chip { flex: 0 0 auto; }
+.library-actions-row { min-width: 0; }
 
 .chip {
   min-height: 36px;
@@ -191,12 +218,16 @@
   border-color: transparent;
 }
 
+/* Video on the left with the clip's details under it; the clip list (or an
+   open editor) runs the full height on the right. */
 .library-player {
+  flex: 1 0 auto;
   width: 100%;
   min-width: 0;
   max-width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(260px, 0.72fr);
+  grid-template-columns: minmax(0, 1.8fr) minmax(280px, 0.72fr);
+  grid-template-rows: auto minmax(0, 1fr);
   align-items: stretch;
   height: auto;
   min-height: 0;
@@ -207,6 +238,8 @@
 }
 
 .library-player-main {
+  grid-column: 1;
+  grid-row: 1;
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -286,11 +319,13 @@
 }
 
 .library-player-sidebar {
+  grid-column: 2;
+  grid-row: 1 / span 2;
   position: relative;
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   border-left: 1px solid var(--border);
   background: var(--surface-row);
@@ -309,11 +344,25 @@
   background: linear-gradient(to bottom, transparent, var(--surface-row) 88%);
 }
 
+/* Title and source on the left, sending on the right, details beneath. */
+.library-player-details {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  align-items: start;
+  gap: 14px 24px;
+  padding: 18px 20px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-row);
+}
+
 .library-player-side-header {
   display: grid;
-  gap: 7px;
-  padding: 20px 18px 16px;
-  border-bottom: 1px solid var(--border);
+  gap: 6px;
+  min-width: 0;
 }
 
 .library-player-side-title-row {
@@ -360,6 +409,10 @@
   flex: 1;
 }
 
+/* Under the video the pencil follows the title instead of the far edge. */
+.library-player-details .library-player-title-copy { flex: 0 1 auto; justify-content: flex-start; }
+.library-player-details .library-player-title-copy > span { flex: 0 1 auto; }
+
 .icon-button.library-player-title-edit-button {
   width: 28px;
   height: 28px;
@@ -398,15 +451,17 @@
 }
 
 .library-player-side-meta {
-  display: grid;
-  gap: 4px;
-  margin: 2px 0 0;
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 28px;
+  margin: 0;
   color: var(--text);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
-.library-player-side-meta > div { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; }
+.library-player-side-meta > div { display: flex; gap: 8px; }
 .library-player-side-meta dt { color: var(--text-subtle); font-family: var(--font-ui); }
 .library-player-side-meta dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 
@@ -416,9 +471,8 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  width: 100%;
   min-height: 38px;
-  margin-top: 8px;
+  padding: 0 16px;
   border: 1px solid var(--accent-border);
   border-radius: 8px;
   background: var(--accent-soft);
@@ -467,7 +521,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 18px 8px;
+  padding: 16px 18px 10px;
   color: var(--text);
   font-size: 12px;
 }
@@ -654,11 +708,13 @@
 @media (max-width: 760px) {
   .library-player {
     grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(300px, 44vh);
+    grid-template-rows: auto auto minmax(300px, 44vh);
     height: auto;
   }
 
   .library-player-sidebar {
+    grid-column: 1;
+    grid-row: 3;
     border-top: 1px solid var(--border);
     border-left: 0;
   }
@@ -667,13 +723,17 @@
 @container clip-library (max-width: 760px) {
   .library-player {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(300px, 44vh);
+    grid-template-rows: auto auto minmax(300px, 44vh);
   }
 
   .library-player-sidebar {
+    grid-column: 1;
+    grid-row: 3;
     border-top: 1px solid var(--border);
     border-left: 0;
   }
+
+  .library-player-details { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 1050px) {

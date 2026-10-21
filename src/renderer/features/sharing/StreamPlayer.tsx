@@ -4,6 +4,7 @@ import type { SharedClip, SharingDownload, StreamUrls } from "../../../shared/sh
 import { clipture } from "../../platform";
 import { MediaPlayer } from "../player";
 import { formatDuration } from "../../shared/clips/clipMetadata";
+import { friendStyle } from "./FriendAvatar";
 import { formatBytes, possessive } from "./sharingFormat";
 import { minutesLeft, useNow, windowClosed } from "./useNow";
 
@@ -168,7 +169,7 @@ export function StreamPlayer({
 
   return (
     <section className="share-stage-player" aria-label={`${clip.title} from ${clip.friendName}`}>
-      <div className="share-screen">
+      <div className="share-screen" style={friendStyle(clip.friendName)}>
         {!started && expired ? (
           <div className="share-screen-message">
             <TimerOff size={30} aria-hidden="true" />

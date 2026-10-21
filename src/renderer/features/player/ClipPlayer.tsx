@@ -31,13 +31,16 @@ interface ClipPlayerProps {
   onClose: () => void;
   settings?: ClipSettings;
   sidebar?: ReactNode;
+  /** Under the video in the library: the clip's title, details and actions. */
+  details?: ReactNode;
 }
 
 export function ClipPlayer({
   clip,
   onClose,
   settings,
-  sidebar
+  sidebar,
+  details
 }: ClipPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const playbackRequestedRef = useRef(true);
@@ -215,6 +218,7 @@ export function ClipPlayer({
           </div>
         )}
       </div>
+      {embedded && details}
       {/* In the library an open editor takes the clip rail's place, so the
           video keeps its size; the rail comes back when it closes. */}
       {embedded && editor ? <aside className='library-player-sidebar edit-rail'>{editor}</aside> : sidebar}

@@ -5,6 +5,7 @@ import { ClipPlayer } from "../player";
 import { SpookyPerch, SpookySaveCheer, WatchingEye } from "../../shared/halloween";
 import { CafePeeker, CafeSaveCheer } from "../../shared/maid-cafe";
 import { clipSourceLabels } from "../../shared/clips/clipMetadata";
+import { LibraryClipDetails } from "./LibraryClipDetails";
 import { LibraryPlayerSidebar } from "./LibraryPlayerSidebar";
 import { LibraryClipPreview } from "./LibraryClipPreview";
 import { LibraryEmptyState } from "./LibraryEmptyState";
@@ -185,6 +186,38 @@ export function LibraryView({
             </div>
             <div className="save-actions">
               {headerControls}
+              {selectionMode ? (
+                <div className="selection-bar">
+                  <strong>{selectedCount} selected</strong>
+                  <span className="selection-divider" />
+                  <button className="secondary-button select-all-button" type="button" onClick={toggleSelectAllFilteredClips} disabled={filteredClips.length === 0}>
+                    <span className={allFilteredClipsSelected ? "select-clips-empty-box checked" : "select-clips-empty-box"} aria-hidden="true">
+                      {allFilteredClipsSelected && <Check size={13} />}
+                    </span>
+                    {allFilteredClipsSelected ? "Deselect all" : "Select all"}
+                  </button>
+                  <button className="secondary-button" type="button" onClick={cancelSelection}>Cancel</button>
+                  <button className="danger-button" type="button" onClick={() => void deleteSelectedClips()} disabled={selectedCount === 0}>
+                    <Trash2 size={18} /> Delete
+                  </button>
+                </div>
+              ) : (
+                <div className="library-inline-actions">
+                  <button className="secondary-button import-videos-button" type="button" onClick={() => void handleImportVideos()}>
+                    <Upload size={18} /> Import videos
+                  </button>
+                  <button
+                    className="secondary-button select-clips-button"
+                    type="button"
+                    onClick={() => {
+                      setSelectionMode(true);
+                    }}
+                  >
+                    <span className="select-clips-empty-box" aria-hidden="true" />
+                    Select clips
+                  </button>
+                </div>
+              )}
               <button className="primary library-save-button" onClick={onSaveClip} disabled={isSavingClip}>
                 <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${clipLengthSeconds}s`}
                 <CafeSaveCheer saving={isSavingClip} />
@@ -234,38 +267,6 @@ export function LibraryView({
                 </button>
               ))}
             </div>
-            {selectionMode ? (
-              <div className="selection-bar">
-                <strong>{selectedCount} selected</strong>
-                <span className="selection-divider" />
-                <button className="secondary-button select-all-button" type="button" onClick={toggleSelectAllFilteredClips} disabled={filteredClips.length === 0}>
-                  <span className={allFilteredClipsSelected ? "select-clips-empty-box checked" : "select-clips-empty-box"} aria-hidden="true">
-                    {allFilteredClipsSelected && <Check size={13} />}
-                  </span>
-                  {allFilteredClipsSelected ? "Deselect all" : "Select all"}
-                </button>
-                <button className="secondary-button" type="button" onClick={cancelSelection}>Cancel</button>
-                <button className="danger-button" type="button" onClick={() => void deleteSelectedClips()} disabled={selectedCount === 0}>
-                  <Trash2 size={18} /> Delete
-                </button>
-              </div>
-            ) : (
-              <div className="library-inline-actions">
-                <button className="secondary-button import-videos-button" type="button" onClick={() => void handleImportVideos()}>
-                  <Upload size={18} /> Import videos
-                </button>
-                <button
-                  className="secondary-button select-clips-button"
-                  type="button"
-                  onClick={() => {
-                    setSelectionMode(true);
-                  }}
-                >
-                  <span className="select-clips-empty-box" aria-hidden="true" />
-                  Select clips
-                </button>
-              </div>
-            )}
           </div>
         </div>
 
@@ -290,15 +291,14 @@ export function LibraryView({
                 setEditorialPreviewId(selectedClip.id);
                 setSelectedClip(undefined);
               }}
+              details={<LibraryClipDetails clip={selectedClip} settings={settings} onShare={onShareClip} />}
               sidebar={<LibraryPlayerSidebar
                 clip={selectedClip}
-                settings={settings}
                 onSelectClip={playEditorialClip}
                 onToggleSelected={toggleClipSelection}
                 railClips={filteredClips}
                 selectedClipIds={selectedClipIds}
                 selectionMode={selectionMode}
-                onShare={onShareClip}
               />}
               settings={settings}
             />

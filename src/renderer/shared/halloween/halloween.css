@@ -194,6 +194,7 @@
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 70 70' fill='none' stroke='%23e6dcff' stroke-opacity='.3' stroke-width='.6'%3E%3Cpath d='M0 0L70 26M0 0L56 56M0 0L26 70'/%3E%3Cpath d='M0 14Q10 12 13 4M0 14Q8 16 12 11M8 21Q2 17 0 14'/%3E%3Cpath d='M0 30Q20 24 27 8M23 23Q26 30 17 38M17 38Q8 38 0 30'/%3E%3Cpath d='M0 48Q28 42 42 16M36 36Q40 46 28 56M28 56Q14 58 0 48'/%3E%3C/svg%3E") 0 0 / contain no-repeat;
 }
 :root[data-theme="halloween"] .library-player-sidebar { border-left: 1px solid var(--border); background: var(--surface-row); }
+:root[data-theme="halloween"] .library-player-details { background: var(--surface-row); }
 :root[data-theme="halloween"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, var(--surface-row) 88%); }
 :root[data-theme="halloween"] .clip-rail-item { border-top: 0; border-radius: 10px; padding-left: 8px; }
 :root[data-theme="halloween"] .clip-rail-item:hover { background: var(--surface-control); }

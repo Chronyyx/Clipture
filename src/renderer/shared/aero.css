@@ -113,13 +113,14 @@
 :root[data-theme="aero"] .settings-rail-indicator { display: none; }
 
 /* Panes of glass. */
-:root[data-theme="aero"] :is(.settings-group, .panel:not(.player), .audio-source-card, .modal, .recorder-status, .library-player-sidebar, .clip-card) {
+:root[data-theme="aero"] :is(.settings-group, .panel:not(.player), .audio-source-card, .modal, .recorder-status, .library-player-sidebar, .library-player-details, .clip-card) {
   border: 0;
   border-radius: 8px;
   background: var(--aero-pane);
   box-shadow: var(--aero-pane-edge);
 }
 :root[data-theme="aero"] .library-player-sidebar { border-radius: 0 8px 8px 0; }
+:root[data-theme="aero"] .library-player-details { border-radius: 0 0 0 8px; }
 /* Panes that hold their own heading and lists get room inside the glass. */
 :root[data-theme="aero"] .settings-group.single-column { padding: 18px 20px; }
 :root[data-theme="aero"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, rgb(243 249 255 / 97%) 88%); }

@@ -2,6 +2,7 @@ import { Play } from "lucide-react";
 import type { ClipRecord, ClipSettings } from "../../../shared/types";
 import { formatDuration } from "../../shared/clips/clipMetadata";
 import { useClipThumbnail } from "../../shared/clips/useClipThumbnail";
+import { LibraryClipDetails } from "./LibraryClipDetails";
 import { LibraryPlayerSidebar } from "./LibraryPlayerSidebar";
 
 export function LibraryClipPreview({
@@ -38,15 +39,14 @@ export function LibraryClipPreview({
           <span className="duration-badge">{formatDuration(clip.durationSeconds)}</span>
         )}
       </button>
+      <LibraryClipDetails clip={clip} settings={settings} onShare={onShare} />
       <LibraryPlayerSidebar
         clip={clip}
         railClips={railClips}
-        settings={settings}
         onSelectClip={onSelectClip}
         onToggleSelected={onToggleSelected}
         selectedClipIds={selectedClipIds}
         selectionMode={selectionMode}
-        onShare={onShare}
       />
     </section>
   );

@@ -104,7 +104,7 @@
 :root:is([data-theme="light"], [data-theme="glitten"]) .library-top { border-bottom-color: var(--border-strong); box-shadow: 0 1px 0 rgb(255 255 255 / 60%); }
 
 /* Panels are separate plates fixed to the face. */
-:root:is([data-theme="light"], [data-theme="glitten"]) :is(.settings-group, .panel:not(.player), .audio-source-card, .modal, .recorder-status, .library-player-sidebar) {
+:root:is([data-theme="light"], [data-theme="glitten"]) :is(.settings-group, .panel:not(.player), .audio-source-card, .modal, .recorder-status, .library-player-sidebar, .library-player-details) {
   border-color: var(--border-strong);
   background: radial-gradient(ellipse 120% 90% at 20% 0, var(--plate-light), transparent 65%), var(--grain), var(--surface);
   background-blend-mode: normal, overlay, normal;

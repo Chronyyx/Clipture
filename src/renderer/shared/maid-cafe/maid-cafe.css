@@ -272,9 +272,9 @@
   box-shadow: 0 8px 0 -2px var(--border), 0 18px 32px -18px rgb(214 80 132 / 35%);
 }
 :root[data-theme="maid-cafe"] .library-player-sidebar { border-left: 0; background: var(--surface); }
+:root[data-theme="maid-cafe"] .library-player-details { border-top: 1.5px dotted var(--border-strong); background: var(--surface); }
 :root[data-theme="maid-cafe"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, var(--surface) 88%); }
 :root[data-theme="maid-cafe"] .library-player-side-title { color: var(--text-strong); font-weight: 800; }
-:root[data-theme="maid-cafe"] .library-player-side-header { border-bottom: 1.5px dotted var(--border-strong); }
 :root[data-theme="maid-cafe"] .clip-rail-item { border-top: 0; border-radius: 14px; padding-left: 8px; }
 :root[data-theme="maid-cafe"] .clip-rail-item.active {
   padding-left: 8px;
