@@ -47,6 +47,20 @@ for (const rule of rules) {
   }
 }
 
+// The page's animation, built on Motion, bundled into one self-hosted file:
+// the CSP allows no third-party scripts.
+require('esbuild').buildSync({
+  entryPoints: [path.join(source, 'site-motion.mjs')],
+  outfile: path.join(output, 'site-motion.js'),
+  bundle: true,
+  minify: true,
+  format: 'iife',
+  target: 'es2020',
+  legalComments: 'eof',
+  logLevel: 'error'
+});
+fs.rmSync(path.join(output, 'site-motion.mjs'));
+
 // Stamp local CSS, JS and image links with a content hash. Cloudflare lets
 // browsers keep these for hours, so a changed file must get a new URL.
 const crypto = require('node:crypto');

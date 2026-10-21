@@ -68,7 +68,10 @@ a { color: inherit; text-decoration: none; }
   transform: translateY(calc(-100% - 24px));
 }
 .skip-link:focus-visible { transform: none; }
-.showcase > .skip-link { top: 8px; }
+/* Mid-page, sliding up is not enough to hide it: it stays clipped away
+   until focused. */
+.showcase > .skip-link:not(:focus-visible) { clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; padding: 0; }
+.showcase > .skip-link:focus-visible { top: -52px; }
 
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -579,3 +582,80 @@ h1 {
 }
 
 .lost .lede { margin: 0; }
+
+/* Motion (site-motion.mjs). motion-gate.js sets `.motion` before the first
+   paint unless reduced motion is preferred. Until site-motion.js takes over,
+   the hidden parts appear by themselves after 2.5 s, so a script that never
+   loads cannot leave the page blank. */
+#headline .word {
+  display: inline-block;
+  overflow: clip;
+  padding-bottom: 0.1em;
+  margin-bottom: -0.1em;
+  vertical-align: top;
+}
+#headline .word > span { display: inline-block; }
+
+.motion #headline .word > span { transform: translateY(105%); }
+.motion [data-enter],
+.motion [data-reveal] { opacity: 0; }
+.motion [data-tilt] { transform: perspective(1800px) rotateX(16deg) scale(0.92) translateY(32px); opacity: 0.5; }
+.window { transform-origin: 50% 0; }
+
+.motion:not(.motion-ready) #headline .word > span,
+.motion:not(.motion-ready) [data-enter],
+.motion:not(.motion-ready) [data-reveal],
+.motion:not(.motion-ready) [data-tilt] { animation: appear 0.6s ease-out 2.5s forwards; }
+
+@keyframes appear { to { opacity: 1; transform: none; } }
+
+/* The bar gains its hairline once the page scrolls under it. */
+.nav { transition: border-color 300ms ease-out; }
+.nav.scrolled { border-bottom-color: var(--border); }
+
+/* A light sweeps across the primary button; the quiet one warms its edge. */
+.button { position: relative; overflow: hidden; isolation: isolate; }
+.button:not(.button-quiet)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / 60%) 50%, transparent 65%);
+  transform: translateX(-120%);
+  transition: transform 750ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+.button-quiet { transition: background-color 200ms ease-out, border-color 200ms ease-out, box-shadow 200ms ease-out; }
+
+/* Feature cards: a soft light under the pointer. */
+.feature { position: relative; isolation: isolate; }
+.feature::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(380px circle at var(--mx, 50%) var(--my, 0%), rgb(240 120 54 / 10%), transparent 70%);
+  opacity: 0;
+  transition: opacity 350ms ease-out;
+  pointer-events: none;
+}
+.feature-icon { transition: transform 400ms cubic-bezier(0.22, 1, 0.36, 1); }
+
+@media (hover: hover) {
+  .button:not(.button-quiet):hover::after { transform: translateX(120%); }
+  .button-quiet:hover { box-shadow: inset 0 1px 0 var(--inset-highlight), 0 0 0 3px rgb(240 120 54 / 12%); }
+  .feature:hover::before { opacity: 1; }
+  .feature:hover .feature-icon { transform: translateY(-3px); }
+}
+
+/* The live dot breathes like the recorder's tally. */
+.motion .live-dot { animation: tally 2.4s ease-in-out infinite; }
+@keyframes tally {
+  50% { box-shadow: 0 0 0 6px rgb(240 120 54 / 0%); opacity: 0.7; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button::after,
+  .feature::before { display: none; }
+  .feature-icon,
+  .nav { transition: none; }
+}
