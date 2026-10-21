@@ -7,8 +7,8 @@ import type { MockCliptureState } from './mock-adapter';
 // mock host, never used when a desktop host is present.
 // Each row: game, title, thumbnail hue, resolution, duration in seconds.
 const games = [
-  ['VALORANT', 'Clutch 1v4 on Ascent', 352, '1920x1080', 60],
-  ['Counter-Strike 2', 'Deagle ace, Mirage B', 28, '2560x1440', 30],
+  ['Counter-Strike 2', 'Smoke fight on Anubis B', 28, '2560x1440', 60],
+  ['VALORANT', 'Clutch 1v4 on Ascent', 352, '1920x1080', 30],
   ['Rocket League', 'Ceiling shot overtime winner', 205, '1920x1080', 45],
   ['Apex Legends', 'Final ring third party', 12, '1920x1080', 60],
   ['Minecraft', 'Speedrun blaze rod RNG', 118, '1920x1080', 120],
@@ -41,8 +41,11 @@ export function previewSearch(search: string) {
   return (search ? search + '&' : '?') + 'preview&demo';
 }
 
-/** Served by clipture.app next to the demo build (web/demo-media/). */
+/** Served by clipture.app next to the demo build (web/demo-media/): a real
+ * Clipture save with player names blurred and only the game's audio. */
 export const DEMO_CLIP_URL = '/demo-media/sample-clip.mp4';
+/** Frames from that clip, for the demo's thumbnails. */
+const DEMO_THUMBNAILS = [1, 2, 3, 4, 5].map((n) => '/demo-media/thumb-' + n + '.jpg');
 
 export function mockPreviewSeed(search: string): MockCliptureState | undefined {
   const params = new URLSearchParams(search);
@@ -62,7 +65,9 @@ export function mockPreviewSeed(search: string): MockCliptureState | undefined {
     encoder: 'NVENC H.264',
     audioTracks: ['system-loopback-pcm', 'microphone-pcm', 'app:Discord.exe']
   }));
-  const thumbnails = Object.fromEntries(clips.map((clip, index) => [clip.filePath, thumbnail(games[index]![2], index)]));
+  const thumbnails = Object.fromEntries(clips.map((clip, index) => [clip.filePath, params.has('demo')
+    ? DEMO_THUMBNAILS[index % DEMO_THUMBNAILS.length]!
+    : thumbnail(games[index]![2], index)]));
   const theme = params.get('theme') as ClipSettings['uiTheme'] | null;
   return {
     latencyMs: params.has('slow') ? 15000 : params.has('demo') ? 250 : 450,
