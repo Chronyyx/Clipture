@@ -191,8 +191,8 @@
 .library-actions-row .chip-row > .chip { flex: 0 0 auto; }
 .library-actions-row { min-width: 0; }
 @container clip-library (max-width: 860px) {
-  .library-actions-row .chip-row { gap: 6px; }
-  .library-actions-row .chip { padding: 0 11px; }
+  .library-actions-row .chip-row { gap: 5px; }
+  .library-actions-row .chip { padding: 0 9px; font-size: 12.5px; }
 }
 
 .chip {
@@ -568,7 +568,8 @@
   scroll-snap-align: start;
   border: 0;
   border-top: 1px solid var(--border);
-  padding: 10px 8px 10px 0;
+  /* Every row keeps a gutter for the selected row's bar, so thumbnails line up. */
+  padding: 10px 8px 10px 9px;
   color: var(--text);
   background: transparent;
   text-align: left;
@@ -595,7 +596,7 @@
 .clip-rail-folder-button {
   position: absolute;
   top: 14px;
-  left: 74px;
+  left: 83px;
   width: 28px;
   height: 28px;
   opacity: 0;
@@ -618,10 +619,8 @@
 }
 
 .clip-rail-item:is(:hover, :focus-within) .clip-rail-folder-button { opacity: 1; }
-.clip-rail-item.active .clip-rail-folder-button { left: 83px; }
 
 .clip-rail-item.active {
-  padding-left: 9px;
   background: var(--accent-soft);
   box-shadow: inset 3px 0 0 var(--accent);
 }
@@ -682,6 +681,8 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
+
+.clip-rail-when { white-space: nowrap; }
 
 .clip-rail-copy > span {
   color: var(--text-muted);

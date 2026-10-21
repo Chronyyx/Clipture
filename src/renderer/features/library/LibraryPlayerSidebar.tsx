@@ -72,7 +72,7 @@ function ClipRailItem({
         </span>
         <span className="clip-rail-copy">
           <strong>{displayTitle}</strong>
-          <span>{formatClipDate(createdAt)}, {formatClipTime(createdAt)}</span>
+          <span><span className="clip-rail-when">{formatClipDate(createdAt)},</span> <span className="clip-rail-when">{formatClipTime(createdAt)}</span></span>
         </span>
       </button>
       <button

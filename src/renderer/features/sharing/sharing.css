@@ -1119,10 +1119,7 @@
   font-weight: 700;
 }
 
-.share-side-row.offline .share-side-name,
 .share-side-row.pending .share-side-name { color: var(--text-muted); }
-
-.share-side-row.offline .share-avatar { opacity: 0.6; }
 
 .share-side-request {
   display: flex;

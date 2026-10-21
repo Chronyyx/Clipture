@@ -120,6 +120,7 @@
   box-shadow: var(--aero-pane-edge);
 }
 :root[data-theme="aero"] .library-player-sidebar { border-radius: 0 8px 8px 0; }
+:root[data-theme="aero"] .titlebar-update-button.refresh { color: #10365e; }
 :root[data-theme="aero"] .library-player-details { border-radius: 0 0 0 8px; }
 /* Panes that hold their own heading and lists get room inside the glass. */
 :root[data-theme="aero"] .settings-group.single-column { padding: 18px 20px; }

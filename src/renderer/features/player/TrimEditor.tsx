@@ -141,12 +141,12 @@ export function TrimEditor({
         <div className='trim-detail'>
           <div className='trim-detail-head'>
             <span className='trim-detail-label'>Detail</span>
+            <button className='deck-key trim-zoom' type='button' title='Zoom out' aria-label='Zoom out' disabled={zoom === ZOOM_STEPS.length - 1} onClick={() => setZoom(zoom + 1)}>
+              <Minus size={15} aria-hidden='true' />
+            </button>
             <span className='deck-readout'>{seconds} s</span>
             <button className='deck-key trim-zoom' type='button' title='Zoom in' aria-label='Zoom in' disabled={zoom === 0} onClick={() => setZoom(zoom - 1)}>
               <Plus size={15} aria-hidden='true' />
-            </button>
-            <button className='deck-key trim-zoom' type='button' title='Zoom out' aria-label='Zoom out' disabled={zoom === ZOOM_STEPS.length - 1} onClick={() => setZoom(zoom + 1)}>
-              <Minus size={15} aria-hidden='true' />
             </button>
           </div>
           <WaveformZoom

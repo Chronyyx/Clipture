@@ -473,5 +473,5 @@
 
 @container share-main (max-width: 560px) {
   .share-incoming-item { grid-template-columns: 96px minmax(0, 1fr); }
-  .share-incoming-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .share-incoming-actions { grid-column: 2 / -1; justify-content: flex-start; }
 }

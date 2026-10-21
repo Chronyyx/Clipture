@@ -59,6 +59,14 @@
   background: linear-gradient(to bottom, rgb(255 255 255 / 16%), transparent), var(--transport-action, var(--transport-marker));
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 25%), 0 1px 0 rgb(var(--transport-shade) / 35%);
 }
+:root .edit-deck .deck-key.deck-primary:disabled {
+  /* Not yet available reads the same in every skin: an outline, no fill. */
+  border-color: var(--transport-edge);
+  color: var(--transport-muted);
+  background: transparent;
+  box-shadow: none;
+  opacity: 1;
+}
 .deck-key.deck-primary:hover:not(:disabled) { background-color: color-mix(in srgb, var(--transport-action, var(--transport-marker)) 88%, #fff); }
 .deck-key.active { color: var(--transport-marker); box-shadow: inset 0 1px 3px rgb(var(--transport-shade) / 35%); background: var(--transport-display); }
 .edit-deck :is(button, input, [tabindex]):focus-visible { outline: 2px solid var(--transport-marker); outline-offset: 2px; }

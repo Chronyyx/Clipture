@@ -92,7 +92,7 @@ export function FriendsSidebar({
               <button type="button" className="share-side-row" onClick={onOpenFriends}
                 aria-label={`${friend.name} wants to be friends. Open friend requests.`}>
                 <FriendAvatar name={friend.name} size={28} />
-                <span className="share-side-name">{friend.name}<small>Wants to be friends</small></span>
+                <span className="share-side-name">{friend.name}<small>Friend request</small></span>
               </button>
               <button type="button" className="icon-button share-side-accept" title={`Accept ${friend.name}`}
                 aria-label={`Accept ${friend.name}`} onClick={() => void controller.acceptFriend(friend.id)}>
