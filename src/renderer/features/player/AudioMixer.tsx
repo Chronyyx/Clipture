@@ -81,6 +81,7 @@ export function AudioMixer({ mix, peaks }: { mix: ClipMix; peaks?: () => number[
             </output>
           </div>
         ))}
+        <div className='mixer-scale' aria-hidden='true'><span>Quieter</span><span>Original</span><span>Louder</span></div>
       </div>
       <div className='deck-footer'>
         <span className={`deck-status${confirming ? ' warning' : ''}`} role='status'>{status}</span>

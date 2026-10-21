@@ -98,7 +98,7 @@ export function FriendRequests({
             <FriendAvatar name={friend.name} />
             <span className="share-friend-copy">
               <FriendName friend={friend} editing={nicknames.editing === friend.id} onRename={onRename} onDone={nicknames.stop} />
-              <span title={friend.id}>{friend.nickname ? "Your nickname, asked " : "Asked "}{formatSharedAt(friend.addedAtMs)}</span>
+              <span title={friend.id}>{friend.nickname ? "Your nickname, " : ""}{formatSharedAt(friend.addedAtMs)}</span>
             </span>
             <span className="share-row-actions">
               <RenameButton friend={friend} onClick={() => nicknames.start(friend.id)} />

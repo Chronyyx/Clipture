@@ -122,6 +122,17 @@
 
 .mixer-value { min-width: 0; }
 
+/* What the fader slots mean, once under the tracks: the centre mark is the
+   clip's own level. Only where the slots span the full width to line up. */
+.mixer-scale { display: none; }
+.edit-rail .mixer-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -4px;
+  color: var(--transport-muted);
+  font-size: 11px;
+}
+
 /* Stacked: name and level on top, the fader across the full width under
    them. In the library's rail, and on narrow windows. */
 .edit-rail .mixer-track {

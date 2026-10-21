@@ -165,7 +165,7 @@ export function TrimEditor({
       <div className='trim-row trim-marks'>
         <button className='deck-key' type='button' disabled={busy} onClick={() => move('start', playhead())}>Start here</button>
         <button className='deck-key' type='button' disabled={busy} onClick={() => move('end', playhead())}>End here</button>
-        <span className='deck-readout trim-span'>{precise(range.start)} – {precise(range.end)}</span>
+        <span className='deck-readout trim-span'>{precise(range.start)} – {precise(range.end)} · keeps {(range.end - range.start).toFixed(1)} s</span>
       </div>
       </div>
       <div className='deck-footer'>

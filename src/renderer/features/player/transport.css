@@ -193,8 +193,6 @@
   box-shadow: inset 0 1px 3px rgb(var(--transport-shade) / 35%);
 }
 
-.transport-led { width: 5px; height: 5px; border-radius: 50%; background: #64685f; }
-.transport-led.active { background: var(--transport-playhead, var(--transport-marker)); }
 .field-transport .volume-slider { accent-color: var(--transport-fill); }
 .field-transport .transport-mute {
   display: grid;

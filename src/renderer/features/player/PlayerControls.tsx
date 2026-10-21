@@ -53,7 +53,6 @@ export function PlayerControls({
     <div className='player-controls field-transport'>
       <div className='yt-pill transport-playback'>
         <button className='icon-button transport-play' title={playing ? 'Pause' : 'Play'} aria-label={playing ? 'Pause' : 'Play'} onClick={onTogglePlayback}>
-          <span className={`transport-led${playing ? ' active' : ''}`} aria-hidden='true' />
           {playing ? <Pause size={24} /> : <Play size={24} />}
         </button>
         <span className='time-readout transport-position' title='Position'>{formatDuration(currentTime)}</span>

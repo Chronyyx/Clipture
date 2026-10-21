@@ -110,7 +110,8 @@
 .edit-rail .trim-row:first-child { flex-wrap: wrap; row-gap: 10px; }
 .edit-rail .trim-label { display: none; }
 .edit-rail .trim-track { flex: 1 1 100%; height: 72px; margin: 6px 12px 0; }
-.edit-rail .trim-length { margin-left: auto; }
+/* Beside the video the range readout under the keys says the length too. */
+.edit-rail .trim-length { display: none; }
 .edit-rail .trim-marks { flex-wrap: wrap; row-gap: 8px; }
 .edit-rail .trim-marks .deck-key { flex: 1 1 0; }
 .edit-rail .trim-span { flex-basis: 100%; text-align: center; }
