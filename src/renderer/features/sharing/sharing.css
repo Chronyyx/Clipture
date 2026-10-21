@@ -18,7 +18,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-top: 22px;
+  /* The library's sticky header padding plus its title row, so page titles
+     share one baseline when switching tabs. */
+  min-height: 46px;
+  padding-top: 40px;
   -webkit-app-region: drag;
 }
 

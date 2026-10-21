@@ -56,7 +56,7 @@ export function FriendPicker({ friends, chosen, onChoose }: {
     <div className="share-pick-list" role="radiogroup" aria-label="Friend" onKeyDown={onKeyDown}>
       {online.length > 0 && <p className="share-pick-group">Online now</p>}
       {online.map((friend, index) => row(friend, index))}
-      {away.length > 0 && <p className="share-pick-group">Away</p>}
+      {away.length > 0 && <p className="share-pick-group">Offline</p>}
       {away.map((friend, index) => row(friend, online.length + index))}
     </div>
   );

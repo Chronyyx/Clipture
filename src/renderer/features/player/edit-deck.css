@@ -132,7 +132,10 @@
 .edit-rail::after { display: none; }
 .edit-rail > .edit-deck {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  /* The footer follows the last control rather than the rail's foot, so a
+     short deck has no gap in the middle; a long one still scrolls. */
+  grid-template-rows: auto minmax(0, max-content) auto;
+  align-content: start;
   gap: 14px;
   height: 100%;
   min-height: 0;
@@ -147,6 +150,11 @@
 }
 .edit-rail .deck-title { font-size: 17px; }
 .edit-rail .deck-body { overflow-y: auto; margin: 0 -16px; padding: 0 16px; overscroll-behavior: contain; }
+/* Beside the video the set-point keys come straight after the overview, so
+   they stay in view when the detail waveform has to scroll. */
+.edit-rail .trim-body > .trim-marks { order: 1; }
+.edit-rail .trim-body > .trim-detail { order: 2; }
+
 .edit-rail .deck-footer {
   padding-top: 12px;
   border-top: 1px solid rgb(var(--transport-shade) / 22%);

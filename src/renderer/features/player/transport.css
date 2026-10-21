@@ -215,6 +215,14 @@
 .field-transport :is(button, input):focus-visible { outline: 2px solid var(--transport-marker); outline-offset: 3px; }
 .custom-video-shell:focus-within .field-transport { opacity: 1; pointer-events: auto; }
 
+/* A narrow player puts the scale on its own row above the keys, so seeking
+   never shrinks to a stub between the times. */
+@container (max-width: 640px) {
+  .field-transport { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; row-gap: 4px; }
+  .field-transport .transport-timeline { order: -1; flex: 1 1 100%; }
+  .field-transport .volume-container { margin-right: auto; }
+}
+
 @container (max-width: 480px) {
   .field-transport { margin: 6px; padding: 5px; gap: 7px; }
   .field-transport .transport-total { display: none; }

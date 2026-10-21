@@ -112,7 +112,7 @@
   display: grid;
   align-content: start;
   gap: 2px;
-  max-height: min(320px, 46vh);
+  max-height: min(440px, 52vh);
   padding: 0 10px 12px;
   overflow-y: auto;
 }

@@ -1,8 +1,13 @@
 .library-layout {
   min-width: 0;
-  min-height: 100%;
   display: grid;
   gap: 16px;
+}
+
+/* The page wrapper fills the workspace so the library can reach its foot. */
+.view:has(> .library-layout) {
+  min-height: 100%;
+  display: grid;
 }
 
 /* A column that fills the window: the player takes whatever height the
@@ -175,6 +180,7 @@
 /* The games stay on one line and scroll sideways, fading at the edge, so a
    long list never pushes the player down. */
 .library-actions-row .chip-row {
+  flex: 1 1 auto;
   flex-wrap: nowrap;
   min-width: 0;
   overflow-x: auto;
