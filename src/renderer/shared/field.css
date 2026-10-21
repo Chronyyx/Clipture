@@ -42,6 +42,9 @@
   --inset-highlight: rgb(255 255 255 / 7%);
 }
 
+:root[data-theme="graphite"] input[type="checkbox"].toggle-switch::after { background: #c9c9c1; }
+:root[data-theme="graphite"] input[type="checkbox"].toggle-switch:checked::after { background: var(--on-accent); box-shadow: none; }
+
 :root[data-theme="light"] {
   --app-bg: #f1f1ed;
   --sidebar-bg: #dfdfda;

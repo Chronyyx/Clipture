@@ -242,6 +242,18 @@ select {
   opacity: 0.9;
 }
 
+/* Checking for updates is labelled: an icon alone read as an unknown key. */
+.titlebar-update-button.refresh {
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .titlebar-update-button:hover:not(:disabled),
 .titlebar-update-button.download.ready {
   color: #ffffff;

@@ -17,12 +17,8 @@
 /* Stays on screen when a long friends list scrolls the sidebar; the fade
    keeps scrolled names from running into it. */
 .sidebar-version {
-  position: sticky;
-  bottom: -20px;
-  z-index: 1;
   margin: auto -14px -20px;
   padding: 22px 18px 14px;
-  background: linear-gradient(to bottom, transparent, var(--sidebar-bg) 55%);
   color: var(--text-muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;

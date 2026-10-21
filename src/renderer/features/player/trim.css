@@ -10,7 +10,7 @@
 .trim-label { margin-right: 10px; color: var(--transport-ink); font-size: 12.5px; font-weight: 600; }
 /* Room for the handles, which sit just outside the kept part. */
 .trim-length { min-width: 64px; margin-left: 10px; }
-.trim-span { color: var(--transport-muted); }
+.trim-span { color: var(--transport-display-ink); }
 
 .trim-track {
   position: relative;
@@ -114,6 +114,14 @@
 .edit-rail .trim-marks { flex-wrap: wrap; row-gap: 8px; }
 .edit-rail .trim-marks .deck-key { flex: 1 1 0; }
 .edit-rail .trim-span { flex-basis: 100%; text-align: center; }
+
+/* A short window: smaller waveforms, so the whole editor fits beside the
+   video without its detail view scrolling out of sight. */
+@media (max-height: 780px) {
+  .edit-rail .trim-body { gap: 10px; }
+  .edit-rail .trim-track { height: 48px; }
+  .edit-rail .trim-zoomview { height: 60px; }
+}
 
 @media (max-width: 640px) {
   .trim-span { display: none; }

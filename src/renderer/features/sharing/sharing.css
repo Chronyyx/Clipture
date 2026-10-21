@@ -1135,8 +1135,19 @@
 /* The request already sits on the hover tint, so hovering it goes a step
    further, and Accept takes the accent. */
 .share-side-request:has(.share-side-row:hover) { background: var(--surface-active); }
-.share-side-request .share-side-name small { color: var(--text-muted); }
-.share-side-accept { flex: none; margin-right: 4px; }
+.share-side-request .share-side-name small {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The rail is a fixed width: its rows shrink to it rather than widening it. */
+.share-side,
+.share-side-list { grid-template-columns: minmax(0, 1fr); }
+.share-side-name { min-width: 0; }
+.share-side-accept { flex: none; }
+.share-side-decline { flex: none; margin-right: 4px; color: var(--text-subtle); }
+.share-side-decline:hover { color: var(--text); background: var(--surface-active); }
 .share-side-accept:hover {
   border-color: var(--accent-border);
   color: var(--accent-text);

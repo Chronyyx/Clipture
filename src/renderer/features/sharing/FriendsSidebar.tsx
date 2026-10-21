@@ -1,4 +1,4 @@
-import { Check, Users } from "lucide-react";
+import { Check, Users, X } from "lucide-react";
 import type { Friend, SharingSnapshot } from "../../../shared/sharing";
 import { FriendAvatar, presenceLabel } from "./FriendAvatar";
 import type { SharingController } from "./useSharing";
@@ -97,6 +97,10 @@ export function FriendsSidebar({
               <button type="button" className="icon-button share-side-accept" title={`Accept ${friend.name}`}
                 aria-label={`Accept ${friend.name}`} onClick={() => void controller.acceptFriend(friend.id)}>
                 <Check size={16} />
+              </button>
+              <button type="button" className="icon-button share-side-decline" title={`Decline ${friend.name}`}
+                aria-label={`Decline ${friend.name}`} onClick={() => void controller.removeFriend(friend.id)}>
+                <X size={16} />
               </button>
             </li>
           ))}

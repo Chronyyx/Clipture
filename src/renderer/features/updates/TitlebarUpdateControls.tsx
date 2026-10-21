@@ -82,6 +82,7 @@ export function TitlebarUpdateControls({
         onClick={handleCheck}
       >
         <RefreshCw size={14} strokeWidth={2.1} />
+        <span className="titlebar-update-label">{checking ? "Checking…" : "Check for updates"}</span>
       </button>
       {detected && (
         <button
