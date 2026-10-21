@@ -56,7 +56,7 @@ export function PlayerControls({
           <span className={`transport-led${playing ? ' active' : ''}`} aria-hidden='true' />
           {playing ? <Pause size={24} /> : <Play size={24} />}
         </button>
-        <span className='time-readout transport-total' title='Clip duration'>{formatDuration(duration)}</span>
+        <span className='time-readout transport-position' title='Position'>{formatDuration(currentTime)}</span>
       </div>
       <div className='volume-container'>
         <button className='transport-mute' type='button' onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'} aria-label='Mute audio' aria-pressed={muted}>
@@ -65,11 +65,10 @@ export function PlayerControls({
         <input className='volume-slider' type='range' min={0} max={5.62} step={0.05} value={volume} onChange={(event) => onVolumeChange(Number(event.target.value))} aria-label='Volume' />
       </div>
       <div className='transport-timeline'>
-        <span className='transport-time'>{formatDuration(currentTime)}</span>
         <div className='transport-scale' style={{ '--playback-progress': `${progress}%` } as CSSProperties}>
           <input className='player-scrubber' type='range' min={0} max={100} step={0.1} value={progress} onChange={(event) => onSeek(Number(event.target.value))} aria-label='Seek' aria-valuetext={`${formatDuration(currentTime)} of ${formatDuration(duration)}`} />
         </div>
-        <span className='transport-time'>−{formatDuration(Math.max(0, duration - currentTime))}</span>
+        <span className='transport-time' title='Clip length'>{formatDuration(duration)}</span>
       </div>
       {onToggleMixer && (
         <button className={`yt-pill icon-button${mixing ? ' active' : ''}`} title={mixing ? 'Close the audio mixer' : 'Balance the audio tracks'}

@@ -190,6 +190,10 @@
 .library-actions-row .chip-row::-webkit-scrollbar { display: none; }
 .library-actions-row .chip-row > .chip { flex: 0 0 auto; }
 .library-actions-row { min-width: 0; }
+@container clip-library (max-width: 860px) {
+  .library-actions-row .chip-row { gap: 6px; }
+  .library-actions-row .chip { padding: 0 11px; }
+}
 
 .chip {
   min-height: 36px;

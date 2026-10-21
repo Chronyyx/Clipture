@@ -305,10 +305,6 @@
   border-width: 2px;
   border-radius: 999px;
 }
-/* Two rows on a narrow player: a rounded plate instead of a stretched pill. */
-@container (max-width: 640px) {
-  :root[data-theme="maid-cafe"] .field-transport { border-radius: 22px; }
-}
 
 /* --- Recorder: the tally light is a heart. --- */
 :root[data-theme="maid-cafe"] .recorder-status {

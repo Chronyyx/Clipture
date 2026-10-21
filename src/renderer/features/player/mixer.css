@@ -104,7 +104,9 @@
   right: calc(var(--thumb) / 2);
   height: 3px;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--transport-display) 70%, transparent);
+  /* No groove of its own: only the lit level shows, so a quiet meter never
+     reads as a second fader. */
+  background: transparent;
   overflow: hidden;
   pointer-events: none;
 }

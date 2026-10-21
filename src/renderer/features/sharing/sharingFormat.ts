@@ -1,4 +1,4 @@
-const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto", style: "short" });
 
 export function formatSharedAt(ms: number, now = Date.now()) {
   const minutes = Math.round((ms - now) / 60_000);

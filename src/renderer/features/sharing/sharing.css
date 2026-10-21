@@ -181,6 +181,7 @@
 
 /* Nothing has streamed yet, so there is no frame to show: the sender's
    colour stands in for one instead of a black box. */
+.share-screen-idle { gap: 20px; }
 .share-screen-idle p { color: rgb(255 255 255 / 74%); }
 
 .share-screen-idle {
