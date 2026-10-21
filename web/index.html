@@ -18,8 +18,10 @@
   <meta property="og:image:alt" content="The Clipture app showing a clip library, under the line: Keep the last 60 seconds of your game.">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="preload" href="/fonts/archivo-100_900-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/site.css">
   <script src="/site.js" defer></script>
+  <script src="/buffer.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#headline">Skip to content</a>
@@ -31,6 +33,7 @@
       </a>
       <nav class="nav-links" aria-label="Sections">
         <a href="#demo">Demo</a>
+        <a href="#how">How it works</a>
         <a href="#features">Features</a>
       </nav>
       <div class="nav-actions">
@@ -38,30 +41,50 @@
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.72 1.22 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.83-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
           <span>GitHub</span>
         </a>
-        <a class="button button-small" href="https://github.com/Chronyyx/Clipture/releases/latest">Download</a>
+        <a class="button button-small" href="https://github.com/Chronyyx/Clipture/releases/latest"><span class="roll"><span>Download</span><span aria-hidden="true">Download</span></span></a>
       </div>
     </div>
   </header>
 
   <main>
-    <section class="hero" aria-labelledby="headline">
-      <a class="announce" href="#features">
-        <span class="announce-dot" aria-hidden="true"></span>
-        New: share clips straight to your friends
-      </a>
-      <h1 id="headline">Keep the last 60&nbsp;seconds of your game.</h1>
-      <p class="lede">Clipture records quietly on your NVIDIA GPU. When something happens, press Ctrl+Shift+S and the moment you just played becomes a clip.</p>
-      <div class="hero-actions">
-        <a class="button" href="https://github.com/Chronyyx/Clipture/releases/latest">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>Download for Windows</a>
-        <a class="button button-quiet" href="#demo">Try the live demo</a>
+    <section class="hero" aria-labelledby="headline" data-moment="the top of the page">
+      <div class="hero-meta">
+        <p class="tally"><span class="tally-light" aria-hidden="true"></span><span>Recording this visit</span> <span class="tally-time" data-buffer-fill>0 s</span></p>
+        <p class="hero-needs">Windows 10 or 11 with an NVIDIA GPU. Free and open source.</p>
       </div>
-      <p class="needs">Windows 10 or 11 with an NVIDIA GPU. Free and open source.</p>
+      <h1 id="headline" class="poster">
+        <span>Keep the last</span>
+        <span>60&nbsp;seconds</span>
+        <span>of your game.</span>
+      </h1>
+
+      <figure class="buffer" data-buffer>
+        <canvas class="buffer-strip" aria-hidden="true"></canvas>
+        <div class="buffer-flash" aria-hidden="true"></div>
+        <figcaption class="buffer-scale" aria-hidden="true">
+          <span>−60&nbsp;s</span><span>−30&nbsp;s</span><span class="buffer-now">now</span>
+        </figcaption>
+      </figure>
+
+      <div class="hero-foot">
+        <p class="lede">Clipture records quietly on your NVIDIA GPU. When something happens, press the shortcut and the minute you just played becomes a clip. Try it here: this page has been keeping the last minute of your visit.</p>
+        <div class="hero-actions">
+          <button class="save" type="button" data-save>
+            <span class="keys hint-keys" aria-hidden="true"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>S</kbd></span>
+            <span class="save-label">Save last 60s</span>
+          </button>
+          <a class="button" href="https://github.com/Chronyyx/Clipture/releases/latest">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg><span class="roll"><span>Download for Windows</span><span aria-hidden="true">Download for Windows</span></span></a>
+        </div>
+      </div>
     </section>
 
-    <section class="showcase" id="demo" aria-label="Live demo">
-      <div class="glow" aria-hidden="true"></div>
-      <a class="skip-link" href="#features">Skip the demo</a>
+    <section class="showcase" id="demo" aria-labelledby="demo-title" data-moment="the live demo">
+      <div class="section-head">
+        <h2 id="demo-title">The real app, running right here.</h2>
+        <p>Not a video. This is Clipture's own interface with sample clips. Play one, open the trim editor, or send it to a friend.</p>
+      </div>
+      <a class="skip-link" href="#how">Skip the demo</a>
       <div class="window" data-app-frame>
         <div class="titlebar" aria-hidden="true">
           <img src="/clipture-logo.png" alt="" width="16" height="16">
@@ -69,68 +92,80 @@
           <span class="caption-buttons"><i></i><i></i><i></i></span>
         </div>
         <div class="viewport">
-          <iframe src="/demo/?preview&amp;demo" title="Clipture live demo: the real app with sample clips" width="1280" height="800"></iframe>
+          <iframe src="/demo/?preview&amp;demo" title="Clipture live demo: the real app with sample clips" width="1280" height="800" loading="lazy"></iframe>
         </div>
       </div>
       <p class="showcase-note">
-        <span class="live-dot" aria-hidden="true"></span>
-        This is the real Clipture app with sample clips. Press Save last 60s, play a clip, or open Friends.
-        <a class="open-demo" href="/demo/?preview&amp;demo" target="_blank" rel="noopener">Open full screen</a>
+        <a class="open-demo" href="/demo/?preview&amp;demo" target="_blank" rel="noopener">Open the demo full screen</a>
       </p>
     </section>
 
-    <section class="features" id="features" aria-labelledby="features-title">
+    <section class="steps" id="how" aria-labelledby="how-title" data-moment="how it works">
+      <h2 id="how-title" class="steps-title">From the play to your friend’s screen.</h2>
+      <ol class="timeline">
+        <li class="mark">
+          <span class="mark-time">Before</span>
+          <h3>Play like you always do</h3>
+          <p>Clipture keeps a rolling buffer on your GPU’s NVENC encoder, so games keep their frame rate. It works in fullscreen and with the window closed.</p>
+        </li>
+        <li class="mark mark-now">
+          <span class="mark-time">The moment</span>
+          <h3>Press <span class="keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>S</kbd></span></h3>
+          <p>The buffer becomes a clip. Keep anything from 5 seconds to 10 minutes of history, and change the shortcut whenever you like.</p>
+        </li>
+        <li class="mark">
+          <span class="mark-time">After</span>
+          <h3>Trim it, mix it, send it</h3>
+          <p>Cut it down, balance the game against your voice, then stream it straight to a friend’s PC.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="features" id="features" aria-labelledby="features-title" data-moment="the features">
       <div class="section-head">
         <h2 id="features-title">Built for the moment right after the play.</h2>
         <p>Everything runs from a small background recorder. The window only opens when you want to watch, trim or share.</p>
       </div>
-      <div class="feature-grid">
-        <article class="feature">
-          <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M8 13h.01M12 13h.01M16 13h.01M7 16h10"/></svg>
-          <h3>One shortcut, any game</h3>
-          <p>Works in fullscreen games and with the window closed. Change the key and the clip length whenever you like.</p>
-          <span class="chip">Ctrl+Shift+S</span>
-        </article>
-        <article class="feature">
-          <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
-          <h3>Recorded by your GPU</h3>
-          <p>NVIDIA's NVENC encoder does the work, so games keep their frame rate. Keep 5 seconds to 10 minutes of history.</p>
-          <span class="chip">NVENC</span>
-        </article>
-        <article class="feature">
-          <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/></svg>
+      <ul class="index">
+        <li class="row">
+          <span class="row-spec">3 tracks</span>
           <h3>Every voice on its own track</h3>
-          <p>Game, microphone and apps like Discord are saved separately. Mix them while you watch, or mute one.</p>
-          <span class="chip">Separate tracks</span>
-        </article>
-        <article class="feature">
-          <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <p>Game, microphone and apps like Discord are saved separately. Turn one down while you watch, or mute it.</p>
+        </li>
+        <li class="row">
+          <span class="row-spec">Peer to peer</span>
           <h3>Friends without a cloud</h3>
-          <p>Send an invite link. Clips stream straight from your PC to theirs, encrypted, and they choose whether to keep a copy.</p>
-          <span class="chip">Peer to peer</span>
-        </article>
-        <article class="feature">
-          <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20M7 14h4"/></svg>
+          <p>Send an invite link. Clips stream from your PC to theirs, encrypted, and they choose whether to keep a copy.</p>
+        </li>
+        <li class="row">
+          <span class="row-spec">Frame accurate</span>
+          <h3>Trim before you send</h3>
+          <p>Drag the edges on a zoomable waveform, loop the part you keep, and the rest is deleted from the file.</p>
+        </li>
+        <li class="row">
+          <span class="row-spec">Tray</span>
           <h3>Lives in your tray</h3>
           <p>Recording keeps going while the window is closed. Opening Clipture is instant, and closing it frees the memory.</p>
-          <span class="chip">Background</span>
-        </article>
-        <article class="feature">
-          <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a10 10 0 1 1 10-10c0 2.2-1.8 3-3.5 3H16a2 2 0 0 0-1.6 3.2A2 2 0 0 1 12.9 22Z"/><circle cx="7.5" cy="10.5" r="1"/><circle cx="10.5" cy="6.5" r="1"/><circle cx="15" cy="7" r="1"/><circle cx="17.5" cy="11" r="1"/></svg>
+        </li>
+        <li class="row">
+          <span class="row-spec">7 themes</span>
           <h3>Make it yours</h3>
           <p>Graphite, Light, Glitten, Aero, Maid café, Halloween, or your own colours.</p>
-          <span class="chip">7 themes</span>
-        </article>
-      </div>
+        </li>
+      </ul>
     </section>
 
-    <section class="closing" aria-labelledby="closing-title">
-      <img class="closing-mark" src="/clipture-logo.png" alt="" width="96" height="96">
-      <h2 id="closing-title">Your next good play is coming.</h2>
+    <section class="finale" aria-labelledby="finale-title" data-moment="the end of the page">
+      <p class="finale-keys" aria-hidden="true"><kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>S</kbd></p>
+      <h2 id="finale-title">Your next good play is coming. Be ready for it.</h2>
       <a class="button" href="https://github.com/Chronyyx/Clipture/releases/latest">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>Download for Windows</a>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg><span class="roll"><span>Download for Windows</span><span aria-hidden="true">Download for Windows</span></span></a>
     </section>
   </main>
+
+  <aside class="shelf" aria-label="Saved moments" data-shelf hidden>
+    <p class="sr-only" role="status" data-shelf-status></p>
+  </aside>
 
   <footer class="footer">
     <div class="footer-inner">
