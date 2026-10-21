@@ -95,6 +95,11 @@ struct Diagnostics {
     uint64_t frameQueueMaxDepth = 0;
     int sourceFramesSuperseded = 0;
     int captureSlotDrops = 0;
+    // GPU slot pools that grow under load and free idle slots: slots held
+    // now, the most held at once, and how many were freed for sitting idle.
+    int captureTextureSlots = 0;
+    int captureTextureSlotsPeak = 0;
+    uint64_t captureTextureSlotIdleReleases = 0;
     int captureCallbackErrors = 0;
     int schedulerDroppedFrames = 0;
     int schedulerRepeatedFrames = 0;
@@ -107,6 +112,9 @@ struct Diagnostics {
     int nvencInputDrops = 0;
     int encoderBackpressureDrops = 0;
     int nvencInFlightFrames = 0;
+    int nvencOutputSlots = 0;
+    int nvencOutputSlotsPeak = 0;
+    uint64_t nvencOutputSlotIdleReleases = 0;
     int64_t maximumCaptureGap100ns = 0;
     int64_t maximumSubmitLatency100ns = 0;
     int64_t averageScaleLatency100ns = 0;

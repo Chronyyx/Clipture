@@ -4,6 +4,7 @@
 #include "clipture/FrameQueue.hpp"
 #include "clipture/LatencyWindow.hpp"
 #include "clipture/PacketRingBuffer.hpp"
+#include "clipture/SlotPoolUsage.hpp"
 
 #include <atomic>
 #include <condition_variable>
@@ -84,6 +85,7 @@ public:
     uint64_t catchUpRepeatedTicks() const;
     bool stillFrameDuplicationEnabled() const;
     int encoderQueueDrops() const;
+    const SlotPoolUsage& nvencOutputSlots() const;
     int encoderRepeatCoalesced() const;
     uint64_t encoderAdmissionRejections() const;
     int nvencSurfaceDrops() const;
@@ -169,6 +171,7 @@ private:
     std::atomic<int> encoderBackpressureDrops_ = 0;
     std::atomic<int> nvencInFlightFrames_ = 0;
     std::atomic<int> nvencPreparedFrames_ = 0;
+    SlotPoolUsage nvencOutputSlots_;
     std::atomic<uint64_t> distinctSourceOutputFrames_ = 0;
     std::atomic<uint64_t> repeatedSourceOutputFrames_ = 0;
     std::atomic<uint64_t> unknownSourceOutputFrames_ = 0;

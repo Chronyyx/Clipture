@@ -166,11 +166,21 @@ async function main() {
   console.log(JSON.stringify({ step: 'score', clip: engine.save.clip.filePath }));
   const { video, stamps } = readFrameStamps(engine.save.clip.filePath,
     trialSummary.bufferWidth ?? trialSummary.width, trialSummary.bufferHeight ?? trialSummary.height);
+  // GPU slot pools: slots held at the end, the most held at once (the probe's
+  // engine is fresh, so over the whole run), and slots freed for sitting idle.
+  const slotPool = (field, releases) => engine.after[field] === undefined ? null : {
+    held: engine.after[field], peak: engine.after[`${field}Peak`],
+    idleReleases: (engine.after[releases] ?? 0) - (engine.before[releases] ?? 0) };
   const report = {
     label: options.label, startedAt: engine.startedAt, engine: options.engine, env: options.env,
     fps: options.fps, timeline: options.timeline, hdrWindow: options.hdr, renderSize: options.renderSize,
     cpuThreads: options.cpuThreads, cpuBusy: options.cpuBusy, computeLoad: options.computeLoad, dailyAudio: options.dailyAudio, audio: options.audio, asGame: options.asGame, cpuGamesPriority: options.cpuGamesPriority, gpuPriority: options.gpuPriority, layerMs: options.layerMs,
     hdrTonemapping: engine.after.hdrTonemapping ?? null, video,
+    slotPools: { capture: slotPool('captureTextureSlots', 'captureTextureSlotIdleReleases'),
+      nvenc: slotPool('nvencOutputSlots', 'nvencOutputSlotIdleReleases') },
+    // Slots held each second of the measurement: [elapsed s, capture, NVENC].
+    slotTimeline: engine.samples.map(({ elapsed, diagnostics }) => [Math.round(elapsed),
+      diagnostics.captureTextureSlots ?? null, diagnostics.nvencOutputSlots ?? null]),
     engineCounters: { outputFps: engine.outputFps, distinctFps: engine.distinctFps, totalDrops: engine.totalDrops,
       queueDrops: engine.queueDrops, schedulerDrops: engine.schedulerDrops, cpuCores: engine.cpuCoreEquivalents },
     // Every numeric engine counter that moved during measurement.
@@ -192,7 +202,7 @@ async function main() {
     fg: trialSummary.phases.find(item => item.index === phase.index)?.foregroundPct,
     costPct: report.windowCost.find(cost => cost.index === phase.index)?.costPct })));
   console.log(JSON.stringify({ totals: report.score.totals, undecoded: report.score.undecodedFrames,
-    hdrTonemapping: report.hdrTonemapping, versusBaseline: report.versusBaseline && {
+    hdrTonemapping: report.hdrTonemapping, slotPools: report.slotPools, versusBaseline: report.versusBaseline && {
       stutterFrames: report.versusBaseline.stutterFrames, missedFrames: report.versusBaseline.missedFrames, worstLagP99Ms: report.versusBaseline.worstLagP99Ms },
     report: path.join(directory, 'report.json') }));
   if (report.score.undecodedFrames > report.score.outputFrames * 0.01) {

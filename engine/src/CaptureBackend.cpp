@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -565,6 +566,7 @@ struct CaptureTexturePool::Slot {
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> renderTargetView;
     std::atomic<bool> leased = false;
     std::shared_ptr<GpuTextureReadState> gpuReadState;
+    std::chrono::steady_clock::time_point lastLeased {};
 };
 
 namespace {
@@ -573,6 +575,9 @@ namespace {
 // admission bounds that overlap; a hard texture cap must not turn temporary
 // encoder pressure into permanent capture starvation.
 constexpr std::size_t kCaptureTextureWarmSlots = 4;
+// Slots grown past the warm set are freed once nothing has leased them for
+// this long. Leases prefer low indices, so surplus slots go idle at the back.
+constexpr std::chrono::milliseconds kCaptureTextureIdleRelease{2000};
 
 }  // namespace
 CaptureTexturePool::CaptureTexturePool(std::shared_ptr<CaptureSharedState> shared)
@@ -594,11 +599,11 @@ CaptureTexture CaptureTexturePool::acquire(
         (((desc_.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0) != needsUnorderedAccess);
     if (needsNewGeneration) {
         slots_.clear();
+        shared_->captureTextureSlots.observe(0);
         device_ = device;
         deferredHdr_ = deferredHdr;
         sharePrepared_ = sharePrepared;
         hdrInputTexture_.Reset();
-        nextSlot_ = 0;
         desc_ = {};
         desc_.Width = width;
         desc_.Height = height;
@@ -633,6 +638,7 @@ CaptureTexture CaptureTexturePool::acquire(
             }
             if (desc_.MiscFlags) slot->gpuReadState = std::make_shared<GpuTextureReadState>();
             slots_.push_back(std::move(slot));
+            shared_->captureTextureSlots.observe(static_cast<int>(slots_.size()));
         }
 
         if (needsUnorderedAccess && !deferredHdr) {
@@ -649,10 +655,10 @@ CaptureTexture CaptureTexturePool::acquire(
         }
     }
 
+    const auto now = std::chrono::steady_clock::now();
     bool gpuPending = false;
-    for (std::size_t offset = 0; offset < slots_.size(); ++offset) {
-        const std::size_t index = (nextSlot_ + offset) % slots_.size();
-        const auto& slot = slots_[index];
+    for (std::size_t index = 0; index < slots_.size(); ++index) {
+        const auto slot = slots_[index];
         if (slot->leased.load(std::memory_order_acquire)) continue;
         if (slot->gpuReadState && !slot->gpuReadState->reusable()) {
             gpuPending = true;
@@ -670,7 +676,8 @@ CaptureTexture CaptureTexturePool::acquire(
         }
         bool expected = false;
         if (!slot->leased.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) continue;
-        nextSlot_ = (index + 1) % slots_.size();
+        slot->lastLeased = now;
+        releaseIdleSlots(now);
         auto lease = std::shared_ptr<void>(slot.get(), [slot](void*) {
             slot->leased.store(false, std::memory_order_release);
         });
@@ -697,6 +704,7 @@ CaptureTexture CaptureTexturePool::acquire(
     }
 
     slot->leased.store(true, std::memory_order_release);
+    slot->lastLeased = now;
     if (deferredHdr) {
         auto hdrDesc = desc_;
         hdrDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -712,15 +720,27 @@ CaptureTexture CaptureTexturePool::acquire(
     });
     if (desc_.MiscFlags) slot->gpuReadState = std::make_shared<GpuTextureReadState>();
     slots_.push_back(slot);
-    nextSlot_ = 0;
+    shared_->captureTextureSlots.observe(static_cast<int>(slots_.size()));
     return { slot->texture, deferredHdr ? slot->hdrInputTexture : hdrInputTexture_, slot->renderTargetView, std::move(lease), slot->gpuReadState };
 }
+void CaptureTexturePool::releaseIdleSlots(std::chrono::steady_clock::time_point now) {
+    while (slots_.size() > kCaptureTextureWarmSlots) {
+        const auto& slot = slots_.back();
+        if (slot->leased.load(std::memory_order_acquire)) return;
+        if (slot->gpuReadState && !slot->gpuReadState->reusable()) return;
+        if (now - slot->lastLeased < kCaptureTextureIdleRelease) return;
+        slots_.pop_back();
+        ++shared_->captureTextureSlots.idleReleases;
+        shared_->captureTextureSlots.observe(static_cast<int>(slots_.size()));
+    }
+}
+
 void CaptureTexturePool::reset() {
     std::lock_guard lock(mutex_);
     slots_.clear();
+    shared_->captureTextureSlots.observe(0);
     device_.Reset();
     hdrInputTexture_.Reset();
-    nextSlot_ = 0;
     desc_ = {};
 }
 }  // namespace clipture::capture

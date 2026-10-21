@@ -2526,6 +2526,12 @@ void Engine::refreshPacketCounts() {
         ? boundedCounter(captureSession_->sourceFramesSuperseded())
         : 0;
     diagnostics_.captureSlotDrops = captureSession_ ? boundedCounter(captureSession_->ownedSlotDrops()) : 0;
+    if (captureSession_) {
+        const auto& slots = captureSession_->captureTextureSlots();
+        diagnostics_.captureTextureSlots = slots.allocated.load(std::memory_order_relaxed);
+        diagnostics_.captureTextureSlotsPeak = slots.peak.load(std::memory_order_relaxed);
+        diagnostics_.captureTextureSlotIdleReleases = slots.idleReleases.load(std::memory_order_relaxed);
+    }
     diagnostics_.captureCallbackErrors = captureSession_ ? boundedCounter(captureSession_->callbackErrors()) : 0;
     diagnostics_.maximumCaptureGap100ns = captureSession_ ? captureSession_->maximumFrameInterval100ns() : 0;
     diagnostics_.captureEpoch = captureSession_ ? captureSession_->captureEpoch() : 0;
@@ -2568,6 +2574,12 @@ void Engine::refreshPacketCounts() {
     diagnostics_.nvencInputDrops = encoderWorker_ ? encoderWorker_->nvencInputDrops() : 0;
     diagnostics_.encoderBackpressureDrops = encoderWorker_ ? encoderWorker_->encoderBackpressureDrops() : 0;
     diagnostics_.nvencInFlightFrames = encoderWorker_ ? encoderWorker_->nvencInFlightFrames() : 0;
+    if (encoderWorker_) {
+        const auto& slots = encoderWorker_->nvencOutputSlots();
+        diagnostics_.nvencOutputSlots = slots.allocated.load(std::memory_order_relaxed);
+        diagnostics_.nvencOutputSlotsPeak = slots.peak.load(std::memory_order_relaxed);
+        diagnostics_.nvencOutputSlotIdleReleases = slots.idleReleases.load(std::memory_order_relaxed);
+    }
     diagnostics_.maximumSubmitLatency100ns = encoderWorker_ ? encoderWorker_->maximumSubmitLatency100ns() : 0;
     diagnostics_.averageScaleLatency100ns = encoderWorker_ ? encoderWorker_->averageScaleLatency100ns() : 0;
     diagnostics_.maximumScaleLatency100ns = encoderWorker_ ? encoderWorker_->maximumScaleLatency100ns() : 0;

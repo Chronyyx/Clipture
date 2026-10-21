@@ -87,6 +87,7 @@ deleted after scoring.
 | `freshnessPct` | Unique captured images / min(output frames, frames presented over the same span). |
 | `longestFreezeMs` | Longest run of identical output frames. |
 | `lagMs` | Clip time minus present time, shifted so the fastest frame is 0. The p99/max tail shows images reaching the recording late. Present time is CPU submission, so heavy phases include the window's own GPU queue; compare lag between builds, not as an absolute latency. |
+| `slotPools` | Capture texture and NVENC output slots: `held` at the end, `peak` held at once during the run, and `idleReleases` freed for sitting idle. A peak above the warm set (4 capture, 8 NVENC) means a burst grew the pool; releases mean it shrank back. `slotTimeline` has the slots held each second as `[seconds, capture, NVENC]`. |
 | `windowCost` | Window frame rate with capture versus alone, per phase. A capture change that lowers `missedFrames` by raising this is moving the cost onto the game. Ignore it in unloaded phases above several hundred fps, where it is mostly noise. |
 
 ## Limits

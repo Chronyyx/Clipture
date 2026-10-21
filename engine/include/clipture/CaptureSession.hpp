@@ -1,6 +1,7 @@
 #pragma once
 
 #include "clipture/LatencyWindow.hpp"
+#include "clipture/SlotPoolUsage.hpp"
 
 #include <memory>
 #include <cstdint>
@@ -81,6 +82,7 @@ public:
     int64_t maximumFrameInterval100ns() const;
     int64_t lastPublishedAge100ns() const;
     uint64_t ownedSlotDrops() const;
+    const SlotPoolUsage& captureTextureSlots() const;
     uint64_t sourceFramesSuperseded() const;
     uint64_t callbackErrors() const;
     uint64_t captureEpoch() const;

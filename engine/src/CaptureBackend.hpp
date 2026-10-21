@@ -4,6 +4,7 @@
 #include "clipture/CaptureSession.hpp"
 #include "clipture/CaptureTickGate.hpp"
 #include "clipture/FrameQueue.hpp"
+#include "clipture/SlotPoolUsage.hpp"
 
 #include <Windows.h>
 #include <d3d11.h>
@@ -12,6 +13,7 @@
 #include <wrl/client.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -71,6 +73,7 @@ struct CaptureSharedState {
     std::atomic<uint64_t> fallbackCount = 0;
     std::atomic<bool> running = false;
     std::atomic<bool> hdrTonemappingActive = false;
+    SlotPoolUsage captureTextureSlots;
     std::atomic<void*> activeMonitor = nullptr;
     // Detected game window that monitor WGC may record in place of the desktop
     // while it covers the monitor unobstructed. Survives backend restarts.
@@ -154,12 +157,12 @@ public:
 
 private:
     struct Slot;
+    void releaseIdleSlots(std::chrono::steady_clock::time_point now);
     std::shared_ptr<CaptureSharedState> shared_;
     std::mutex mutex_;
     std::vector<std::shared_ptr<Slot>> slots_;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture_;
-    std::size_t nextSlot_ = 0;
     bool deferredHdr_ = false;
     bool sharePrepared_ = false;
     D3D11_TEXTURE2D_DESC desc_ {};

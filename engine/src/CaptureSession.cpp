@@ -427,6 +427,10 @@ uint64_t CaptureSession::ownedSlotDrops() const {
     return impl_->shared->ownedSlotDrops.load(std::memory_order_relaxed);
 }
 
+const SlotPoolUsage& CaptureSession::captureTextureSlots() const {
+    return impl_->shared->captureTextureSlots;
+}
+
 uint64_t CaptureSession::sourceFramesSuperseded() const {
     return impl_->shared->sourceFramesSuperseded.load(std::memory_order_relaxed);
 }

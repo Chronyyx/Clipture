@@ -88,6 +88,14 @@ void injectTestEncoderStall() {
 constexpr std::size_t kDefaultNvencOutputSlots = 32;
 constexpr std::size_t kRoundTransitionNvencOutputSlots = 32;
 constexpr std::size_t kDefaultSyncOutputDelay = 3;
+// Slots past the warm set allocate their bitstream buffer and input surface on
+// first use and free them once idle, so burst headroom only costs memory while
+// a burst is actually using it.
+constexpr std::size_t kWarmNvencOutputSlots = 8;
+constexpr int64_t kIdleNvencOutputSlotRelease100ns = 3LL * 10'000'000LL;
+// Input views and registrations pin their textures; drop ones the capture pool
+// no longer hands out so freed capture slots actually release memory.
+constexpr int64_t kIdleEncoderInputRelease100ns = 2LL * 10'000'000LL;
 constexpr std::size_t kRoundTransitionSyncOutputDelay = 8;
 
 using NvEncodeApiCreateInstance = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
@@ -346,6 +354,7 @@ public:
         std::atomic<int>* externalDropCount,
         std::atomic<int>* externalSurfaceDropCount,
         std::atomic<int>* externalInputDropCount,
+        SlotPoolUsage* outputSlotUsage,
         LatencyWindow<>* outputEventWaitLatency,
         LatencyWindow<>* outputLockLatency,
         LatencyWindow<>* outputCopyLatency,
@@ -355,6 +364,7 @@ public:
           externalDropCount_(externalDropCount),
           externalSurfaceDropCount_(externalSurfaceDropCount),
           externalInputDropCount_(externalInputDropCount),
+          outputSlotUsage_(outputSlotUsage),
           outputEventWaitLatency_(outputEventWaitLatency),
           outputLockLatency_(outputLockLatency),
           outputCopyLatency_(outputCopyLatency),
@@ -701,6 +711,11 @@ public:
             status = "NVENC output pool remained busy after a bounded wait; dropping this frame.";
             return true;
         }
+        if (!ensureOutputSlotBuffers(*slot, status)) {
+            releaseOutputSlotReservation(*slot);
+            return false;
+        }
+        releaseIdleOutputSlot();
 
         const int64_t scaleStarted100ns = monotonicNow100ns();
         auto encodeTexture = prepareFrameForEncode(frame, *slot, timings.inputPath, status);
@@ -934,12 +949,14 @@ private:
         NV_ENC_BUFFER_FORMAT bufferFormat = NV_ENC_BUFFER_FORMAT_UNDEFINED;
         int width = 0;
         int height = 0;
+        int64_t lastUsed100ns = 0;
     };
 
     struct CachedVideoInputView {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
         Microsoft::WRL::ComPtr<ID3D11VideoProcessorInputView> view;
         uint64_t scalerGeneration = 0;
+        int64_t lastUsed100ns = 0;
     };
 
     struct OutputSlot {
@@ -966,6 +983,7 @@ private:
         uint64_t scaledViewGeneration = 0;
         uint64_t surfaceCaptureEpoch = 0;
         uint64_t surfaceSourceFrameSequence = 0;
+        int64_t lastReserved100ns = 0;
     };
 
     struct PreparedSubmission {
@@ -1753,8 +1771,13 @@ private:
     Microsoft::WRL::ComPtr<ID3D11VideoProcessorInputView> videoProcessorInputView(
         ID3D11Texture2D* texture,
         std::string& status) {
-        for (const auto& cached : inputViews_) {
+        const int64_t now = monotonicNow100ns();
+        std::erase_if(inputViews_, [texture, now](const CachedVideoInputView& cached) {
+            return cached.texture.Get() != texture && now - cached.lastUsed100ns > kIdleEncoderInputRelease100ns;
+        });
+        for (auto& cached : inputViews_) {
             if (cached.texture.Get() == texture && cached.scalerGeneration == scalerGeneration_) {
+                cached.lastUsed100ns = now;
                 return cached.view;
             }
         }
@@ -1778,7 +1801,7 @@ private:
         }
 
         if (inputViews_.size() >= maximumInputViewCacheSize_) inputViews_.erase(inputViews_.begin());
-        inputViews_.push_back(CachedVideoInputView { texture, inputView, scalerGeneration_ });
+        inputViews_.push_back(CachedVideoInputView { texture, inputView, scalerGeneration_, now });
         return inputView;
     }
 
@@ -1961,40 +1984,110 @@ private:
 
     bool createOutputSlots(std::string& status) {
         outputSlots_.resize(outputSlotCount_);
-        for (auto& slot : outputSlots_) {
+        for (std::size_t index = 0; index < kWarmNvencOutputSlots && index < outputSlots_.size(); ++index) {
+            if (!ensureOutputSlotBuffers(outputSlots_[index], status)) return false;
+        }
+        return true;
+    }
+
+    bool ensureOutputSlotBuffers(OutputSlot& slot, std::string& status) {
+        if (!slot.bitstreamBuffer) {
             NV_ENC_CREATE_BITSTREAM_BUFFER bitstream {};
             bitstream.version = nvencStructVersionForApi(1, apiVersion_);
-            NVENCSTATUS nvStatus = funcs_.nvEncCreateBitstreamBuffer(encoder_, &bitstream);
+            const NVENCSTATUS nvStatus = funcs_.nvEncCreateBitstreamBuffer(encoder_, &bitstream);
             if (nvStatus != NV_ENC_SUCCESS) {
                 status = "NvEncCreateBitstreamBuffer failed: " + statusDetails(nvStatus);
                 return false;
             }
             slot.bitstreamBuffer = bitstream.bitstreamBuffer;
+            observeOutputSlots(allocatedOutputSlots_.fetch_add(1) + 1);
+        }
 
-            if (asyncEnabled_) {
-                slot.completionEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-                if (!slot.completionEvent) {
-                    status = "NVENC async event creation failed.";
-                    return false;
-                }
-
-                if (!funcs_.nvEncRegisterAsyncEvent) {
-                    status = "NVENC async event registration is unavailable in this driver API.";
-                    return false;
-                }
-
-                NV_ENC_EVENT_PARAMS eventParams {};
-                eventParams.version = nvencStructVersionForApi(2, apiVersion_);
-                eventParams.completionEvent = slot.completionEvent;
-                nvStatus = funcs_.nvEncRegisterAsyncEvent(encoder_, &eventParams);
-                if (nvStatus != NV_ENC_SUCCESS) {
-                    status = "NvEncRegisterAsyncEvent failed: " + statusDetails(nvStatus);
-                    return false;
-                }
-                slot.eventRegistered = true;
+        if (asyncEnabled_ && !slot.eventRegistered) {
+            if (!slot.completionEvent) slot.completionEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            if (!slot.completionEvent) {
+                status = "NVENC async event creation failed.";
+                return false;
             }
+
+            if (!funcs_.nvEncRegisterAsyncEvent) {
+                status = "NVENC async event registration is unavailable in this driver API.";
+                return false;
+            }
+
+            NV_ENC_EVENT_PARAMS eventParams {};
+            eventParams.version = nvencStructVersionForApi(2, apiVersion_);
+            eventParams.completionEvent = slot.completionEvent;
+            const NVENCSTATUS nvStatus = funcs_.nvEncRegisterAsyncEvent(encoder_, &eventParams);
+            if (nvStatus != NV_ENC_SUCCESS) {
+                status = "NvEncRegisterAsyncEvent failed: " + statusDetails(nvStatus);
+                return false;
+            }
+            slot.eventRegistered = true;
         }
         return true;
+    }
+
+    void releaseOutputSlotBuffers(OutputSlot& slot) {
+        if (slot.eventRegistered) {
+            NV_ENC_EVENT_PARAMS eventParams {};
+            eventParams.version = nvencStructVersionForApi(2, apiVersion_);
+            eventParams.completionEvent = slot.completionEvent;
+            funcs_.nvEncUnregisterAsyncEvent(encoder_, &eventParams);
+            slot.eventRegistered = false;
+        }
+        if (slot.bitstreamBuffer) {
+            funcs_.nvEncDestroyBitstreamBuffer(encoder_, slot.bitstreamBuffer);
+            slot.bitstreamBuffer = nullptr;
+            observeOutputSlots(allocatedOutputSlots_.fetch_sub(1) - 1);
+        }
+        if (slot.completionEvent) {
+            CloseHandle(slot.completionEvent);
+            slot.completionEvent = nullptr;
+        }
+    }
+
+    void releaseOutputSlotSurface(OutputSlot& slot) {
+        if (slot.scaledTexture) {
+            std::erase_if(registeredInputs_, [this, &slot](const RegisteredInput& input) {
+                if (input.texture.Get() != slot.scaledTexture.Get()) return false;
+                if (input.registeredResource) funcs_.nvEncUnregisterResource(encoder_, input.registeredResource);
+                return true;
+            });
+        }
+        slot.scaledOutputView.Reset();
+        slot.scaledTexture.Reset();
+        slot.scaledViewGeneration = 0;
+        slot.surfaceCaptureEpoch = 0;
+        slot.surfaceSourceFrameSequence = 0;
+    }
+
+    // Frees one surplus slot that has not been reserved recently. Reservations
+    // take the lowest free index, so idle slots collect past the warm set.
+    void releaseIdleOutputSlot() {
+        const int64_t now = monotonicNow100ns();
+        OutputSlot* idle = nullptr;
+        {
+            std::lock_guard lock(outputMutex_);
+            for (std::size_t index = outputSlots_.size(); index > kWarmNvencOutputSlots; --index) {
+                auto& slot = outputSlots_[index - 1];
+                if (slot.inFlight || (!slot.bitstreamBuffer && !slot.scaledTexture)) continue;
+                if (now - slot.lastReserved100ns < kIdleNvencOutputSlotRelease100ns) continue;
+                // Reserve it so no frame picks the slot while its buffers are freed.
+                slot.inFlight = true;
+                idle = &slot;
+                break;
+            }
+        }
+        if (!idle) return;
+        releaseOutputSlotSurface(*idle);
+        releaseOutputSlotBuffers(*idle);
+        releaseOutputSlotReservation(*idle);
+        if (outputSlotUsage_) ++outputSlotUsage_->idleReleases;
+    }
+
+    void observeOutputSlots(int count) {
+        if (outputSlotUsage_) outputSlotUsage_->observe(count);
     }
 
     int queryEncodeCap(NV_ENC_CAPS cap) {
@@ -2228,26 +2321,23 @@ private:
             return nullptr;
         }
         auto reserveFreeSlot = [this, &frame]() -> OutputSlot* {
+            auto reserve = [](OutputSlot& slot) {
+                slot.inFlight = true;
+                slot.lastReserved100ns = monotonicNow100ns();
+                return &slot;
+            };
             if (frame.sequence != 0) {
-                for (std::size_t attempt = 0; attempt < outputSlots_.size(); ++attempt) {
-                    const std::size_t index = (nextOutputSlot_ + attempt) % outputSlots_.size();
-                    auto& slot = outputSlots_[index];
+                for (auto& slot : outputSlots_) {
                     if (!slot.inFlight &&
                         slot.surfaceCaptureEpoch == frame.captureEpoch &&
                         slot.surfaceSourceFrameSequence == frame.sequence) {
-                        slot.inFlight = true;
-                        nextOutputSlot_ = (index + 1) % outputSlots_.size();
-                        return &slot;
+                        return reserve(slot);
                     }
                 }
             }
-            for (std::size_t attempt = 0; attempt < outputSlots_.size(); ++attempt) {
-                const std::size_t index = (nextOutputSlot_ + attempt) % outputSlots_.size();
-                if (!outputSlots_[index].inFlight) {
-                    outputSlots_[index].inFlight = true;
-                    nextOutputSlot_ = (index + 1) % outputSlots_.size();
-                    return &outputSlots_[index];
-                }
+            // Lowest index first keeps steady-state work on the warm slots.
+            for (auto& slot : outputSlots_) {
+                if (!slot.inFlight) return reserve(slot);
             }
             return nullptr;
         };
@@ -2304,8 +2394,16 @@ private:
             return nullptr;
         }
 
+        const int64_t now = monotonicNow100ns();
+        std::erase_if(registeredInputs_, [this, texture, now](const RegisteredInput& input) {
+            if (input.texture.Get() == texture || now - input.lastUsed100ns <= kIdleEncoderInputRelease100ns) return false;
+            if (inputResourcePendingOrInFlight(input.registeredResource)) return false;
+            if (input.registeredResource) funcs_.nvEncUnregisterResource(encoder_, input.registeredResource);
+            return true;
+        });
         for (auto& input : registeredInputs_) {
             if (input.texture.Get() == texture && input.width == width && input.height == height) {
+                input.lastUsed100ns = now;
                 return &input;
             }
         }
@@ -2353,6 +2451,7 @@ private:
         input.bufferFormat = registered.bufferFormat;
         input.width = width;
         input.height = height;
+        input.lastUsed100ns = now;
         registeredInputs_.push_back(std::move(input));
         return &registeredInputs_.back();
     }
@@ -2376,21 +2475,7 @@ private:
                 }
                 resetOutputSlotFrameState(slot);
                 slot.scaledViewGeneration = 0;
-                if (slot.eventRegistered) {
-                    NV_ENC_EVENT_PARAMS eventParams {};
-                    eventParams.version = nvencStructVersionForApi(2, apiVersion_);
-                    eventParams.completionEvent = slot.completionEvent;
-                    funcs_.nvEncUnregisterAsyncEvent(encoder_, &eventParams);
-                    slot.eventRegistered = false;
-                }
-                if (slot.bitstreamBuffer) {
-                    funcs_.nvEncDestroyBitstreamBuffer(encoder_, slot.bitstreamBuffer);
-                    slot.bitstreamBuffer = nullptr;
-                }
-                if (slot.completionEvent) {
-                    CloseHandle(slot.completionEvent);
-                    slot.completionEvent = nullptr;
-                }
+                releaseOutputSlotBuffers(slot);
             }
             outputSlots_.clear();
             preparedSubmissions_.clear();
@@ -2453,7 +2538,6 @@ private:
         directBgraFallbackLogged_ = false;
         frameIndex_ = 0;
         nextKeyframePts100ns_ = 0;
-        nextOutputSlot_ = 0;
         preparedSubmissionDepth_ = minimumPreparedSubmissionDepth_;
         syncOutputDelay_ = kDefaultSyncOutputDelay;
     }
@@ -2500,6 +2584,8 @@ private:
     std::atomic<int>* externalDropCount_ = nullptr;
     std::atomic<int>* externalSurfaceDropCount_ = nullptr;
     std::atomic<int>* externalInputDropCount_ = nullptr;
+    SlotPoolUsage* outputSlotUsage_ = nullptr;
+    std::atomic<int> allocatedOutputSlots_ = 0;
     LatencyWindow<>* outputEventWaitLatency_ = nullptr;
     LatencyWindow<>* outputLockLatency_ = nullptr;
     LatencyWindow<>* outputCopyLatency_ = nullptr;
@@ -2564,7 +2650,6 @@ private:
     bool directFreshLogged_ = false;
     uint32_t frameIndex_ = 0;
     int64_t nextKeyframePts100ns_ = 0;
-    std::size_t nextOutputSlot_ = 0;
     static constexpr std::size_t outputSlotCount_ = kEnableRoundTransitionOutputHeadroom
         ? kRoundTransitionNvencOutputSlots
         : kDefaultNvencOutputSlots;
@@ -2759,6 +2844,10 @@ uint64_t EncoderWorker::catchUpRepeatedTicks() const {
 
 bool EncoderWorker::stillFrameDuplicationEnabled() const {
     return kEnableFrameDuplication;
+}
+
+const SlotPoolUsage& EncoderWorker::nvencOutputSlots() const {
+    return nvencOutputSlots_;
 }
 
 int EncoderWorker::encoderQueueDrops() const {
@@ -3102,6 +3191,7 @@ void EncoderWorker::encodeLoop() {
         &encoderBackpressureDrops_,
         &nvencSurfaceDrops_,
         &nvencInputDrops_,
+        &nvencOutputSlots_,
         &recentOutputEventWaitLatency_,
         &recentOutputLockLatency_,
         &recentOutputCopyLatency_,
@@ -3292,6 +3382,7 @@ void EncoderWorker::encodeLoop() {
                 &encoderBackpressureDrops_,
                 &nvencSurfaceDrops_,
                 &nvencInputDrops_,
+        &nvencOutputSlots_,
                 &recentOutputEventWaitLatency_,
                 &recentOutputLockLatency_,
                 &recentOutputCopyLatency_,
@@ -3377,6 +3468,7 @@ void EncoderWorker::encodeLoop() {
                 &encoderBackpressureDrops_,
                 &nvencSurfaceDrops_,
                 &nvencInputDrops_,
+        &nvencOutputSlots_,
                 &recentOutputEventWaitLatency_,
                 &recentOutputLockLatency_,
                 &recentOutputCopyLatency_,
