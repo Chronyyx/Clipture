@@ -69,22 +69,64 @@ impl Drop for OwnedProcess {
 mod tests {
     use super::*;
 
-    fn fixture(body: &str) -> Command {
-        use base64::Engine;
+    const FIXTURE: &str = "CLIPTURE_HANDOFF_FIXTURE";
+    const FIXTURE_PID_PATH: &str = "CLIPTURE_HANDOFF_FIXTURE_PID_PATH";
+
+    // Fixture children are this test binary started again with FIXTURE set.
+    // The C runtime calls this before main, so the part is played before the
+    // test harness prints anything to the pipe. It starts in milliseconds;
+    // PowerShell fixtures took seconds, and on a busy CI runner more than the
+    // 15 s handshake allowed.
+    #[used]
+    #[link_section = ".CRT$XCU"]
+    static FIXTURE_ENTRY: extern "C" fn() = fixture_entry;
+
+    extern "C" fn fixture_entry() {
+        let Ok(part) = std::env::var(FIXTURE) else { return };
+        let mut input = std::io::stdin().lock();
+        let mut output = std::io::stdout().lock();
+        let mut say = |bytes: &[u8]| output.write_all(bytes).and_then(|_| output.flush()).unwrap();
+        let mut byte = [0; 1];
+        let code = match part.as_str() {
+            "handshake" => {
+                say(b"prepared\n");
+                let mut message = [0; 9];
+                if input.read_exact(&mut message).is_err() { 4 } else if &message != b"activate\n" { 5 } else {
+                    say(b"healthy\n");
+                    let _ = input.read(&mut byte);
+                    0
+                }
+            }
+            "invalid" => { say(b"invalid!"); let _ = input.read(&mut byte); 0 }
+            "silent" => { let _ = input.read(&mut byte); 0 }
+            "healthy" => { say(b"healthy\n"); let _ = input.read(&mut byte); 0 }
+            "descendant" => {
+                let _ = input.read(&mut byte);
+                let mut descendant = fixture("silent").stdin(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
+                std::fs::write(std::env::var(FIXTURE_PID_PATH).unwrap(), descendant.id().to_string()).unwrap();
+                say(b"healthy\n");
+                let _ = input.read(&mut byte);
+                let _ = descendant.kill();
+                let _ = descendant.wait();
+                0
+            }
+            _ => 2,
+        };
+        std::process::exit(code);
+    }
+
+    fn fixture(part: &str) -> Command {
         use std::os::windows::process::CommandExt;
-        let bytes: Vec<u8> = body.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        let mut command = Command::new("powershell.exe");
-        command.args(["-NoProfile", "-NonInteractive", "-EncodedCommand",
-            &base64::engine::general_purpose::STANDARD.encode(bytes)]);
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        // Should the entry hook ever not run, the harness runs no test.
+        command.args(["--exact", "handoff fixture"]).env(FIXTURE, part);
         command.creation_flags(0x0800_0000);
         command
     }
 
     #[test]
     fn owned_child_handshake_health_and_cleanup_use_real_pipes() {
-        let mut child = OwnedProcess::spawn(&mut fixture(
-            "$o=[Console]::OpenStandardOutput(); $i=[Console]::OpenStandardInput(); $b=[Text.Encoding]::UTF8.GetBytes(\"prepared`n\"); $o.Write($b,0,$b.Length); $o.Flush(); $r=New-Object byte[] 9; $n=0; while($n -lt 9){$c=$i.Read($r,$n,9-$n); if($c -eq 0){exit 4}; $n+=$c}; if([Text.Encoding]::UTF8.GetString($r) -ne \"activate`n\"){exit 5}; $b=[Text.Encoding]::UTF8.GetBytes(\"healthy`n\"); $o.Write($b,0,$b.Length); $o.Flush(); $i.ReadByte() | Out-Null"
-        )).unwrap();
+        let mut child = OwnedProcess::spawn(&mut fixture("handshake")).unwrap();
         let process = ParentProcess::open(child.child.id()).unwrap();
         child.expect(b"prepared\n", Duration::from_secs(15)).unwrap();
         child.send(b"activate\n").unwrap();
@@ -96,11 +138,8 @@ mod tests {
 
     #[test]
     fn invalid_health_and_timeout_reap_only_owned_child() {
-        for script in [
-            "$o=[Console]::OpenStandardOutput(); $b=[Text.Encoding]::UTF8.GetBytes(\"invalid!\"); $o.Write($b,0,$b.Length); $o.Flush(); [Console]::OpenStandardInput().ReadByte() | Out-Null",
-            "[Console]::OpenStandardInput().ReadByte() | Out-Null",
-        ] {
-            let mut child = OwnedProcess::spawn(&mut fixture(script)).unwrap();
+        for part in ["invalid", "silent"] {
+            let mut child = OwnedProcess::spawn(&mut fixture(part)).unwrap();
             let process = ParentProcess::open(child.child.id()).unwrap();
             assert!(child.expect(b"healthy\n", Duration::from_secs(2)).is_err());
             drop(child);
@@ -112,18 +151,8 @@ mod tests {
     fn failed_candidate_reaps_descendants_but_not_unrelated_processes() {
         let directory = tempfile::tempdir().unwrap();
         let pid_path = directory.path().join("owned-child.pid");
-        let script = format!(
-            "$i=[Console]::OpenStandardInput(); $i.ReadByte() | Out-Null; \
-             $s=New-Object Diagnostics.ProcessStartInfo; $s.FileName='cmd.exe'; $s.Arguments='/D /Q'; \
-             $s.UseShellExecute=$false; $s.CreateNoWindow=$true; $s.RedirectStandardInput=$true; \
-             $s.RedirectStandardOutput=$true; $p=[Diagnostics.Process]::Start($s); \
-             [IO.File]::WriteAllText('{}',[string]$p.Id); \
-             $o=[Console]::OpenStandardOutput(); $b=[Text.Encoding]::UTF8.GetBytes(\"healthy`n\"); \
-             $o.Write($b,0,$b.Length); $o.Flush(); $i.ReadByte() | Out-Null; $p.Kill(); $p.WaitForExit()",
-            pid_path.to_string_lossy().replace('\'', "''")
-        );
-        let mut sibling = OwnedProcess::spawn(&mut fixture("[Console]::OpenStandardInput().ReadByte() | Out-Null")).unwrap();
-        let mut child = OwnedProcess::spawn(&mut fixture(&script)).unwrap();
+        let mut sibling = OwnedProcess::spawn(&mut fixture("silent")).unwrap();
+        let mut child = OwnedProcess::spawn(fixture("descendant").env(FIXTURE_PID_PATH, &pid_path)).unwrap();
         child.send(b"x").unwrap();
         child.expect(b"healthy\n", Duration::from_secs(15)).unwrap();
         let descendant = ParentProcess::open(std::fs::read_to_string(pid_path).unwrap().parse().unwrap()).unwrap();
@@ -134,9 +163,7 @@ mod tests {
 
     #[test]
     fn releasing_healthy_process_disarms_kill_on_close() {
-        let mut child = OwnedProcess::spawn(&mut fixture(
-            "$o=[Console]::OpenStandardOutput(); $b=[Text.Encoding]::UTF8.GetBytes(\"healthy`n\"); $o.Write($b,0,$b.Length); $o.Flush(); [Console]::OpenStandardInput().ReadByte() | Out-Null"
-        )).unwrap();
+        let mut child = OwnedProcess::spawn(&mut fixture("healthy")).unwrap();
         child.expect(b"healthy\n", Duration::from_secs(15)).unwrap();
         let process = ParentProcess::open(child.child.id()).unwrap();
         let mut input = child.child.stdin.take().unwrap();
