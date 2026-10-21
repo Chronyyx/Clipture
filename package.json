@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.7.1: Roomier Library and Friends, Smooth Trimming",
+  "releaseTitle": "Clipture 1.7.2: Lighter on GPU Memory",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

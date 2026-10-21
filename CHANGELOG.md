@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.7.2] - 2026-10-21
+
+### Recording
+
+- **Burst memory is handed back:** When the encoder falls behind, capture still takes extra frame slots so nothing is lost, but it now frees them a couple of seconds after the burst instead of keeping them until recording stops. At 1440p with Windows HDR each slot is about 44 MB; a stalled encoder grew the pool to 22 slots in testing, nearly 800 MB that now goes back to the game.
+- **Smaller encoder start-up:** The encoder sets up 8 output slots instead of 32 and adds more only if a burst needs them, freeing those again once idle. Stress trials of smoke, molotov and spike loads recorded the same as 1.7.1, with no added stutter or lag.
+
+### Development
+
+- **Slot pools in diagnostics:** The engine reports how many capture and encoder slots it holds, the most it held at once and how many it freed, and stress trial reports carry them per second.
+- **Spill test on slow CI disks:** The replay spill test allows 60 s to drain instead of 15 s; its linearity check is unchanged.
+
 ## [1.7.1] - 2026-10-21
 
 ### Library
