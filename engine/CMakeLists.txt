@@ -7,6 +7,11 @@ if(MSVC)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+# The engine vendors its dependencies. A machine-wide `vcpkg integrate install`
+# would otherwise hook every Visual Studio target to copy vcpkg DLLs, trying
+# pwsh.exe first and failing noisily where PowerShell 7 is not installed.
+set(CMAKE_VS_GLOBALS "VCPkgLocalAppDataDisabled=true")
+
 include(CTest)
 
 add_library(clipture_selection_trace STATIC src/FrameSelectionTrace.cpp)
