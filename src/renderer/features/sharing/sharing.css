@@ -788,6 +788,8 @@
   font-weight: 700;
 }
 
+.share-avatar::before { content: attr(data-initial); }
+
 .share-friend-copy {
   display: grid;
   gap: 2px;
@@ -1102,8 +1104,16 @@
 
 .share-side-request .share-side-row { flex: 1; min-width: 0; }
 .share-side-request .share-side-row:hover { background: transparent; }
+/* The request already sits on the hover tint, so hovering it goes a step
+   further, and Accept takes the accent. */
+.share-side-request:has(.share-side-row:hover) { background: var(--surface-active); }
 .share-side-request .share-side-name small { color: var(--text-muted); }
 .share-side-accept { flex: none; margin-right: 4px; }
+.share-side-accept:hover {
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
 
 .share-side-name {
   display: grid;

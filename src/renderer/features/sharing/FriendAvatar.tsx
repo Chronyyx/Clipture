@@ -24,7 +24,9 @@ export function friendStyle(name: string): CSSProperties {
 }
 
 /** Initial with an optional presence dot; the dot is decorative, so callers
- * give the presence in text too (visible or as an accessible label). */
+ * give the presence in text too (visible or as an accessible label). The
+ * initial is drawn by CSS, so it never joins the text of the button around
+ * it: a voice command says the name a row shows, not "J Jo". */
 export function FriendAvatar({ name, presence, size = 32 }: {
   name: string;
   presence?: FriendPresence;
@@ -32,8 +34,8 @@ export function FriendAvatar({ name, presence, size = 32 }: {
 }) {
   return (
     <span className={presence ? `share-avatar ${presence}` : "share-avatar"} aria-hidden="true"
+      data-initial={name.trim().charAt(0).toUpperCase() || "?"}
       style={{ ...friendStyle(name), width: size, height: size, fontSize: size * 0.42 }}>
-      {name.trim().charAt(0).toUpperCase() || "?"}
       {presence && <span className={`share-presence-dot ${presence}`} />}
     </span>
   );

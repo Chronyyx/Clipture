@@ -445,6 +445,23 @@
 .library-filter-row .library-tabs { flex: 0 0 auto; }
 .library-filter-row .library-search { flex: 1; min-width: 0; }
 
+/* Narrow: the tabs share the row between them, and search gets its own. */
+@media (max-width: 640px) {
+  .library-filter-row { flex-wrap: wrap; }
+  .library-filter-row .library-tabs,
+  .library-filter-row .library-search { flex: 1 1 100%; }
+  .library-filter-row .library-tab { flex: 1; min-width: 0; }
+  /* Games scroll sideways on one line and the two actions share a row, so
+     the player starts on the first screen instead of under four rows. */
+  .browse-surface,
+  .library-top,
+  .library-top .library-actions-row { min-width: 0; }
+  .library-top .chip-row { flex-wrap: nowrap; min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .library-top .chip-row > .chip { flex: 0 0 auto; }
+  .library-top .library-inline-actions { flex-direction: row; }
+  .library-top .library-inline-actions > button { flex: 1; width: auto; }
+}
+
 .clip-rail-heading {
   display: flex;
   align-items: center;

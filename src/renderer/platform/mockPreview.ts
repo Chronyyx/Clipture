@@ -30,6 +30,17 @@ function thumbnail(hue: number, index: number) {
   return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 }
 
+declare const __SITE_DEMO__: boolean | undefined;
+
+/** The query preview mode reads. The clipture.app build (`vite --mode site`)
+ * serves this interface at /demo/; opened bare, from a typed link or a search
+ * result, it shows the demo instead of waiting for a desktop host that isn't
+ * there. */
+export function previewSearch(search: string) {
+  if (typeof __SITE_DEMO__ !== 'boolean' || !__SITE_DEMO__ || new URLSearchParams(search).has('preview')) return search;
+  return (search ? search + '&' : '?') + 'preview&demo';
+}
+
 /** Served by clipture.app next to the demo build (web/demo-media/). */
 export const DEMO_CLIP_URL = '/demo-media/sample-clip.mp4';
 

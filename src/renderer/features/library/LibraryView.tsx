@@ -198,6 +198,8 @@ export function LibraryView({
             <button
               className={libraryTab === "clips" ? "library-tab active" : "library-tab"}
               type="button"
+              role="tab"
+              aria-selected={libraryTab === "clips"}
               onClick={() => setLibraryTab("clips")}
             >
               Clips
@@ -205,6 +207,8 @@ export function LibraryView({
             <button
               className={libraryTab === "imported" ? "library-tab active" : "library-tab"}
               type="button"
+              role="tab"
+              aria-selected={libraryTab === "imported"}
               onClick={() => setLibraryTab("imported")}
             >
               Imported videos

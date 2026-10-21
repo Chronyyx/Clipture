@@ -3,7 +3,7 @@
   src:
     local("Glitten"),
     local("Glitten Regular"),
-    url("../../../assets/fonts/DMSerifDisplay-Regular.ttf") format("truetype");
+    url("../../../assets/fonts/DMSerifDisplay-Regular.woff2") format("woff2");
   font-style: normal;
   font-weight: 400;
   font-display: swap;
@@ -103,7 +103,7 @@
   --border-strong: #927c64;
   --text: #352b23;
   --text-strong: #17120f;
-  --text-muted: #706356;
+  --text-muted: #5f5347;
   --text-subtle: #7b6b5e;
   --icon: #504237;
   --accent: #a55e38;

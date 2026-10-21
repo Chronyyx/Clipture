@@ -10,7 +10,7 @@
     "tauri": "tauri",
     "dev:web": "vite --host 127.0.0.1",
     "build:renderer": "tsc --noEmit && vite build",
-    "build:site": "vite build --outDir ../../dist/site-demo && node scripts/release/render-site.cjs web dist/site --demo dist/site-demo",
+    "build:site": "vite build --mode site --outDir ../../dist/site-demo && node scripts/release/render-site.cjs web dist/site --demo dist/site-demo",
     "stage:tauri": "node scripts/stage-tauri-sidecars.cjs",
     "dev:tauri": "npm run build:engine && npm run stage:tauri && tauri dev",
     "build:tauri": "npm run build:engine && npm run stage:tauri && npm run build:renderer && tauri build --no-bundle && node scripts/stage-tauri-app.cjs",

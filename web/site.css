@@ -53,6 +53,23 @@ body {
 
 a { color: inherit; text-decoration: none; }
 
+/* Shown only while focused: the first stop on the page, and a way past the
+   demo, whose many controls would otherwise take every Tab. */
+.skip-link {
+  position: absolute;
+  left: 16px;
+  top: 12px;
+  z-index: 20;
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  background: var(--primary-bg);
+  color: var(--primary-text);
+  font-weight: 600;
+  transform: translateY(calc(-100% - 24px));
+}
+.skip-link:focus-visible { transform: none; }
+.showcase > .skip-link { top: 8px; }
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
@@ -100,8 +117,24 @@ img { display: block; }
   font-size: 14px;
 }
 
+/* Text links: an accent rule grows in under the label. */
+.nav-links a,
+.footer-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  background: linear-gradient(var(--accent), var(--accent)) no-repeat left bottom 4px / 0 1px;
+  transition: color 150ms ease-out, background-size 200ms ease-out;
+}
+
 .nav-links a:hover,
-.footer-links a:hover { color: var(--text-strong); }
+.footer-links a:hover {
+  color: var(--text-strong);
+  background-size: 100% 1px;
+}
+
+.brand img { transition: transform 200ms ease-out; }
+.brand:hover img { transform: rotate(-8deg) scale(1.06); }
 
 .nav-actions {
   display: flex;
@@ -170,7 +203,11 @@ img { display: block; }
   box-shadow: inset 0 1px 0 var(--inset-highlight);
 }
 
-.button-quiet:hover { background: var(--surface-hover); }
+.button-quiet:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  box-shadow: inset 0 1px 0 var(--inset-highlight), 0 0 0 3px rgb(240 120 54 / 12%);
+}
 
 /* Hero */
 main { display: grid; }
@@ -344,13 +381,19 @@ h1 {
 }
 
 .showcase-note a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
   color: var(--text);
   text-decoration: underline;
   text-decoration-color: var(--border-strong);
   text-underline-offset: 4px;
 }
 
-.showcase-note a:hover { text-decoration-color: var(--accent); }
+.showcase-note a:hover {
+  color: var(--accent-text);
+  text-decoration-color: var(--accent);
+}
 
 /* Features */
 .features {
@@ -489,6 +532,20 @@ h1 {
 @media (max-width: 640px) {
   .nav-links,
   .icon-link span { display: none; }
+  /* The app at the phone's own width, in its narrow layout, at full-size
+     text, instead of the desktop window scaled to a few pixels. */
+  .viewport { aspect-ratio: auto; height: min(720px, 82svh); }
+  .viewport iframe { width: 100%; height: 100%; transform: none; }
+  .titlebar span:not(.caption-buttons) { flex: 1; }
+  .showcase-note .open-demo {
+    min-height: 44px;
+    padding: 0 18px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface-control);
+    color: var(--text-strong);
+    text-decoration: none;
+  }
   .nav-inner { gap: 16px; }
   .feature-grid { grid-template-columns: minmax(0, 1fr); }
   .feature { min-height: 0; }
@@ -497,5 +554,28 @@ h1 {
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  .button { transition: none; }
+  .button,
+  .brand img,
+  .nav-links a,
+  .footer-links a { transition: none; }
 }
+
+/* Not found */
+.lost {
+  display: grid;
+  justify-items: center;
+  gap: 22px;
+  width: min(640px, 100% - 40px);
+  margin: 0 auto;
+  padding: clamp(88px, 16vw, 168px) 0 clamp(64px, 10vw, 120px);
+  text-align: center;
+}
+
+.lost-code {
+  color: var(--accent-text);
+  font-family: var(--font-instrument);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.lost .lede { margin: 0; }

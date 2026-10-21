@@ -224,3 +224,9 @@
   .field-transport .transport-play { width: 38px; gap: 6px; }
   .field-transport .yt-pill.icon-button { width: 32px; }
 }
+
+/* Phone width: mute alone (the phone's own volume is at hand), so both
+   times fit beside the scale. */
+@container (max-width: 380px) {
+  .field-transport .volume-container .volume-slider { display: none; }
+}

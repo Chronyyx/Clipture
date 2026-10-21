@@ -69,6 +69,20 @@ if (demo) {
     throw new Error(`${demo}: no index.html; build the renderer first (npm run build:site)`);
   }
   fs.cpSync(demo, path.join(output, 'demo'), { recursive: true });
+  // The desktop window's title is just "Clipture"; the demo page gets its own
+  // title, description and share card.
+  const demoPage = path.join(output, 'demo', 'index.html');
+  const head = [
+    '<title>Clipture live demo: the real app with sample clips</title>',
+    '<meta name="description" content="Try Clipture in your browser: the real interface with sample clips. Play and trim a clip, mix its audio tracks, or send it to a friend.">',
+    '<meta property="og:title" content="Clipture live demo">',
+    '<meta property="og:description" content="The real Clipture interface with sample clips, in your browser.">',
+    '<meta property="og:image" content="https://clipture.app/og-image.png">',
+    '<meta name="twitter:card" content="summary_large_image">'
+  ].join('\n    ');
+  const page = fs.readFileSync(demoPage, 'utf8');
+  if (!page.includes('<title>Clipture</title>')) throw new Error('demo/index.html: expected <title>Clipture</title>');
+  fs.writeFileSync(demoPage, page.replace('<title>Clipture</title>', head));
 }
 
 console.log(`Rendered ${source} -> ${output} for Clipture ${version}${demo ? ' with the live demo at /demo/' : ''}`);

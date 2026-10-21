@@ -1,6 +1,7 @@
 import type { SharingApi } from '../../shared/sharing';
 import { hostKind } from './client';
 import { createMockSharingAdapter, mockSharingSeed, unsupportedSharingSnapshot } from './mock-sharing-adapter';
+import { previewSearch } from './mockPreview';
 import { createTauriSharingAdapter } from './tauri-sharing-adapter';
 
 /** Hosts other than Tauri have no peer node; they report `supported: false`
@@ -32,7 +33,7 @@ function createUnsupportedSharingAdapter(): SharingApi {
 function selectSharingClient(): SharingApi {
   if (hostKind === 'tauri') return createTauriSharingAdapter();
   if (hostKind === 'mock') {
-    const seed = mockSharingSeed(window.location.search);
+    const seed = mockSharingSeed(previewSearch(window.location.search));
     return seed ? createMockSharingAdapter(seed) : createUnsupportedSharingAdapter();
   }
   return createUnsupportedSharingAdapter();
