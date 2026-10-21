@@ -28,7 +28,7 @@ Screenshot:  the poster headline over the strip, just saved, bars in orange
 
 Alternatives considered: a camera viewfinder frame (REC brackets, timecode),
 rejected as generic recording chrome; the page as an editor timeline with
-features as track lanes, kept only as the saved clip's waveform thumbnail.
+features as track lanes, whose waveform bars survive in the strip.
 
 ## System
 
@@ -43,7 +43,7 @@ features as track lanes, kept only as the saved clip's waveform thumbnail.
   Mono) for timecode and keys, with tabular figures.
 - **Grid:** 12 columns, gutter `clamp(16px, 2.5vw, 32px)`, content hung from
   column 1; the hero is left-aligned, not centered.
-- **Shape:** 6 px radius on controls, 12 px on the app window and clip cards.
+- **Shape:** 6 px radius on controls, 12 px on the app window.
 - **Motion:** one ease, `cubic-bezier(0.165, 0.84, 0.44, 1)`; hovers 0.3 to
   0.45 s. Buttons roll their label, text links draw an underline, the Save
   keys press down. Nothing else animates on hover. The buffer strip is the only thing

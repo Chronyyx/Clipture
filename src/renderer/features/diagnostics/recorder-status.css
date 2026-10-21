@@ -50,16 +50,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.recorder-readout {
-  display: grid;
-  gap: 2px;
-  margin-top: 4px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  color: var(--text-muted);
-  font: 11px/1.45 var(--font-instrument, ui-monospace, monospace);
-}
-
 @keyframes tally-breathe {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }

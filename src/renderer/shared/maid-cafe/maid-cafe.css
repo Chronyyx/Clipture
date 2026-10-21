@@ -328,7 +328,6 @@
   border-radius: 999px;
   background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 2px), #fff calc(25% - 2px) 25%), linear-gradient(90deg, #ffd0df, var(--accent));
 }
-:root[data-theme="maid-cafe"] .recorder-readout { border-top: 1.5px dotted var(--border-strong); }
 
 /* --- Settings --- */
 :root[data-theme="maid-cafe"] .settings-rail-item { border-radius: 999px; color: var(--text); font-weight: 700; }

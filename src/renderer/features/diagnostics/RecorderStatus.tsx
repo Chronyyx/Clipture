@@ -30,8 +30,9 @@ const headline: Record<State, string> = {
 };
 
 // The sidebar tally: a camera-style "live" light plus the reach of one save.
+// Encoder and GPU details live in Diagnostics, not on every screen.
 export function RecorderStatus(props: RecorderStatusProps) {
-  const { diagnostics, hasDiagnostics, diagnosticsError, clipLengthSeconds } = props;
+  const { diagnosticsError, clipLengthSeconds } = props;
   const state = recorderState(props);
   const detail = recorderDetail(state, clipLengthSeconds, diagnosticsError);
 
@@ -48,13 +49,6 @@ export function RecorderStatus(props: RecorderStatusProps) {
         <span className='recorder-buffer-track' />
         <span className='recorder-buffer-labels'><span>−{clipLengthSeconds} s</span><span>now</span></span>
       </span>
-      {hasDiagnostics && (
-        <span className='recorder-readout'>
-          <span>{diagnostics.activeEncoder}{diagnostics.encoderMode ? ', ' + diagnostics.encoderMode : ''}</span>
-          <span>{diagnostics.gpu}</span>
-        </span>
-      )}
-      {diagnosticsError && hasDiagnostics && <span className='recorder-status-detail warning-text'>Showing last known details</span>}
     </div>
   );
 }

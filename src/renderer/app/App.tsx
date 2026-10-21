@@ -67,6 +67,9 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
     onDownload={() => void downloadUpdate()}
     onInstall={installUpdate}
   />;
+  // The check lives in Settings and Diagnostics; elsewhere the control shows
+  // only when there is an update to act on or a check that failed.
+  const updateNews = ["available", "downloading", "ready", "error"].includes(updateState.status) ? updateControls : null;
 
   useEffect(() => {
     if (!notice) return;
@@ -115,7 +118,8 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
           diagnosticsError={diagnosticsError}
           clipLengthSeconds={settings?.clipLengthSeconds ?? 30}
         />
-        <FriendsSidebar controller={sharing} onOpenFriend={openFriends} onOpenFriends={() => openFriends()} />
+        {/* The Friends view lists them itself. */}
+        {activeTab !== "friends" && <FriendsSidebar controller={sharing} onOpenFriend={openFriends} onOpenFriends={() => openFriends()} />}
         {appVersion && <p className="sidebar-version">Version {appVersion}</p>}
       </aside>
 
@@ -179,7 +183,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
           transition={viewTransition}>
         {activeTab === "library" && (
           <LibraryView
-            headerControls={updateControls}
+            headerControls={updateNews}
             clips={clips}
             loading={!libraryLoaded}
             query={query}
@@ -195,7 +199,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
           />
         )}
         {activeTab === "friends" && (
-          <FriendsView controller={sharing} headerControls={updateControls}
+          <FriendsView controller={sharing} headerControls={updateNews}
             focusFriendId={focusFriendId} onClearFocus={() => setFocusFriendId(undefined)} />
         )}
         {activeTab === "settings" && settings && (
