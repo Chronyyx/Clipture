@@ -1561,7 +1561,9 @@ bool testReplaySpillSchedulingStaysLinear() {
         std::fill(packet.payload->begin(), packet.payload->end(), static_cast<std::byte>(index & 0xFF));
         store.push(packet);
     }
-    if (!require(store.waitUntilIdle(std::chrono::seconds(15)), "linear replay spill should drain")) {
+    // 2,000 tiny spill writes take over 15 s on CI disks; linearity is checked
+    // by the inspection count below, so this limit only catches a hang.
+    if (!require(store.waitUntilIdle(std::chrono::seconds(60)), "linear replay spill should drain")) {
         store.stop();
         return false;
     }
