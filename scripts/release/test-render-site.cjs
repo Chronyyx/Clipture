@@ -19,7 +19,7 @@ try {
   execFileSync(process.execPath, [path.join(__dirname, 'render-site.cjs'), path.join(root, 'web'), output, '--demo', demo], { stdio: 'pipe' });
   const read = (file) => fs.readFileSync(path.join(output, file), 'utf8');
 
-  for (const file of ['index.html', '404.html', 'robots.txt', 'sitemap.xml', 'og-image.png', '_headers', 'buffer.js', 'fonts/archivo-100_900-normal.woff2']) {
+  for (const file of ['index.html', '404.html', 'robots.txt', 'sitemap.xml', 'og-image.png', '_headers']) {
     assert.ok(fs.existsSync(path.join(output, file)), `${file} ships`);
   }
   const home = read('index.html');
