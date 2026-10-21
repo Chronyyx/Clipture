@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.7.1] - 2026-10-21
+
+### Library
+
+- **The player uses the whole window:** The clip's title, game and details now sit under the video, and the clip list runs the full height beside it. The list showed two clips at a 1440×900 window and none at 1100×700; it now shows six or more.
+- **Trim and mixer fit beside the video:** An open trim editor or mixer takes the list's place at full height, so its keys are no longer cut off. Beside the video the trim editor shows "Start here" and "End here" straight under the overview, one readout for the range and how much it keeps, and zoom as minus, span, plus. On a short window its waveforms shrink so the whole editor stays in view.
+- **Toolbar on one row:** "Import videos" and "Select clips" sit with "Save" on the title row, and the game filters stay on one line, scrolling sideways when they overflow.
+- **Smooth playback while trimming:** The trim editor followed playback with a loop per redraw and queued every seek, so playback stuttered while trimming. One animation loop now follows playback and at most one seek is in flight.
+
+### Player
+
+- **One time pair:** The display shows where playback is and the scale ends at the clip's length, instead of three times that read as disagreeing.
+- **One row of controls on a narrow player:** The level slider folds into the speaker key so the scale keeps its width.
+- **Mixer scale:** The faders have one "Quieter / Original / Louder" scale under them, and a quiet level meter no longer draws a groove that looks like a second fader.
+- **Edit actions read the same in every theme:** "Trim clip" and "Save to file" look unavailable the same way in every theme until something changes.
+
+### Friends
+
+- **Shared clips read in full:** The list of shared and sent clips runs under the player at full width, so titles are no longer cut to a word beside the video.
+- **Friends stay in view:** The people column narrows instead of dropping below the fold at smaller window sizes, and stays in place while the clips scroll.
+- **Before a clip plays:** The player shows the sender's colour instead of a black box.
+- **Requests in the sidebar:** Friend requests can be declined from the sidebar as well as accepted, and offline friends keep their names in full.
+- **Calmer tab:** A clip waiting to be accepted uses the theme's colours, rows have more room, and rename and remove keys stay hidden until a row is in use. The send dialog groups friends who aren't online as Offline and its list grows with the window.
+
+### Settings and themes
+
+- **Readable toggles in Graphite:** A switched-on toggle has a dark knob, so on and off no longer look alike.
+- **Labelled update check:** The update key says "Check for updates" instead of showing an icon alone.
+- **Page titles line up:** Library, Friends and Settings put their titles on one baseline.
+- **Contrast fixes:** the trim range readout in Light, offline friends, Aero's update key and several muted labels.
+
+### Development
+
+- **Faster `npm run dev`:** It builds only the capture engine instead of every engine target, and the engine compiles its sources in parallel (`/MP8`). After a change to an engine header the build before the app opens went from 51 s to 10 s. `build:engine` still builds every target for CI and `ctest`, six projects at a time.
+- **No vcpkg hook in engine builds:** The engine vendors its dependencies; a machine-wide `vcpkg integrate install` no longer runs on its targets (and no longer prints `'pwsh.exe' is not recognized` where PowerShell 7 is missing).
+- **Release workflow in stages:** The engine is built and tested once and handed on; the Rust tests and the signed release build run side by side, and the release is published only after both pass.
+
 ## [1.7.0] - 2026-10-10
 
 ### Smooth Clips Through Smokes and Molotovs
