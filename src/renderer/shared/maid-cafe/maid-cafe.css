@@ -284,7 +284,7 @@
 :root[data-theme="maid-cafe"] .clip-rail-item.active .clip-rail-copy strong::before { content: "♡ "; color: var(--accent); }
 :root[data-theme="maid-cafe"] .clip-rail-thumbnail { border: 2px solid #fff; border-radius: 10px; box-shadow: 0 0 0 1px var(--border); }
 :root[data-theme="maid-cafe"] .clip-rail-duration { border-radius: 999px; background: rgb(63 25 55 / 82%); }
-:root[data-theme="maid-cafe"] .library-preview-play { color: var(--primary-bg); }
+:root[data-theme="maid-cafe"] :is(.library-preview-play, .share-play) { color: var(--primary-bg); }
 
 /* The player transport becomes a pastel music box. */
 :root[data-theme="maid-cafe"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {

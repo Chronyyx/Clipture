@@ -177,20 +177,23 @@
 .share-screen-message p { max-width: 46ch; line-height: 1.5; }
 
 /* Before play: the clip is shown, nothing streams yet. */
+/* The same play badge as the library's: a light badge, a solid triangle. */
 .share-play {
   display: grid;
   place-items: center;
-  width: 64px;
-  height: 64px;
-  padding: 0 0 0 4px;
+  width: 60px;
+  height: 60px;
+  padding: 0 0 0 3px;
   border: 0;
-  border-radius: 50%;
-  background: var(--accent);
-  color: #fff;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.94);
+  color: #171717;
+  box-shadow: 0 14px 34px -12px rgb(0 0 0 / 75%);
   cursor: pointer;
-  transition: transform 120ms ease;
+  transition: transform 140ms ease;
 }
 
+.share-play svg { fill: currentColor; }
 .share-play:hover { transform: scale(1.06); }
 .share-play:active { transform: scale(0.97); }
 

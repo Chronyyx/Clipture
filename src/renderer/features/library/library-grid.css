@@ -100,6 +100,9 @@
   transition: opacity 140ms ease, transform 140ms ease;
 }
 
+/* A solid triangle, nudged right so it sits optically centred. */
+.play-badge svg { fill: currentColor; translate: 1.5px 0; }
+
 .thumbnail-button:hover .play-badge,
 .clip-card.active .play-badge {
   opacity: 1;
