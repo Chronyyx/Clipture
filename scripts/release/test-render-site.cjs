@@ -37,6 +37,7 @@ try {
 
   assert.match(read('robots.txt'), /Sitemap: https:\/\/clipture\.app\/sitemap\.xml/);
   assert.match(read('sitemap.xml'), /<loc>https:\/\/clipture\.app\/<\/loc>/);
+  assert.match(read('sitemap.xml'), /<loc>https:\/\/clipture\.app\/demo\/<\/loc>/);
   const png = fs.readFileSync(path.join(output, 'og-image.png'));
   assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [1200, 630], 'the share image is 1200x630');
 
