@@ -76,7 +76,7 @@ export function FriendCodeCard({
       {code && inviteLink ? (
         <>
           <p className="share-hint">
-            Send your link in any chat. When a friend clicks it, Clipture opens and asks them to add you.
+            Send your link in any chat to add a friend.
           </p>
           <button className="primary share-copy-button" type="button" onClick={() => void copy("link", inviteLink)}>
             {copied === "link" ? <Check size={16} /> : <Link size={16} />}

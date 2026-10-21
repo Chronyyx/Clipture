@@ -138,7 +138,7 @@ export function FriendList({ friends, onRemove, onRename }: {
               <span className="share-friend-copy">
                 <FriendName friend={friend} editing={nicknames.editing === friend.id} onRename={onRename} onDone={nicknames.stop} />
                 {friend.status === "outgoing" ? (
-                  <span><Clock size={12} aria-hidden="true" /> {friend.undelivered ? "Request waits until they're online" : "Waiting for them to accept"}</span>
+                  <span><Clock size={12} aria-hidden="true" /> {friend.undelivered ? "Sends when they're online" : "Request sent"}</span>
                 ) : (
                   <span>{presenceLabel(friend.presence)}{friend.nickname ? ", your nickname" : ""}</span>
                 )}

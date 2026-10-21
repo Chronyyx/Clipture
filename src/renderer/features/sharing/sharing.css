@@ -92,7 +92,7 @@
 .share-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 18px;
+  gap: 24px;
   align-items: start;
 }
 
@@ -565,8 +565,8 @@
 .share-people > section,
 .share-add-form {
   display: grid;
-  gap: 12px;
-  padding: 18px;
+  gap: 14px;
+  padding: 20px;
 }
 
 .share-people > * + * { border-top: 1px solid var(--border); }
@@ -804,14 +804,13 @@
 }
 
 .share-friend-copy > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  overflow: hidden;
   color: var(--text-muted);
   font-size: 12px;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
+
+.share-friend-copy > span svg { margin-right: 4px; vertical-align: -2px; }
 
 .share-row-actions {
   display: flex;
@@ -835,6 +834,17 @@
 .share-friends .share-friend-row:is(:hover, :focus-within) .share-row-actions .icon-button {
   border-color: var(--border-strong);
   color: var(--icon);
+}
+
+/* With a mouse they appear only on the row in use; touch keeps them shown. */
+@media (hover: hover) {
+  .share-requests .share-row-actions .share-rename,
+  .share-friends .share-row-actions .icon-button {
+    opacity: 0;
+    transition: opacity 150ms ease-out;
+  }
+  .share-requests .share-friend-row:is(:hover, :focus-within) .share-row-actions .share-rename,
+  .share-friends .share-friend-row:is(:hover, :focus-within) .share-row-actions .icon-button { opacity: 1; }
 }
 
 .share-row-actions .share-accept {

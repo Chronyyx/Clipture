@@ -421,11 +421,11 @@
   grid-template-columns: 128px minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
-  padding: 12px 14px 12px 12px;
+  padding: 12px 14px 12px 15px;
   border-radius: 14px;
-  background:
-    linear-gradient(90deg, color-mix(in oklch, var(--friend) 16%, var(--surface)), var(--surface) 65%);
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--friend) 38%, var(--border));
+  /* The theme's own surface and accent: a friend's hue stays on their tile. */
+  background: var(--surface);
+  box-shadow: inset 3px 0 0 var(--accent), inset 0 0 0 1px var(--border);
 }
 
 .share-incoming-copy {
@@ -435,7 +435,7 @@
 }
 
 .share-incoming-who {
-  color: color-mix(in oklch, var(--friend) 55%, var(--text-strong));
+  color: var(--text-muted);
   font-size: 12.5px;
   font-weight: 600;
 }
