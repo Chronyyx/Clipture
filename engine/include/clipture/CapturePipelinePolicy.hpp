@@ -5,7 +5,8 @@ namespace clipture {
 // Process-scoped engineering overrides for one-variable A/B runs. Never persist
 // into the user's settings or change queue sizes, quality, cadence or audio.
 struct CapturePipelinePolicy {
-    bool deferPreparation = true;
+    // Prepared at capture: queued frames hold no raw HDR copy (ADR 0018).
+    bool deferPreparation = false;
     bool nv12Input = true;
     bool isolatedDevice = true;
     bool gpuHandoff = true;
@@ -41,8 +42,7 @@ inline const CapturePipelinePolicy& capturePipelinePolicy() {
         result.raisedGpuPriority = flag(L"CLIPTURE_RAISED_GPU_PRIORITY", result.raisedGpuPriority);
         result.highPriorityCapture = flag(L"CLIPTURE_HIGH_PRIORITY_CAPTURE", result.highPriorityCapture);
         result.timedCatchUp = flag(L"CLIPTURE_TIMED_CATCH_UP", result.timedCatchUp);
-        result.hybridGameCapture = flag(L"CLIPTURE_HYBRID_GAME_CAPTURE", result.hybridGameCapture);
-        return result;
+        result.hybridGameCapture = flag(L"CLIPTURE_HYBRID_GAME_CAPTURE", result.hybridGameCapture);        return result;
     }();
     return policy;
 }
