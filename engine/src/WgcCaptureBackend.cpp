@@ -155,8 +155,8 @@ struct WgcCaptureBackend::Impl {
                     try { frame.Close(); } catch (...) {}
                     frame = nullptr;
                     framePoolSize = size;
-                    // Queued selected frames may still use the tone mapper.
-                    // Its bounded view cache owns old resources until retired.
+                    // Queued selected frames still hold their slot's textures
+                    // and tone-mapping views, so they stay valid until retired.
                     texturePool.reset();
                     sourceClock.reset();
                     sourceClockRejectionLogged = false;

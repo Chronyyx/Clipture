@@ -1,13 +1,9 @@
 #include "clipture/Tonemapper.hpp"
 #include "GpuStageProbe.hpp"
 #include <d3dcompiler.h>
-#include <algorithm>
 #include <cstring>
-#include <iterator>
 
 namespace clipture {
-
-constexpr std::size_t kMaximumCachedTonemapperViews = 16;
 
 const char* TonemapShaderCode = R"(
 Texture2D<float4> InputTexture : register(t0);
@@ -37,20 +33,6 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     OutputTexture[DTid.xy] = float4(sdrColor, hdrColor.a);
 }
 )";
-
-bool sameTextureDesc(const D3D11_TEXTURE2D_DESC& a, const D3D11_TEXTURE2D_DESC& b) {
-    return a.Width == b.Width &&
-        a.Height == b.Height &&
-        a.MipLevels == b.MipLevels &&
-        a.ArraySize == b.ArraySize &&
-        a.Format == b.Format &&
-        a.SampleDesc.Count == b.SampleDesc.Count &&
-        a.SampleDesc.Quality == b.SampleDesc.Quality &&
-        a.Usage == b.Usage &&
-        a.BindFlags == b.BindFlags &&
-        a.CPUAccessFlags == b.CPUAccessFlags &&
-        a.MiscFlags == b.MiscFlags;
-}
 
 Tonemapper::Tonemapper(Microsoft::WRL::ComPtr<ID3D11Device> device)
     : device_(device) {
@@ -114,8 +96,10 @@ bool Tonemapper::Initialize(std::string& errorMsg, float sdrWhiteLevel) {
 }
 
 bool Tonemapper::Process(
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> inputFloat16,
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> outputUnorm8,
+    ID3D11ShaderResourceView* inputFloat16,
+    ID3D11UnorderedAccessView* outputUnorm8,
+    UINT width,
+    UINT height,
     std::string& errorMsg
 ) {
     GpuStageProbe::Scope sample(timingProbe_.get(), context_.Get());
@@ -124,65 +108,22 @@ bool Tonemapper::Process(
         return false;
     }
     if (!inputFloat16 || !outputUnorm8) {
-        errorMsg = "Tonemapper input or output texture is null";
+        errorMsg = "Tonemapper input or output view is null";
         return false;
-    }
-
-    D3D11_TEXTURE2D_DESC inDesc;
-    inputFloat16->GetDesc(&inDesc);
-    auto inputViewIt = std::find_if(inputViews_.begin(), inputViews_.end(), [&](const InputViewCacheEntry& entry) {
-        return entry.texture.Get() == inputFloat16.Get() && sameTextureDesc(entry.desc, inDesc);
-    });
-    if (inputViewIt == inputViews_.end()) {
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-        srvDesc.Format = inDesc.Format;
-        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Texture2D.MipLevels = 1;
-
-        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> inputSRV;
-        HRESULT hr = device_->CreateShaderResourceView(inputFloat16.Get(), &srvDesc, &inputSRV);
-        if (FAILED(hr)) {
-            errorMsg = "CreateShaderResourceView failed: " + std::to_string(hr);
-            return false;
-        }
-        if (inputViews_.size() >= kMaximumCachedTonemapperViews) inputViews_.erase(inputViews_.begin());
-        inputViews_.push_back({ inputFloat16, inputSRV, inDesc });
-        inputViewIt = std::prev(inputViews_.end());
-    }
-
-    D3D11_TEXTURE2D_DESC outDesc;
-    outputUnorm8->GetDesc(&outDesc);
-    auto outputViewIt = std::find_if(outputViews_.begin(), outputViews_.end(), [&](const OutputViewCacheEntry& entry) {
-        return entry.texture.Get() == outputUnorm8.Get() && sameTextureDesc(entry.desc, outDesc);
-    });
-    if (outputViewIt == outputViews_.end()) {
-        D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-        uavDesc.Format = outDesc.Format;
-        uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-
-        Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> outputUAV;
-        HRESULT hr = device_->CreateUnorderedAccessView(outputUnorm8.Get(), &uavDesc, &outputUAV);
-        if (FAILED(hr)) {
-            errorMsg = "CreateUnorderedAccessView failed: " + std::to_string(hr);
-            return false;
-        }
-        if (outputViews_.size() >= kMaximumCachedTonemapperViews) outputViews_.erase(outputViews_.begin());
-        outputViews_.push_back({ outputUnorm8, outputUAV, outDesc });
-        outputViewIt = std::prev(outputViews_.end());
     }
 
     // Dispatch compute shader
     context_->CSSetShader(computeShader_.Get(), nullptr, 0);
     
-    ID3D11ShaderResourceView* srvs[] = { inputViewIt->view.Get() };
+    ID3D11ShaderResourceView* srvs[] = { inputFloat16 };
     context_->CSSetShaderResources(0, 1, srvs);
     
-    ID3D11UnorderedAccessView* uavs[] = { outputViewIt->view.Get() };
+    ID3D11UnorderedAccessView* uavs[] = { outputUnorm8 };
     context_->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
     // Calculate thread groups (16x16 threads per group for maximum GPU occupancy)
-    UINT dispatchX = (outDesc.Width + 15) / 16;
-    UINT dispatchY = (outDesc.Height + 15) / 16;
+    UINT dispatchX = (width + 15) / 16;
+    UINT dispatchY = (height + 15) / 16;
     context_->Dispatch(dispatchX, dispatchY, 1);
 
     // Unbind resources
@@ -195,9 +136,30 @@ bool Tonemapper::Process(
     return true;
 }
 
-void Tonemapper::ResetViewCache() {
-    inputViews_.clear();
-    outputViews_.clear();
+bool Tonemapper::Process(
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> inputFloat16,
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> outputUnorm8,
+    std::string& errorMsg
+) {
+    if (!inputFloat16 || !outputUnorm8) {
+        errorMsg = "Tonemapper input or output texture is null";
+        return false;
+    }
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> inputSRV;
+    HRESULT hr = device_->CreateShaderResourceView(inputFloat16.Get(), nullptr, &inputSRV);
+    if (FAILED(hr)) {
+        errorMsg = "CreateShaderResourceView failed: " + std::to_string(hr);
+        return false;
+    }
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> outputUAV;
+    hr = device_->CreateUnorderedAccessView(outputUnorm8.Get(), nullptr, &outputUAV);
+    if (FAILED(hr)) {
+        errorMsg = "CreateUnorderedAccessView failed: " + std::to_string(hr);
+        return false;
+    }
+    D3D11_TEXTURE2D_DESC outDesc;
+    outputUnorm8->GetDesc(&outDesc);
+    return Process(inputSRV.Get(), outputUAV.Get(), outDesc.Width, outDesc.Height, errorMsg);
 }
 
 } // namespace clipture

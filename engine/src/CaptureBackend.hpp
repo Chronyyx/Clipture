@@ -137,6 +137,9 @@ struct CaptureTexture {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> renderTargetView;
+    // Tone-mapping views, owned with the textures so a freed slot frees them.
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> hdrInputView;
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> toneOutputView;
     std::shared_ptr<void> lease;
     std::shared_ptr<GpuTextureReadState> gpuReadState;
 };
@@ -163,6 +166,7 @@ private:
     std::vector<std::shared_ptr<Slot>> slots_;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> hdrInputTexture_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> hdrInputView_;
     bool deferredHdr_ = false;
     bool sharePrepared_ = false;
     D3D11_TEXTURE2D_DESC desc_ {};

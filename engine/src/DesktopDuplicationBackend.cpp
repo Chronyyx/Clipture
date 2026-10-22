@@ -497,7 +497,8 @@ BackendOutcome DesktopDuplicationBackend::run(std::stop_token stopToken) {
             copySubmission.record(copyDuration);
             std::string tonemapperError;
             if (!policy.deferPreparation && !state.tonemapper->Process(
-                    owned.hdrInputTexture, owned.texture, tonemapperError)) {
+                    owned.hdrInputView.Get(), owned.toneOutputView.Get(),
+                    state.width, state.height, tonemapperError)) {
                 ++state.shared->callbackErrors;
                 state.shared->setFallbackReason(
                     "DXGI HDR tonemapping failed: " + tonemapperError);

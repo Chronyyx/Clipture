@@ -1,15 +1,25 @@
 #include "DesktopFramePreparation.hpp"
 #include "WgcFramePreparation.hpp"
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <thread>
 #include <vector>
+#include <wrl/implements.h>
 
 using namespace clipture;
 using namespace clipture::capture;
 using Microsoft::WRL::ComPtr;
 static void require(bool value) { if (!value) std::abort(); }
+
+struct __declspec(uuid("6f1c2b8e-3d4a-4c1e-9b7f-2a5d8e0c4f13")) DestructionSentinel
+    : Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IUnknown> {
+    explicit DestructionSentinel(bool& destroyed) : destroyed_(destroyed) {}
+    ~DestructionSentinel() override { destroyed_ = true; }
+    bool& destroyed_;
+};
 
 // WARP exercises the real shaders without capturing the user's desktop or
 // requiring NVIDIA hardware. Readback is test-only, never a production wait.
@@ -107,6 +117,30 @@ int main(int argc, char**) {
             stats, device.Get(), context, copyProbe, policy, error);
         require(static_cast<bool>(eager.owned.lease));
         require(pixels(device.Get(), context.Get(), eager.owned.texture.Get()) == plainReference);
+    }
+
+    // A slot grown under load and later freed for idling must release its HDR
+    // input even after tone mapping used it. NVIDIA backs each such texture
+    // with system memory, so a view held elsewhere is RAM held during gaming.
+    {
+        CaptureTexturePool growPool(stats);
+        std::vector<CaptureTexture> held;
+        for (int i = 0; i < 5; ++i) held.push_back(growPool.acquire(device.Get(), 32, 32, true, error, true, shared));
+        require(held.back().hdrInputView && held.back().toneOutputView);
+        // Views keep their texture alive without showing in its public
+        // refcount, so watch for destruction through attached private data.
+        bool grownInputDestroyed = false;
+        auto sentinel = Microsoft::WRL::Make<DestructionSentinel>(grownInputDestroyed);
+        require(SUCCEEDED(held.back().hdrInputTexture->SetPrivateDataInterface(
+            __uuidof(DestructionSentinel), sentinel.Get())));
+        sentinel.Reset();
+        for (const auto& texture : held)
+            require(deferDesktopPreparation(texture, tone, nullptr, {}, stats, context, 32, 32)->prepare(error));
+        held.clear();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2100));
+        require(static_cast<bool>(growPool.acquire(device.Get(), 32, 32, true, error, true, shared).lease));
+        context->Flush(); // D3D defers destroying resources recent commands used.
+        require(grownInputDestroyed);
     }
 
     D3D11_TEXTURE2D_DESC pointerDesc {};

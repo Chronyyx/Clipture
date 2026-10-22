@@ -21,7 +21,8 @@ std::shared_ptr<DeferredFramePreparation> deferDesktopPreparation(
                 ~Scope() { if (api) api->Leave(); }
             } scope(multithread.Get());
             const auto start = monotonicNow100ns();
-            if (tonemapper && !tonemapper->Process(texture.hdrInputTexture, texture.texture, error)) return false;
+            if (tonemapper && !tonemapper->Process(
+                    texture.hdrInputView.Get(), texture.toneOutputView.Get(), width, height, error)) return false;
             const auto mapped = monotonicNow100ns();
             stats->framePreparationLatency.record(mapped, mapped - start);
             if (compositor && !compositor->compositeSnapshot(pointer, texture.texture.Get(), texture.renderTargetView.Get(),
