@@ -23,10 +23,25 @@
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
-    "@type": "BreadcrumbList",
-    "itemListElement": [
-      { "@type": "ListItem", "position": 1, "name": "Clipture", "item": "https://clipture.app/" },
-      { "@type": "ListItem", "position": 2, "name": "Separate audio tracks", "item": "https://clipture.app/features/separate-audio-tracks/" }
+    "@graph": [
+      {
+        "@type": "WebPage",
+        "@id": "https://clipture.app/features/separate-audio-tracks/",
+        "url": "https://clipture.app/features/separate-audio-tracks/",
+        "name": "Customizable separate audio tracks for game clips",
+        "inLanguage": "en",
+        "about": { "@id": "https://clipture.app/#software" },
+        "primaryImageOfPage": "https://clipture.app/features/separate-audio-tracks/audio-sources.webp",
+        "breadcrumb": { "@id": "https://clipture.app/features/separate-audio-tracks/#breadcrumb" }
+      },
+      {
+        "@type": "BreadcrumbList",
+        "@id": "https://clipture.app/features/separate-audio-tracks/#breadcrumb",
+        "itemListElement": [
+          { "@type": "ListItem", "position": 1, "name": "Clipture", "item": "https://clipture.app/" },
+          { "@type": "ListItem", "position": 2, "name": "Separate audio tracks", "item": "https://clipture.app/features/separate-audio-tracks/" }
+        ]
+      }
     ]
   }
   </script>
