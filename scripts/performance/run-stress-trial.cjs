@@ -24,6 +24,8 @@ const USAGE = `Usage: node scripts/performance/run-stress-trial.cjs [options]
   --cpu-busy <pct>      busy share of each CPU thread (default 100)
   --gpu-priority <n>    window D3D11 GPU thread priority -7..7 (games may raise theirs)
   --cpu-games-priority  register CPU threads as MMCSS "Games" (high), like game engine threads
+  --vram-mb <n>         hold n MiB of VRAM in the window, like a VRAM-hungry game
+  --no-solo             skip the window-alone pass (no windowCost; needs --layer-ms or --baseline)
   --compute-load        issue GPU load as compute dispatches (volumetric smoke style)
   --audio               play soft noise from the window during GPU-loaded phases
   --as-game             run the window as cs2.exe so game detection and game-audio capture bind to it
@@ -34,7 +36,7 @@ const USAGE = `Usage: node scripts/performance/run-stress-trial.cjs [options]
 
 function parseArgs(argv) {
   const options = { label: 'trial', engine: path.join(release, 'clipture_engine.exe'), fps: 120,
-    timeline: DEFAULT_TIMELINE, hdr: false, renderSize: null, cpuThreads: 0, cpuBusy: 100, computeLoad: false, dailyAudio: false, audio: false, asGame: false, cpuGamesPriority: false, gpuPriority: 0, env: {}, layerMs: 0, baseline: null };
+    timeline: DEFAULT_TIMELINE, hdr: false, renderSize: null, cpuThreads: 0, cpuBusy: 100, computeLoad: false, dailyAudio: false, audio: false, asGame: false, cpuGamesPriority: false, gpuPriority: 0, vramMb: 0, env: {}, layerMs: 0, baseline: null };
   for (let i = 0; i < argv.length; ++i) {
     const arg = argv[i], value = () => { if (i + 1 >= argv.length) throw Error(USAGE); return argv[++i]; };
     if (arg === '--label') options.label = value();
@@ -51,6 +53,8 @@ function parseArgs(argv) {
     else if (arg === '--as-game') options.asGame = true;
     else if (arg === '--cpu-games-priority') options.cpuGamesPriority = true;
     else if (arg === '--gpu-priority') options.gpuPriority = Number(value());
+    else if (arg === '--vram-mb') options.vramMb = Number(value());
+    else if (arg === '--no-solo') options.noSolo = true;
     else if (arg === '--env') { const [key, ...rest] = value().split('='); options.env[key] = rest.join('='); }
     else if (arg === '--layer-ms') options.layerMs = Number(value());
     else if (arg === '--baseline') options.baseline = path.resolve(value());
@@ -121,6 +125,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const baseline = options.baseline ? JSON.parse(fs.readFileSync(options.baseline, 'utf8')) : null;
   if (!options.layerMs && baseline) options.layerMs = baseline.layerMs;
+  if (options.noSolo && !options.layerMs) throw Error('--no-solo needs --layer-ms or --baseline.');
   if (otherEngines().length) {
     console.warn('Another Clipture engine is running; it competes for the GPU. Close Clipture for clean numbers.');
   }
@@ -139,13 +144,17 @@ async function main() {
     ...(options.cpuThreads ? ['--cpu-threads', String(options.cpuThreads), '--cpu-busy', String(options.cpuBusy)] : []),
     ...(options.computeLoad ? ['--compute-load'] : []), ...(options.audio ? ['--audio'] : []),
     ...(options.cpuGamesPriority ? ['--cpu-games-priority'] : []),
-    ...(options.gpuPriority ? ['--gpu-priority', String(options.gpuPriority)] : [])];
+    ...(options.gpuPriority ? ['--gpu-priority', String(options.gpuPriority)] : []),
+    ...(options.vramMb ? ['--vram-mb', String(options.vramMb)] : [])];
 
-  console.log(JSON.stringify({ step: 'solo', directory }));
-  const solo = startWindow([...windowArgs(path.join(directory, 'solo')), '--autostart']);
-  if (await solo.exited !== 0) throw Error(`Solo stress window failed: ${solo.stderr()}`);
-  const soloSummary = JSON.parse(fs.readFileSync(path.join(directory, 'solo/summary.json'), 'utf8'));
-  options.layerMs = soloSummary.layerMs;
+  let soloSummary = null;
+  if (!options.noSolo) {
+    console.log(JSON.stringify({ step: 'solo', directory }));
+    const solo = startWindow([...windowArgs(path.join(directory, 'solo')), '--autostart']);
+    if (await solo.exited !== 0) throw Error(`Solo stress window failed: ${solo.stderr()}`);
+    soloSummary = JSON.parse(fs.readFileSync(path.join(directory, 'solo/summary.json'), 'utf8'));
+    options.layerMs = soloSummary.layerMs;
+  }
 
   console.log(JSON.stringify({ step: 'trial', layerMs: options.layerMs }));
   const trialWindow = startWindow(windowArgs(path.join(directory, 'trial')));
@@ -189,7 +198,7 @@ async function main() {
         value !== engine.before[key])
       .map(([key, value]) => [key, value - engine.before[key]])),
     score: scoreTrial({ stamps, frames, summary: trialSummary, captureFps: options.fps }),
-    windowCost: windowCost(soloSummary, trialSummary),
+    windowCost: soloSummary ? windowCost(soloSummary, trialSummary) : [],
   };
   if (baseline) report.versusBaseline = compareReports(baseline, report);
   fs.writeFileSync(path.join(directory, 'report.json'), JSON.stringify(report, null, 2));

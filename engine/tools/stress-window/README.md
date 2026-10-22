@@ -50,6 +50,10 @@ well above the capture rate, and only these options together reproduce them:
 | `--compute-load` | Load layers as full-screen compute dispatches, like volumetric smoke; coarser to preempt than draws. |
 | `--cpu-threads N --cpu-games-priority` | Busy threads registered as MMCSS "Games", outranking normal threads the way game simulation does. |
 | `--as-game` (runner) | Runs the window as `cs2.exe`, so game detection and game-audio capture bind to it. |
+| `--vram-mb N` | Holds N MiB of VRAM (capped at the budget less 512) and references it every frame, like a VRAM-hungry game. Windows keeps the foreground window resident and demotes the engine instead; a separate process cannot do this. 8600 fills a 10 GB card. |
+
+The runner's `--no-solo` skips the window-alone pass (about a third of each
+run) when `windowCost` is not needed; pin `--layer-ms` from an earlier report.
 | `--audio` | Soft noise during loaded phases, so the game-audio track is live like grenade sound. |
 | `--daily-audio` (runner) | The engine captures audio with the sources from the daily settings. |
 

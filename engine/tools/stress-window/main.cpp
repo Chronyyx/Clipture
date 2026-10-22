@@ -4,6 +4,7 @@
 #include "CpuLoad.hpp"
 #include "StressRenderer.hpp"
 #include "StressTimeline.hpp"
+#include "VramLoad.hpp"
 
 #include <windows.h>
 
@@ -37,6 +38,7 @@ struct Options {
     bool audio = false;
     bool cpuGamesPriority = false;
     int gpuPriority = 0;
+    int vramMb = 0;
 };
 
 struct FrameRecord {
@@ -104,13 +106,15 @@ bool parseOptions(int argc, char** argv, Options& options) {
         else if (arg == "--cpu-games-priority") options.cpuGamesPriority = true;
         else if (arg == "--gpu-priority" && hasValue) options.gpuPriority = std::clamp(std::atoi(argv[++i]), -7, 7);
         else if (arg == "--cpu-threads" && hasValue) options.cpuThreads = std::clamp(std::atoi(argv[++i]), 0, 256);
+        else if (arg == "--vram-mb" && hasValue) options.vramMb = std::max(0, std::atoi(argv[++i]));
         else if (arg == "--cpu-busy" && hasValue) options.cpuBusyPercent = std::clamp(std::atoi(argv[++i]), 1, 100);
         else if (arg == "--render-size" && hasValue &&
                  std::sscanf(argv[++i], "%dx%d", &options.renderWidth, &options.renderHeight) == 2) {}
         else {
             std::cerr << "Usage: clipture_stress_window [--timeline name:seconds:loadMs,...] [--out dir]\n"
                          "       [--layer-ms ms] [--max-latency 1-16] [--autostart] [--hdr] [--render-size WxH]\n"
-                         "       [--cpu-threads N] [--cpu-busy 1-100] [--compute-load] [--audio] [--cpu-games-priority] [--gpu-priority -7..7]\n";
+                         "       [--cpu-threads N] [--cpu-busy 1-100] [--compute-load] [--audio] [--cpu-games-priority] [--gpu-priority -7..7]\n"
+                         "       [--vram-mb N]\n";
             return false;
         }
     }
@@ -212,6 +216,7 @@ int main(int argc, char** argv) {
         std::cerr << error << '\n';
         return 1;
     }
+    VramLoad vramLoad(options.vramMb);
     const int activeGpuPriority = options.gpuPriority ? renderer.setGpuPriority(options.gpuPriority) : 0;
     if (options.layerMs <= 0) options.layerMs = renderer.calibrateLayerMs(8, 40);
     if (options.layerMs <= 0) {
@@ -223,8 +228,8 @@ int main(int argc, char** argv) {
         layers.push_back(std::clamp(static_cast<int>(std::lround(phase.loadMs / options.layerMs)), 0, 4000));
     }
     layers.push_back(0);
-    std::printf("{\"event\":\"ready\",\"layerMs\":%.6f,\"width\":%d,\"height\":%d,\"gpuPriority\":%d}\n", options.layerMs, width, height,
-                activeGpuPriority);
+    std::printf("{\"event\":\"ready\",\"layerMs\":%.6f,\"width\":%d,\"height\":%d,\"gpuPriority\":%d,\"vramMb\":%d}\n",
+                options.layerMs, width, height, activeGpuPriority, vramLoad.heldMegabytes());
     std::fflush(stdout);
 
     if (options.autostart) g_start = true;
@@ -259,12 +264,13 @@ int main(int argc, char** argv) {
         }
         if (phase == static_cast<int>(layers.size()) - 1 && !finishedReported) {
             finishedReported = true;
-            std::printf("{\"event\":\"finished\"}\n");
+            std::printf("{\"event\":\"finished\",\"residentVramMb\":%d}\n", vramLoad.residentMegabytes());
             std::fflush(stdout);
             if (options.autostart) break;
         }
         cpuLoad.setActive(layers[phase] > 0);
         audioLoad.setActive(layers[phase] > 0);
+        vramLoad.touch();
         renderer.render(counter, nowUs / 1e6, layers[phase], false);
         QueryPerformanceCounter(&now);
         frames.push_back({counter, phase, micros(now), GetForegroundWindow() == window});
