@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Customizable separate audio tracks for game clips · Clipture</title>
+  <meta name="description" content="Choose which sounds Clipture records and which get their own track: game, microphone, Discord or any app. Then mix or mute each track after you play.">
+  <meta name="theme-color" content="#0f0f0e">
+  <link rel="canonical" href="https://clipture.app/features/separate-audio-tracks/">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://clipture.app/features/separate-audio-tracks/">
+  <meta property="og:site_name" content="Clipture">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:title" content="Separate audio tracks, set up your way">
+  <meta property="og:description" content="Pick what gets recorded and what gets its own track: game, microphone, Discord or any app. Mix or mute each one after you play.">
+  <meta property="og:image" content="https://clipture.app/features/separate-audio-tracks/audio-mixer.webp">
+  <meta property="og:image:width" content="1400">
+  <meta property="og:image:height" content="781">
+  <meta property="og:image:alt" content="Clipture's audio mixer beside a Counter-Strike 2 clip, with separate faders for system audio, microphone and Discord.">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="/site.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "Clipture", "item": "https://clipture.app/" },
+      { "@type": "ListItem", "position": 2, "name": "Separate audio tracks", "item": "https://clipture.app/features/separate-audio-tracks/" }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#title">Skip to content</a>
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="/">
+        <img src="/clipture-logo.png" alt="" width="28" height="28">
+        Clipture
+      </a>
+      <nav class="nav-links" aria-label="Sections">
+        <a href="/#demo">Demo</a>
+        <a href="/#features">Features</a>
+        <a href="/#questions">Questions</a>
+      </nav>
+      <div class="nav-actions">
+        <a class="button button-small" href="https://github.com/Chronyyx/Clipture/releases/latest">Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="article">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="/">Clipture</a> <span aria-hidden="true">/</span> <span aria-current="page">Separate audio tracks</span>
+    </nav>
+    <h1 id="title">Separate audio tracks, set up your way</h1>
+    <p class="lede">You decide what Clipture records and which sounds get a track of their own: the game, your microphone, Discord, music or any other app. After you play, mix or mute each track without recording again.</p>
+
+    <figure class="article-figure">
+      <img src="/features/separate-audio-tracks/audio-sources.webp" width="1200" height="742" alt="Clipture's Audio sources settings: switches for system audio, microphone and the detected game, and separate app tracks for Chromium and Discord.">
+      <figcaption>Audio sources in Clipture's settings, with Chromium and Discord on their own tracks.</figcaption>
+    </figure>
+
+    <h2>Choose every track</h2>
+    <p>Each source has its own switch, so a clip carries exactly the audio you want.</p>
+    <ul>
+      <li><strong>Separate app tracks:</strong> add any app that plays sound, such as Discord, Spotify or your browser, and it records on its own track. Remove it whenever you like. Clipture follows apps like Discord that run as several processes, and reconnects when they restart.</li>
+      <li><strong>Game:</strong> turn on the detected game or app, and the game you are playing gets a track of its own.</li>
+      <li><strong>System audio:</strong> record everything your PC plays, or only the apps you pick. An app that already has its own track is kept out of the system mix, so nothing is recorded twice.</li>
+      <li><strong>Microphone:</strong> choose the device and its volume, add voice isolation at the strength you want, and set the noise gate to automatic, manual or off.</li>
+    </ul>
+    <p>A source that stayed silent for the whole clip is left out, so a clip carries only tracks with sound.</p>
+
+    <h2>Mix after you play</h2>
+    <p>Open a clip and choose the audio mixer. Each track has its own level, from quieter to louder than it was recorded, and a mute button. Changes play as you move them, so you hear the balance before you keep it.</p>
+    <p>Choose Save to file and the new balance is written into the clip itself. Every player then hears the same mix, the video is never re-encoded, and an interrupted save never leaves a broken clip.</p>
+
+    <figure class="article-figure">
+      <img src="/features/separate-audio-tracks/audio-mixer.webp" width="1400" height="781" alt="Clipture's audio mixer beside a Counter-Strike 2 clip, with separate faders for system audio, microphone and Discord." loading="lazy">
+      <figcaption>A clip with three audio tracks, open in Clipture's mixer.</figcaption>
+    </figure>
+
+    <h2>Works with your editor</h2>
+    <p>Clips are MP4 files with one AAC track per source. Video editors that read multi-track MP4 files, such as DaVinci Resolve or Premiere Pro, show each track separately. Simple players and most upload sites play only the first track, so save a mix in Clipture first when you want everyone to hear it.</p>
+
+    <h2>Why separate tracks matter</h2>
+    <p>A recording with everything mixed into one track can't be taken apart later: your voice, your friends and the game stay together. Separate tracks let you fix a loud teammate, cut music you can't post, or share a clip without your own voice, long after the moment happened.</p>
+
+    <div class="article-cta">
+      <a class="button" href="https://github.com/Chronyyx/Clipture/releases/latest">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>Download for Windows</a>
+      <a class="button button-quiet" href="/demo/?preview&amp;demo">Try the mixer in the live demo</a>
+    </div>
+    <p class="needs">Free and open source. Windows 10 or 11 with an NVIDIA GPU.</p>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <a class="brand" href="/">
+        <img src="/clipture-logo.png" alt="" width="22" height="22">
+        Clipture
+      </a>
+      <span>Open source under the MIT license.</span>
+      <nav class="footer-links" aria-label="Project">
+        <a href="https://github.com/Chronyyx/Clipture" rel="noopener noreferrer">Source code</a>
+        <a href="https://github.com/Chronyyx/Clipture/releases" rel="noopener noreferrer">Releases</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

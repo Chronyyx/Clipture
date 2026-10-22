@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Clipture: save the play you just made</title>
-  <meta name="description" content="Clipture records your game in the background on your NVIDIA GPU. Press a key to save the play you just made, then send the clip straight to a friend's PC.">
+  <title>Clipture: free instant replay and game clipping for Windows</title>
+  <meta name="description" content="Free, open-source instant replay for Windows. Clipture records on your NVIDIA GPU; press Ctrl+Shift+S to save the play you just made and send it to friends.">
   <meta name="theme-color" content="#0f0f0e">
   <link rel="canonical" href="https://clipture.app/">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://clipture.app/">
   <meta property="og:site_name" content="Clipture">
+  <meta property="og:locale" content="en_US">
   <meta property="og:title" content="Clipture: save the play you just made">
   <meta property="og:description" content="Free, open-source game clipping for Windows. Records on your NVIDIA GPU; press Ctrl+Shift+S to keep the moment you just played.">
   <meta property="og:image" content="https://clipture.app/og-image.png">
@@ -17,6 +18,49 @@
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="The Clipture app showing a clip library, under the line: You just hit a clip. Clipture kept it.">
   <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Clipture: save the play you just made">
+  <meta name="twitter:description" content="Free, open-source game clipping for Windows. Records on your NVIDIA GPU; press Ctrl+Shift+S to keep the moment you just played.">
+  <meta name="twitter:image" content="https://clipture.app/og-image.png">
+  <meta name="twitter:image:alt" content="The Clipture app showing a clip library, under the line: You just hit a clip. Clipture kept it.">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "name": "Clipture",
+        "url": "https://clipture.app/",
+        "description": "Free, open-source instant replay and game clipping for Windows. Records in the background on an NVIDIA GPU; one shortcut saves the last 5 seconds to 10 minutes, and clips go straight to friends' PCs, peer to peer.",
+        "applicationCategory": "MultimediaApplication",
+        "applicationSubCategory": "Game recording",
+        "operatingSystem": "Windows 10, Windows 11",
+        "softwareRequirements": "NVIDIA GPU with NVENC",
+        "softwareVersion": "0.0.0",
+        "downloadUrl": "https://github.com/Chronyyx/Clipture/releases/latest",
+        "image": "https://clipture.app/og-image.png",
+        "screenshot": "https://clipture.app/og-image.png",
+        "featureList": [
+          "Instant replay of the last 5 seconds to 10 minutes",
+          "Hardware recording with NVIDIA NVENC",
+          "Separate game, microphone and app audio tracks",
+          "Trim clips and mix their audio",
+          "Peer-to-peer clip sharing with friends",
+          "HDR tone mapping"
+        ],
+        "license": "https://opensource.org/licenses/MIT",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "author": { "@type": "Person", "name": "Chronyyx", "url": "https://github.com/Chronyyx" },        "sameAs": ["https://github.com/Chronyyx/Clipture"]
+      },
+      {
+        "@type": "WebSite",
+        "name": "Clipture",
+        "url": "https://clipture.app/",
+        "inLanguage": "en"
+      }
+    ]
+  }
+  </script>
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="/site.css">
   <script src="/motion-gate.js"></script>
@@ -34,6 +78,7 @@
       <nav class="nav-links" aria-label="Sections">
         <a href="#demo">Demo</a>
         <a href="#features">Features</a>
+        <a href="#questions">Questions</a>
       </nav>
       <div class="nav-actions">
         <a class="icon-link" href="https://github.com/Chronyyx/Clipture" rel="noopener noreferrer" aria-label="Clipture on GitHub">
@@ -51,7 +96,7 @@
         <span class="announce-dot" aria-hidden="true"></span>
         New: share clips straight to your friends
       </a>
-      <h1 id="headline"><span class="word"><span>Keep</span></span> <span class="word"><span>the</span></span> <span class="word"><span>last</span></span> <span class="word"><span>60&nbsp;seconds</span></span> <span class="word"><span>of</span></span> <span class="word"><span>your</span></span> <span class="word"><span>game.</span></span></h1>
+      <h1 id="headline"><span class="word"><span>Save</span></span> <span class="word"><span>the</span></span> <span class="word"><span>play</span></span> <span class="word"><span>you</span></span> <span class="word"><span>just</span></span> <span class="word"><span>made.</span></span></h1>
       <p class="lede" data-enter>Clipture records quietly on your NVIDIA GPU. When something happens, press Ctrl+Shift+S and the moment you just played becomes a clip.</p>
       <div class="hero-actions" data-enter>
         <a class="button" href="https://github.com/Chronyyx/Clipture/releases/latest">
@@ -102,8 +147,8 @@
         <article class="feature" data-reveal>
           <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/></svg>
           <h3>Every voice on its own track</h3>
-          <p>Game, microphone and apps like Discord are saved separately. Mix them while you watch, or mute one.</p>
-          <span class="chip">Separate tracks</span>
+          <p>Pick which apps get a track of their own. Game, microphone, Discord and more are saved as separate audio tracks you can mix or mute later.</p>
+          <a class="chip chip-link" href="/features/separate-audio-tracks/" data-sparkle>Separate tracks</a>
         </article>
         <article class="feature" data-reveal>
           <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -122,6 +167,39 @@
           <h3>Make it yours</h3>
           <p>Graphite, Light, Glitten, Aero, Maid café, Halloween, or your own colours.</p>
           <span class="chip">7 themes</span>
+        </article>
+      </div>
+    </section>
+
+    <section class="questions" id="questions" aria-labelledby="questions-title">
+      <div class="section-head" data-reveal>
+        <h2 id="questions-title">Questions</h2>
+        <p>What you need, what it costs, and where your clips go.</p>
+      </div>
+      <div class="question-grid">
+        <article class="question" data-reveal>
+          <h3>Is Clipture free?</h3>
+          <p>Yes. Clipture is free and open source under the MIT license, with no account, subscription or watermark.</p>
+        </article>
+        <article class="question" data-reveal>
+          <h3>What do I need to run it?</h3>
+          <p>Windows 10 or 11 and an NVIDIA graphics card. Clipture records with NVIDIA's NVENC hardware encoder, so AMD and Intel graphics are not supported yet.</p>
+        </article>
+        <article class="question" data-reveal>
+          <h3>How far back can it save?</h3>
+          <p>Anywhere from 5 seconds to 10 minutes. Press Ctrl+Shift+S, or your own shortcut, and that much of what you just played is saved as an MP4 clip at 24, 30, 60 or 120 FPS.</p>
+        </article>
+        <article class="question" data-reveal>
+          <h3>Does it inject anything into my games?</h3>
+          <p>No. Clipture captures through Windows' own screen capture and never hooks or loads code into the game process.</p>
+        </article>
+        <article class="question" data-reveal>
+          <h3>Will recording lower my frame rate?</h3>
+          <p>The GPU's dedicated video encoder does the recording, and the replay waits on disk rather than in RAM. HDR games are tone mapped, so clips look right on any screen.</p>
+        </article>
+        <article class="question" data-reveal>
+          <h3>Where do my clips go?</h3>
+          <p>To a folder you choose, with game, microphone and app audio on separate tracks. To share one, send a friend an invite link: the clip goes straight from your PC to theirs, encrypted, without a cloud upload.</p>
         </article>
       </div>
     </section>

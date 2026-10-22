@@ -37,7 +37,18 @@ try {
 
   assert.match(read('robots.txt'), /Sitemap: https:\/\/clipture\.app\/sitemap\.xml/);
   assert.match(read('sitemap.xml'), /<loc>https:\/\/clipture\.app\/<\/loc>/);
-  assert.match(read('sitemap.xml'), /<loc>https:\/\/clipture\.app\/demo\/<\/loc>/);
+  // /demo/ is served with X-Robots-Tag: noindex; listing it would contradict that.
+  assert.doesNotMatch(read('sitemap.xml'), /\/demo\//, 'the noindexed demo stays out of the sitemap');
+  // Every sitemap page ships, links back home, and is linked from the home page.
+  for (const [, url] of read('sitemap.xml').matchAll(/<loc>https:\/\/clipture\.app(\/[^<]*)<\/loc>/g)) {
+    if (url === '/') continue;
+    const page = read(path.join(url, 'index.html'));
+    assert.match(page, new RegExp(`<link rel="canonical" href="https://clipture\\.app${url}">`), `${url} is canonical`);
+    assert.equal((page.match(/<h1[\s>]/g) || []).length, 1, `${url} has one heading`);
+    assert.ok(home.includes(`href="${url}"`), `the home page links ${url}`);
+  }
+  const version = require(path.join(root, 'package.json')).version;
+  assert.match(home, new RegExp(`"softwareVersion": "${version.replace(/\./g, '\\.')}"`), 'structured data names the release');
   const png = fs.readFileSync(path.join(output, 'og-image.png'));
   assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [1200, 630], 'the share image is 1200x630');
 

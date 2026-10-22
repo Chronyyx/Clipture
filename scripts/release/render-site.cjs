@@ -30,6 +30,7 @@ const installer = `${repository}/releases/download/v${version}/Clipture_${versio
 const rules = [
   { files: ['index.html', 'invite/index.html'], from: `href="${latest}"`, to: `href="${installer}"` },
   { files: ['index.html'], from: '>Download for Windows<', to: `>Download Clipture ${version}<` },
+  { files: ['index.html'], from: '"softwareVersion": "0.0.0"', to: `"softwareVersion": "${version}"` },
   { files: ['invite/index.html'], from: '>the releases page<', to: `>download Clipture ${version}<` }
 ];
 

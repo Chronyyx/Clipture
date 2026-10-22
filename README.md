@@ -2,6 +2,8 @@
 
 Clipture is a Windows replay-buffer application built around low-latency NVIDIA NVENC capture. It continuously persists compressed video and audio into a rolling replay archive in the save folder, then finalizes the selected time window as an MP4 in place when a clip is saved. Clips can be shared directly with friends, peer to peer.
 
+Website, download and live demo: [clipture.app](https://clipture.app/).
+
 Release history and patch notes live in [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
