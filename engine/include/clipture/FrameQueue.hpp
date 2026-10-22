@@ -68,7 +68,16 @@ public:
     }
     int64_t nextDeadline100ns() const { return nextDeadline100ns_.load(std::memory_order_relaxed); }
 
+    // The encoder's remaining selection ticks, in frame (media) time: the next
+    // unconsumed tick and the rate of the ones after it; 0 clears. A queued
+    // frame that a newer one replaces before any of these ticks can never be
+    // selected, so push() releases it (and its capture slot) at once instead
+    // of at the next tick. The encoded output is unchanged.
+    void announceSelectionTicks(int64_t nextTickPts100ns, int fps);
+
 private:
+    bool supersededBy(const CapturedFrame& older, const CapturedFrame& newer) const;
+
     std::size_t capacity_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -77,6 +86,8 @@ private:
     FrameQueueStats stats_;
     FrameSelectionTrace selectionTrace_;
     std::atomic<int64_t> nextDeadline100ns_ = 0;
+    int64_t nextTickPts100ns_ = 0;
+    int tickFps_ = 0;
 };
 
 }  // namespace clipture

@@ -22,6 +22,11 @@ void FrameQueue::push(CapturedFrame frame) {
                 0, frame.captureEpoch, frame.sequence, static_cast<uint32_t>(frames_.size()), 0,
                 static_cast<uint32_t>(overflow)});
         }
+        // Counted as coalesced: the next tick would have discarded it anyway.
+        if (!frames_.empty() && supersededBy(frames_.back(), frame)) {
+            frames_.pop_back();
+            ++stats_.coalescedDrops;
+        }
         while (frames_.size() >= capacity_) {
             frames_.pop_front();
             ++stats_.overflowDrops;
@@ -30,6 +35,29 @@ void FrameQueue::push(CapturedFrame frame) {
         stats_.maximumDepth = std::max(stats_.maximumDepth, frames_.size());
     }
     cv_.notify_one();
+}
+
+void FrameQueue::announceSelectionTicks(int64_t nextTickPts100ns, int fps) {
+    std::lock_guard lock(mutex_);
+    nextTickPts100ns_ = fps > 0 ? nextTickPts100ns : 0;
+    tickFps_ = nextTickPts100ns_ ? fps : 0;
+}
+
+// Every remaining tick takes the newest frame at or before its deadline (a
+// late tick) or the newest queued frame (an on-time tick). `older` can only be
+// chosen by a tick in [older.pts, newer.pts). Ticks after the next one are
+// rational multiples of 1/fps away, exact to 1 unit; a 2-unit margin keeps any
+// frame whose interval is in doubt.
+bool FrameQueue::supersededBy(const CapturedFrame& older, const CapturedFrame& newer) const {
+    if (tickFps_ <= 0 || newer.pts100ns < older.pts100ns) return false;
+    constexpr int64_t kTimebase = 10'000'000;
+    constexpr int64_t kMargin = 2;
+    const int64_t next = nextTickPts100ns_;
+    if (newer.pts100ns + kMargin <= next) return true;  // both precede every remaining tick
+    if (older.pts100ns <= next + kMargin) return false;
+    const auto offset = [&](int64_t tick) { return next + tick * kTimebase / tickFps_; };
+    const int64_t interval = (older.pts100ns - next) * tickFps_ / kTimebase;
+    return offset(interval) + kMargin < older.pts100ns && newer.pts100ns + kMargin <= offset(interval + 1);
 }
 
 std::optional<CapturedFrame> FrameQueue::waitPop() {

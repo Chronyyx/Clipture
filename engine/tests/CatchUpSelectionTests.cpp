@@ -3,8 +3,10 @@
 #include "clipture/FrameQueue.hpp"
 #include "clipture/TickAlignedAcquire.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <random>
 
 void require(bool ok, const char* message) {
     if (!ok) { std::cerr << message << '\n'; std::exit(1); }
@@ -16,6 +18,51 @@ clipture::CapturedFrame frameAt(int64_t pts100ns, uint64_t sequence) {
     frame.sequence = sequence;
     frame.captureEpoch = 1;
     return frame;
+}
+
+// Releasing superseded frames at push must not change any selection. Drive one
+// queue with the tick grid announced and one without through the encoder loop's
+// order (announce, wait, advance, announce, select) over jittered capture,
+// 40 ms stalls and >70 ms skips, and compare every tick's choice.
+void requireSupersededFramesNeverSelected() {
+    for (const int fps : {30, 60, 120, 144, 240}) {
+        std::mt19937 random(static_cast<unsigned>(fps));
+        constexpr int64_t start = 50'000'000;
+        clipture::EncoderCadence cadence(fps, start);
+        clipture::FrameQueue pruned(64), reference(64);
+        int64_t nextFrame = start - 30'000, lastPts = 0;
+        uint64_t sequence = 0, superseded = 0;
+        std::size_t prunedPeak = 0, referencePeak = 0;
+        for (int iteration = 0; iteration < 4000; ++iteration) {
+            pruned.announceSelectionTicks(cadence.deadline100ns(), cadence.fps());
+            const auto roll = random() % 100;
+            const int64_t lateness = roll < 3 ? 400'000 + random() % 100'000      // encoder stall
+                : roll < 4 ? 800'000 + random() % 400'000                       // past catch-up: skip ahead
+                : random() % 30'000;
+            const int64_t wake = cadence.deadline100ns() + lateness;
+            while (nextFrame <= wake) {
+                // Present-time stamps lag arrival a little and may repeat exactly.
+                const int64_t pts = std::max(lastPts, nextFrame - static_cast<int64_t>(random() % 20'000));
+                lastPts = pts;
+                pruned.push(frameAt(pts, ++sequence));
+                reference.push(frameAt(pts, sequence));
+                prunedPeak = std::max(prunedPeak, pruned.size());
+                referencePeak = std::max(referencePeak, reference.size());
+                nextFrame += 10'000 + random() % 60'000;  // 1-7 ms: 140-1000 Hz sources
+            }
+            const auto tick = cadence.advance(wake);
+            pruned.announceSelectionTicks(cadence.deadline100ns(), cadence.fps());
+            const bool byDeadline = clipture::selectByDeadline(cadence.deadline100ns() <= wake, tick.lateness100ns);
+            const auto a = byDeadline ? pruned.consumeLatestAtOrBefore(tick.deadline100ns) : pruned.consumeAllAndGetLatest();
+            const auto b = byDeadline ? reference.consumeLatestAtOrBefore(tick.deadline100ns) : reference.consumeAllAndGetLatest();
+            require(a.has_value() == b.has_value() && (!a || a->sequence == b->sequence),
+                    "releasing a superseded frame changed a tick's selection");
+        }
+        superseded = pruned.stats().coalescedDrops;
+        require(superseded == reference.stats().coalescedDrops, "superseded frames must count as coalesced, not extra drops");
+        require(prunedPeak < referencePeak, "stalls must hold fewer queued frames");
+        std::cout << fps << " FPS: peak queued " << prunedPeak << " vs " << referencePeak << " frames.\n";
+    }
 }
 
 int main() {
@@ -69,5 +116,6 @@ int main() {
     require(tickAlignedAcquireNotBefore(200'000, 166'667, 20'000) == 0, "late deadline acquires now");
     require(tickAlignedAcquireNotBefore(0, 9'000'000, 20'000) == clipture::kTickAlignedAcquireMaxWait100ns,
             "far deadline re-checks within the bounded wait");
-    std::cout << "Catch-up selection and tick-aligned acquire passed.\n";
+    requireSupersededFramesNeverSelected();
+    std::cout << "Catch-up selection, early superseded release and tick-aligned acquire passed.\n";
 }

@@ -3077,6 +3077,7 @@ void EncoderWorker::run() {
             cadence = EncoderCadence(fps, monotonicNow100ns());
         }
         frames_.announceNextDeadline(cadence.deadline100ns());
+        frames_.announceSelectionTicks(mediaTimeFromSystemRelative100ns(cadence.deadline100ns()), cadence.fps());
         wait.until(cadence.deadline100ns(), [this] { return running_.load(std::memory_order_relaxed); });
         if (!running_.load(std::memory_order_relaxed)) break;
         injectTestEncoderStall();
@@ -3084,6 +3085,7 @@ void EncoderWorker::run() {
         const auto tick = cadence.advance(wokeAt100ns);
         recentSchedulerWakeLateness_.record(wokeAt100ns, tick.lateness100ns);
         frames_.announceNextDeadline(cadence.deadline100ns());
+        frames_.announceSelectionTicks(mediaTimeFromSystemRelative100ns(cadence.deadline100ns()), cadence.fps());
         schedulerDroppedFrames_.fetch_add(static_cast<int>(std::min<uint64_t>(tick.skipped, INT_MAX)));
 
         if constexpr (kEnableFrameDuplication) {
@@ -3181,6 +3183,7 @@ void EncoderWorker::run() {
         }
     }
     frames_.announceNextDeadline(0);
+    frames_.announceSelectionTicks(0, 0);
 }
 
 void EncoderWorker::encodeLoop() {
