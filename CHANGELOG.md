@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.7.3] - 2026-10-22
+
+### Recording
+
+- **No more freezes when a game fills VRAM:** With a game using nearly all of a 10 GB card, as Deadlock can, Windows pushed recording frames out of VRAM and clips froze for up to 2 seconds. In stress trials with 8.6 GB held by the game, the longest freeze fell from 1,967 ms to 67 ms, fresh frames rose from 85% to 97%, and missed frames fell from 294 to 60. The game also had more VRAM left for itself.
+- **Far less RAM while gaming:** In the same trials the engine used 211 MB of RAM instead of 587 MB. In 1.7.2 the same test reached about 800 MB, and up to 1.2 GB in Deadlock.
+- **Freed frames are really freed:** The HDR tone mapper kept up to 16 old frames alive after capture had let them go, so 1.7.2's burst cleanup never gave that memory back.
+- **Fewer frames waiting:** A captured frame that a newer one replaces before the next encoder tick is let go at once instead of holding its slot until that tick. The recording is unchanged, frame for frame; during encoder stalls capture holds 6 slots instead of 13-14.
+- **HDR prepared at capture:** HDR frames are tone mapped as they are captured, so waiting frames no longer each keep a 28 MB HDR copy. Without VRAM pressure, recording stays at 0 stutter and 100% fresh frames with a third less VRAM.
+
+### Development
+
+- **VRAM-hungry stress trials:** `--vram-mb` makes the stress window hold VRAM like a demanding game, and `--no-solo` skips the window-alone pass for runs that don't need the game-cost comparison, about a third faster.
+
 ## [1.7.2] - 2026-10-21
 
 ### Recording
