@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.7.3: Steady When VRAM Runs Out",
+  "releaseTitle": "Clipture 1.7.4: Updates Without Admin Prompts",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

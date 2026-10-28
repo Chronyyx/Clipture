@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.7.4] - 2026-10-28
+
+### Updates
+
+- **No more admin prompt after updating:** Each update used to run from a new folder, so Windows Firewall treated it as a new program and asked for administrator rights again the first time friend sharing went online. Clipture now updates its files in place and always runs from the same path, so Windows asks once at most.
+- **Tiny downloads:** Updates download a small patch against the files already installed instead of whole files. Going from 1.7.2 to 1.7.3 would have needed 0.46 MB instead of about 30 MB. From three versions back it is still under 2 MB. Anything older, or a fresh install, downloads normally once.
+- **Safe if anything goes wrong:** An update is prepared and checked while Clipture keeps recording. Swapping the files on restart takes about 40 ms. The new version counts as installed only after its recording engine is configured and running. A power cut, a crash or a file held open by another program puts the previous version back exactly, and a version that fails to start is not tried again.
+- **Faster launches:** Clipture no longer checks every runtime file on each start, which took about 0.7 s.
+- **Nothing installed twice:** Old update folders, about 1 GB on a machine that updated through 1.6 and 1.7, are removed, and an update leaves no copies behind once it finishes.
+- **Installs without administrator rights:** The installer installs for the current user, in `%LOCALAPPDATA%\Programs\Clipture`, and never asks for elevation. Existing per-user installs keep their folder.
+- **Moving from Program Files:** A copy installed for all users moves itself to a per-user install in the background while it keeps recording, keeping settings, clips, shortcuts and start-with-Windows. Removing the old Program Files copy is the only step that needs administrator rights. Clipture offers it once, when you open its window, never during a game, and carries your firewall choice over so Windows does not ask again. Declining leaves both copies working.
+
+### Development
+
+- **ADR 0020:** in-place updates with a write-through journal, recovery from every interruption point, binary patches, and the Program Files migration. Tests inject a power loss before every rename and journal write and check that recovery restores the previous install byte for byte and leaves exactly one copy of each file.
+- **Sandbox release test:** test builds compiled with `CLIPTURE_TEST_RELEASE_ORIGIN` take updates from a local mirror, so a full release, update, rollback and migration can run in Windows Sandbox. Release CI refuses builds with it set.
+- **Patches in release CI:** releases publish zstd patches from the last three releases with a signed `patches-v1.json`. A failure in that step ships the release without patches.
+
 ## [1.7.3] - 2026-10-22
 
 ### Recording
