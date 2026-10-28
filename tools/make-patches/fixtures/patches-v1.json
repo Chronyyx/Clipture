@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "version": "1.1.0",
+  "patches": [
+    {
+      "path": "clipture.exe",
+      "fromSha256": "a62d54f102c3d0558e31dd2b6d89d6b255d39a9d1fae5221bd5dd5b5bd73de5d",
+      "sha256": "b19f07c5483fb792e02e5474f6ce493ad364e7b7a06745ca0d0cef15323e8506",
+      "size": 36,
+      "url": "https://github.com/Chronyyx/Clipture/releases/download/v1.1.0/clipture.exe.from-a62d54f102c3d055.zst"
+    }
+  ]
+}

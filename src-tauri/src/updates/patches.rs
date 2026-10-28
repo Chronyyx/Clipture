@@ -14,14 +14,13 @@ use super::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{fs, io::{Read, Write}, path::Path};
-use zstd::zstd_safe::{CCtx, CParameter, DCtx, DParameter};
+use zstd::zstd_safe::{DCtx, DParameter};
 
 pub const LIST: &str = "patches-v1.json";
 /// 128 MiB reach into the old file: enough for every runtime file today.
 const WINDOW_LOG: u32 = 27;
 const PATCH_LIMIT: u64 = 64 * 1024 * 1024;
 const LIST_LIMIT: usize = 256 * 1024;
-const LEVEL: i32 = 19;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -138,10 +137,12 @@ pub fn decompress(old: &[u8], patch: &[u8], size: u64) -> Result<Vec<u8>, Update
     Ok(output)
 }
 
-/// The release tool's side: a patch from `old` to `new`.
+/// What `tools/make-patches` does, for tests that need a patch.
+#[cfg(test)]
 pub fn create(old: &[u8], new: &[u8]) -> Result<Vec<u8>, UpdateError> {
+    use zstd::zstd_safe::{CCtx, CParameter};
     let mut context = CCtx::create();
-    for parameter in [CParameter::CompressionLevel(LEVEL), CParameter::EnableLongDistanceMatching(true), CParameter::WindowLog(WINDOW_LOG)] {
+    for parameter in [CParameter::CompressionLevel(19), CParameter::EnableLongDistanceMatching(true), CParameter::WindowLog(WINDOW_LOG)] {
         context.set_parameter(parameter).map_err(zstd_error)?;
     }
     context.ref_prefix(old).map_err(zstd_error)?;
@@ -163,37 +164,6 @@ pub fn sha256_file(path: &Path) -> std::io::Result<String> {
         hash.update(&buffer[..read]);
     }
     Ok(format!("{:x}", hash.finalize()))
-}
-
-/// Release tooling: patches from each earlier release under `previous`
-/// (one directory per version, files named as release assets) to the new
-/// runtime under `runtime`, plus the unsigned `patches-v1.json` in `out`.
-/// Skips a patch that would not be meaningfully smaller than the file.
-pub fn write_runtime_patches(runtime: &Path, version: &str, previous: &Path, out: &Path) -> Result<usize, UpdateError> {
-    fs::create_dir_all(out)?;
-    let mut patches = Vec::new();
-    let mut releases: Vec<_> = fs::read_dir(previous)?.flatten().filter(|entry| entry.path().is_dir()).collect();
-    releases.sort_by_key(|entry| entry.file_name());
-    for release in releases {
-        for path in PATHS {
-            let old_path = release.path().join(path.rsplit('/').next().unwrap_or(path));
-            let (Ok(old), Ok(new)) = (fs::read(&old_path), fs::read(runtime.join(path))) else { continue };
-            if old == new { continue; }
-            let patch = create(&old, &new)?;
-            if patch.len() as u64 * 10 > new.len() as u64 * 9 { continue; }
-            let from_sha256 = format!("{:x}", Sha256::digest(&old));
-            if patches.iter().any(|existing: &Patch| existing.path == *path && existing.from_sha256 == from_sha256) { continue; }
-            let name = file_name(path, &from_sha256);
-            fs::write(out.join(&name), &patch)?;
-            patches.push(Patch {
-                path: (*path).to_owned(), from_sha256, sha256: format!("{:x}", Sha256::digest(&patch)),
-                size: patch.len() as u64, url: asset_url(version, &name),
-            });
-        }
-    }
-    let list = PatchList { schema_version: 1, version: version.to_owned(), patches };
-    fs::write(out.join(LIST), serde_json::to_vec_pretty(&list).map_err(|error| invalid(error.to_string()))?)?;
-    Ok(list.patches.len())
 }
 
 #[cfg(test)]
@@ -231,30 +201,23 @@ mod tests {
         assert_ne!(decompress(&old, &corrupt, new.len() as u64).ok(), Some(new));
     }
 
+    /// `tools/make-patches` commits its exact output for these inputs; its own
+    /// test regenerates and compares it. Applying and parsing it here means
+    /// the release tool and the app cannot drift apart unnoticed.
     #[test]
-    fn release_tool_lists_only_useful_patches_with_their_identities() {
-        let root = tempfile::tempdir().unwrap();
-        let runtime = root.path().join("runtime");
-        let previous = root.path().join("previous");
-        fs::create_dir_all(runtime.join("assets")).unwrap();
-        fs::create_dir_all(previous.join("1.0.0")).unwrap();
-        let old = executable_like(1, 2 << 20);
+    fn release_tool_output_applies_with_this_decoder() {
+        let old: Vec<u8> = (0..65_536_usize).map(|index| ((index * 7919) % 251) as u8).collect();
         let mut new = old.clone();
-        new[10..20].fill(3);
-        fs::write(previous.join("1.0.0/clipture.exe"), &old).unwrap();
-        fs::write(runtime.join("clipture.exe"), &new).unwrap();
-        fs::write(previous.join("1.0.0/ffmpeg.exe"), b"same").unwrap();
-        fs::write(runtime.join("ffmpeg.exe"), b"same").unwrap();
-        fs::write(previous.join("1.0.0/default.mp3"), b"aaaa").unwrap();
-        fs::write(runtime.join("assets/default.mp3"), b"zzzz").unwrap();
-        assert_eq!(write_runtime_patches(&runtime, "1.1.0", &previous, &root.path().join("out")).unwrap(), 1);
-        let list: PatchList = serde_json::from_slice(&fs::read(root.path().join("out").join(LIST)).unwrap()).unwrap();
-        let patch = &list.patches[0];
-        assert_eq!(patch.path, "clipture.exe");
+        new[1000..1100].fill(0x5A);
+        new.extend_from_slice(b"tail");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tools/make-patches/fixtures");
+        let list: PatchList = serde_json::from_slice(&fs::read(fixtures.join(LIST)).unwrap()).unwrap();
+        let bytes = fs::read(fixtures.join("clipture.exe.patch.zst")).unwrap();
+        let [patch] = list.patches.as_slice() else { panic!("one patch expected") };
+        assert_eq!((list.schema_version, list.version.as_str(), patch.path.as_str()), (1, "1.1.0", "clipture.exe"));
         assert_eq!(patch.from_sha256, format!("{:x}", Sha256::digest(&old)));
-        let bytes = fs::read(root.path().join("out").join(file_name("clipture.exe", &patch.from_sha256))).unwrap();
-        assert_eq!(format!("{:x}", Sha256::digest(&bytes)), patch.sha256);
+        assert_eq!((patch.size, patch.sha256.clone()), (bytes.len() as u64, format!("{:x}", Sha256::digest(&bytes))));
+        assert_eq!(patch.url, format!("https://github.com/Chronyyx/Clipture/releases/download/v1.1.0/{}", file_name("clipture.exe", &patch.from_sha256)));
         assert_eq!(decompress(&old, &bytes, new.len() as u64).unwrap(), new);
-        assert_eq!(patch.url, format!("{}/v1.1.0/{}", release_source::asset_base(), file_name("clipture.exe", &patch.from_sha256)));
     }
 }

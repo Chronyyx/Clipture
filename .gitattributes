@@ -1,0 +1,2 @@
+# Exact bytes: the patch tool and the app compare against them.
+tools/make-patches/fixtures/** -text

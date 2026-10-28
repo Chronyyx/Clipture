@@ -360,7 +360,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { Write-Warning "$tag has no runtime assets; skipping it"; Remove-Item -Recurse -Force $directory }
           }
           if (-not (Get-ChildItem release-previous -Directory -ErrorAction SilentlyContinue)) { Write-Host "No earlier runtime to patch from."; exit 0 }
-          cargo run --manifest-path src-tauri/Cargo.toml --release --target x86_64-pc-windows-msvc --example make_patches -- release-runtime $version release-previous release-patches
+          # A standalone crate: builds in seconds instead of rebuilding the app.
+          cargo run --locked --release --manifest-path tools/make-patches/Cargo.toml -- release-runtime $version release-previous release-patches
           if ($LASTEXITCODE -ne 0) { throw "Patch generation failed" }
           & ./node_modules/.bin/tauri.cmd signer sign release-patches/patches-v1.json
           if ($LASTEXITCODE -ne 0) { throw "Patch list signing failed" }

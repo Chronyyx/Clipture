@@ -24,3 +24,4 @@ engine/third_party/rnnoise/src/rnnoise_data_little.h
 release-notes-*.md
 *.key
 *.sig
+tools/make-patches/target/

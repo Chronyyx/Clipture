@@ -106,7 +106,8 @@ are reused. Missing blocks use validated HTTP ranges; a server returning a full
 signs and verifies `components-v1.json` with the existing updater key.
 
 Release publishing also builds zstd patches from the last three releases'
-runtime files (`examples/make_patches.rs`) and uploads them with
+runtime files (`tools/make-patches`, a standalone crate that builds in
+seconds) and uploads them with
 `patches-v1.json`, signed with the same key. A client whose installed file
 matches a patch's starting hash downloads the patch instead, typically a few
 hundred KiB instead of about 30 MiB. The result must match the signed

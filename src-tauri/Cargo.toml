@@ -48,7 +48,8 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "time", "fs", "io-util", "rt"] }
 # Binary patches between releases: zstd's own `--patch-from` format (ADR 0020).
-zstd = { version = "0.13", default-features = false }
+# Pinned to the version tools/make-patches creates them with.
+zstd = { version = "=0.13.3", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
