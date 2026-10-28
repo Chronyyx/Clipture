@@ -23,7 +23,7 @@ void FrameQueue::push(CapturedFrame frame) {
                 static_cast<uint32_t>(overflow)});
         }
         // Counted as coalesced: the next tick would have discarded it anyway.
-        if (!frames_.empty() && supersededBy(frames_.back(), frame)) {
+        if (!frames_.empty() && supersededBy(frames_.back().pts100ns, frame.pts100ns)) {
             frames_.pop_back();
             ++stats_.coalescedDrops;
         }
@@ -48,16 +48,21 @@ void FrameQueue::announceSelectionTicks(int64_t nextTickPts100ns, int fps) {
 // chosen by a tick in [older.pts, newer.pts). Ticks after the next one are
 // rational multiples of 1/fps away, exact to 1 unit; a 2-unit margin keeps any
 // frame whose interval is in doubt.
-bool FrameQueue::supersededBy(const CapturedFrame& older, const CapturedFrame& newer) const {
-    if (tickFps_ <= 0 || newer.pts100ns < older.pts100ns) return false;
+bool FrameQueue::wouldSupersede(int64_t olderPts100ns, int64_t newerPts100ns) const {
+    std::lock_guard lock(mutex_);
+    return supersededBy(olderPts100ns, newerPts100ns);
+}
+
+bool FrameQueue::supersededBy(int64_t olderPts, int64_t newerPts) const {
+    if (tickFps_ <= 0 || newerPts < olderPts) return false;
     constexpr int64_t kTimebase = 10'000'000;
     constexpr int64_t kMargin = 2;
     const int64_t next = nextTickPts100ns_;
-    if (newer.pts100ns + kMargin <= next) return true;  // both precede every remaining tick
-    if (older.pts100ns <= next + kMargin) return false;
+    if (newerPts + kMargin <= next) return true;  // both precede every remaining tick
+    if (olderPts <= next + kMargin) return false;
     const auto offset = [&](int64_t tick) { return next + tick * kTimebase / tickFps_; };
-    const int64_t interval = (older.pts100ns - next) * tickFps_ / kTimebase;
-    return offset(interval) + kMargin < older.pts100ns && newer.pts100ns + kMargin <= offset(interval + 1);
+    const int64_t interval = (olderPts - next) * tickFps_ / kTimebase;
+    return offset(interval) + kMargin < olderPts && newerPts + kMargin <= offset(interval + 1);
 }
 
 std::optional<CapturedFrame> FrameQueue::waitPop() {

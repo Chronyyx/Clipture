@@ -75,8 +75,12 @@ public:
     // of at the next tick. The encoded output is unchanged.
     void announceSelectionTicks(int64_t nextTickPts100ns, int fps);
 
+    // push()'s release rule for frames not yet queued: true when no remaining
+    // tick could select a frame at `olderPts` once one at `newerPts` exists.
+    bool wouldSupersede(int64_t olderPts100ns, int64_t newerPts100ns) const;
+
 private:
-    bool supersededBy(const CapturedFrame& older, const CapturedFrame& newer) const;
+    bool supersededBy(int64_t olderPts100ns, int64_t newerPts100ns) const;
 
     std::size_t capacity_;
     mutable std::mutex mutex_;

@@ -1,10 +1,13 @@
 #include "WgcCaptureBackend.hpp"
 #include "GameFrameProbe.hpp"
 #include "GameWindowCoverage.hpp"
+#include "MmcssCaptureRegistration.hpp"
 #include "OverlayWindowCapture.hpp"
 #include "WgcFramePreparation.hpp"
 #include "clipture/SourceTimestampGate.hpp"
 
+#include "clipture/DeadlineWait.hpp"
+#include "clipture/HeldFrame.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/Tonemapper.hpp"
 
@@ -18,6 +21,7 @@
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include <winrt/base.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
@@ -60,6 +64,16 @@ struct WgcCaptureBackend::Impl {
     std::string failureReason;
     std::atomic<bool> failed = false;
     std::atomic<bool> started = false;
+    // A recorded-source frame not yet copied or tone-mapped (HeldFrame.hpp).
+    struct PendingFrame {
+        winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame { nullptr };
+        int64_t pts100ns = 0;
+        winrt::Windows::Graphics::SizeInt32 size {};
+        bool fromGame = false;
+    };
+    HeldFrame<PendingFrame> heldFrame;  // guarded by callbackMutex
+    std::jthread leadWindowFlush;
+    static constexpr int64_t kFlushRecheck100ns = 10'000;  // 1 ms
     bool apartmentInitialized = false;
     DWORD apartmentThreadId = 0;
 
@@ -118,6 +132,77 @@ struct WgcCaptureBackend::Impl {
         }
     }
 
+    static void closePending(PendingFrame pending) {
+        try { pending.frame.Close(); } catch (...) {}
+    }
+
+    // Called with callbackMutex held.
+    void prepareAndPublish(PendingFrame pending) {
+        const int64_t frameProcessingStarted100ns = monotonicNow100ns();
+        auto access = pending.frame.Surface().template as<
+            ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> sourceTexture;
+        if (FAILED(access->GetInterface(IID_PPV_ARGS(&sourceTexture))) || !sourceTexture) {
+            ++shared->callbackErrors;
+            closePending(std::move(pending));
+            return;
+        }
+
+        std::string slotError;
+        WgcOverlays overlays;
+        if (pending.fromGame && overlayCapture) overlays = {overlayCompositor, overlayCapture->snapshot()};
+        auto prepared = prepareWgcFrame(sourceTexture.Get(), pending.size.Width, pending.size.Height,
+            texturePool, tonemapper, shared, d3dDevice.Get(), d3dContext, copyProbe,
+            capturePipelinePolicy(), slotError, std::move(overlays));
+        sourceTexture.Reset();
+        try { pending.frame.Close(); } catch (...) {}
+        if (!prepared.owned.lease) {
+            if (!slotError.empty()) {
+                ++shared->callbackErrors;
+                fail(slotError);
+            }
+            return;
+        }
+        shared->publish(
+            std::move(prepared.owned.texture),
+            std::move(prepared.owned.lease),
+            pending.pts100ns,
+            pending.size.Width,
+            pending.size.Height,
+            true,
+            false,
+            std::move(prepared.preparation),
+            std::move(prepared.owned.gpuReadState));
+        const int64_t frameProcessed100ns = monotonicNow100ns();
+        shared->frameProcessingLatency.record(
+            frameProcessed100ns,
+            frameProcessed100ns - frameProcessingStarted100ns);
+    }
+
+    // Prepares the held frame when the next encoder tick's lead window opens.
+    void runLeadWindowFlush(std::stop_token stop) {
+        MmcssCaptureRegistration mmcss(true, capturePipelinePolicy().highPriorityCapture);
+        DeadlineWait wait(0);
+        const auto running = [&] { return !stop.stop_requested(); };
+        while (running()) {
+            const auto* queue = shared->frameQueue.load(std::memory_order_acquire);
+            const int64_t deadline = queue ? queue->nextDeadline100ns() : 0;
+            const int64_t now = monotonicNow100ns();
+            const int64_t notBefore = tickAlignedAcquireNotBefore(now, deadline, kTickAlignedAcquireLead100ns);
+            if (notBefore > 0) {
+                wait.until(notBefore, running);
+                continue;
+            }
+            {
+                std::lock_guard callbackLock(callbackMutex);
+                heldFrame.flush([this](PendingFrame pending) { prepareAndPublish(std::move(pending)); });
+            }
+            // Until the encoder announces its next deadline, arrivals are
+            // prepared at once and nothing is held.
+            wait.until(std::max(deadline, now) + kFlushRecheck100ns, running);
+        }
+    }
+
     void onFrames(Direct3D11CaptureFramePool const& sender, bool fromGame) {
         try {
             std::lock_guard callbackLock(callbackMutex);
@@ -144,6 +229,7 @@ struct WgcCaptureBackend::Impl {
                         try { frame.Close(); } catch (...) {}
                         game.size = size;
                         game.verified = false;
+                        heldFrame.drop(closePending);
                         sender.Recreate(direct3DDevice, framePoolPixelFormat, 4, size);
                         return;
                     }
@@ -154,6 +240,7 @@ struct WgcCaptureBackend::Impl {
                 } else if (size.Width != framePoolSize.Width || size.Height != framePoolSize.Height) {
                     try { frame.Close(); } catch (...) {}
                     frame = nullptr;
+                    heldFrame.drop(closePending);
                     framePoolSize = size;
                     // Queued selected frames still hold their slot's textures
                     // and tone-mapping views, so they stay valid until retired.
@@ -188,49 +275,18 @@ struct WgcCaptureBackend::Impl {
                     try { frame.Close(); } catch (...) {}
                     continue;
                 }
-                const int64_t frameProcessingStarted100ns = monotonicNow100ns();
-
-                auto access = frame.Surface().template as<
-                    ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                Microsoft::WRL::ComPtr<ID3D11Texture2D> sourceTexture;
-                if (FAILED(access->GetInterface(IID_PPV_ARGS(&sourceTexture))) || !sourceTexture) {
-                    ++shared->callbackErrors;
-                    try { frame.Close(); } catch (...) {}
-                    continue;
-                }
-
-                std::string slotError;
-                WgcOverlays overlays;
-                if (fromGame && overlayCapture) overlays = {overlayCompositor, overlayCapture->snapshot()};
-                auto prepared = prepareWgcFrame(sourceTexture.Get(), size.Width, size.Height,
-                    texturePool, tonemapper, shared, d3dDevice.Get(), d3dContext, copyProbe,
-                    capturePipelinePolicy(), slotError, std::move(overlays));
-                if (!prepared.owned.lease) {
-                    if (!slotError.empty()) {
-                        ++shared->callbackErrors;
-                        fail(slotError);
-                    }
-                    try { frame.Close(); } catch (...) {}
-                    continue;
-                }
-
-                sourceTexture.Reset();
-                try { frame.Close(); } catch (...) {}
+                PendingFrame pending { std::move(frame), outputTimestamp100ns, size, fromGame };
                 frame = nullptr;
-                shared->publish(
-                    std::move(prepared.owned.texture),
-                    std::move(prepared.owned.lease),
-                    outputTimestamp100ns,
-                    size.Width,
-                    size.Height,
-                    true,
-                    false,
-                    std::move(prepared.preparation),
-                    std::move(prepared.owned.gpuReadState));
-                const int64_t frameProcessed100ns = monotonicNow100ns();
-                shared->frameProcessingLatency.record(
-                    frameProcessed100ns,
-                    frameProcessed100ns - frameProcessingStarted100ns);
+                const auto prepare = [this](PendingFrame next) { prepareAndPublish(std::move(next)); };
+                if (!capturePipelinePolicy().holdUntilTick) {
+                    prepare(std::move(pending));
+                    continue;
+                }
+                const auto* queue = shared->frameQueue.load(std::memory_order_acquire);
+                heldFrame.arrive(std::move(pending), outputTimestamp100ns, monotonicNow100ns(),
+                    queue ? queue->nextDeadline100ns() : 0,
+                    [queue](int64_t older, int64_t newer) { return queue && queue->wouldSupersede(older, newer); },
+                    prepare, closePending);
             }
         } catch (const winrt::hresult_error& error) {
             ++shared->callbackErrors;
@@ -321,6 +377,7 @@ struct WgcCaptureBackend::Impl {
             try { game.framePool.FrameArrived(game.frameArrivedToken); } catch (...) {}
         }
         std::lock_guard callbackLock(callbackMutex);
+        heldFrame.drop(closePending);
         if (game.session) {
             try { game.session.Close(); } catch (...) {}
         }
@@ -504,6 +561,10 @@ BackendStartResult WgcCaptureBackend::start() {
         } catch (...) {
         }
         state.started.store(true, std::memory_order_release);
+        if (capturePipelinePolicy().holdUntilTick) {
+            state.leadWindowFlush = std::jthread([this](std::stop_token stop) { impl_->runLeadWindowFlush(stop); });
+        }
+        std::cerr << "[capture-pipeline] WGC holdUntilTick=" << capturePipelinePolicy().holdUntilTick << '\n';
         state.session.StartCapture();
         const bool capturesWindow = state.window != nullptr;
         const auto backendKind = capturesWindow
@@ -542,6 +603,7 @@ BackendOutcome WgcCaptureBackend::run(std::stop_token stopToken) {
 void WgcCaptureBackend::stop() {
     auto& state = *impl_;
     state.started.store(false, std::memory_order_release);
+    state.leadWindowFlush = {};
     state.closeGame();
     if (state.framePool) {
         try {
@@ -557,6 +619,7 @@ void WgcCaptureBackend::stop() {
     }
     {
         std::lock_guard callbackLock(state.callbackMutex);
+        state.heldFrame.drop(Impl::closePending);
         if (state.session) {
             try {
                 state.session.Close();

@@ -19,6 +19,8 @@ struct CapturePipelinePolicy {
     bool highPriorityCapture = true;
     bool timedCatchUp = true;
     bool hybridGameCapture = true;
+    // WGC frames wait unprepared for the tick's lead window (HeldFrame.hpp).
+    bool holdUntilTick = true;
 };
 inline const CapturePipelinePolicy& capturePipelinePolicy() {
     static const auto policy = [] {
@@ -43,6 +45,7 @@ inline const CapturePipelinePolicy& capturePipelinePolicy() {
         result.highPriorityCapture = flag(L"CLIPTURE_HIGH_PRIORITY_CAPTURE", result.highPriorityCapture);
         result.timedCatchUp = flag(L"CLIPTURE_TIMED_CATCH_UP", result.timedCatchUp);
         result.hybridGameCapture = flag(L"CLIPTURE_HYBRID_GAME_CAPTURE", result.hybridGameCapture);
+        result.holdUntilTick = flag(L"CLIPTURE_HOLD_UNTIL_TICK", result.holdUntilTick);
         return result;
     }();
     return policy;
