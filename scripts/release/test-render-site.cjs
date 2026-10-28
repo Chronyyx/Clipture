@@ -37,6 +37,8 @@ try {
 
   assert.match(read('robots.txt'), /Sitemap: https:\/\/clipture\.app\/sitemap\.xml/);
   assert.match(read('sitemap.xml'), /<loc>https:\/\/clipture\.app\/<\/loc>/);
+  // no-transform keeps the edge from injecting scripts the CSP would block.
+  assert.match(read('_headers'), /^\/\*\r?\n(?:  .*\r?\n)*  Cache-Control: [^\r\n]*no-transform/m, 'pages are served no-transform');
   // /demo/ is served with X-Robots-Tag: noindex; listing it would contradict that.
   assert.doesNotMatch(read('sitemap.xml'), /\/demo\//, 'the noindexed demo stays out of the sitemap');
   // Every sitemap page ships, links back home, and is linked from the home page.

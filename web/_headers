@@ -1,5 +1,7 @@
 # Cloudflare Pages response headers for clipture.app (ADR 0011).
 # Same-origin scripts, styles and images only; no third-party requests.
+# Cache-Control is Pages' default plus no-transform, so the edge never
+# rewrites a page (it was injecting a Web Analytics beacon the CSP blocks).
 /*
   Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   Referrer-Policy: no-referrer
@@ -7,10 +9,12 @@
   X-Frame-Options: DENY
   Permissions-Policy: camera=(), microphone=(), geolocation=(), clipboard-read=()
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  Cache-Control: public, max-age=0, must-revalidate, no-transform
 
 /invite/*
   X-Robots-Tag: noindex
-  Cache-Control: public, max-age=300
+  ! Cache-Control
+  Cache-Control: public, max-age=300, no-transform
 
 # The real Clipture interface in demo mode. Only clipture.app itself may
 # embed it, and it may load its bundled fonts and the sample clip.
