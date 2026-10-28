@@ -5,6 +5,11 @@ use tauri::{AppHandle, Manager};
 use super::{model::UpdateStatus, service::UpdateService};
 
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(4);
+/// Clipture usually starts with Windows and runs for days; checking only at
+/// startup would leave it on an old version until the next reboot.
+const RECHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// While a clip saves (or the recorder state is unreadable), look again soon.
+const BUSY_RETRY: Duration = Duration::from_secs(5 * 60);
 
 pub fn start(app: AppHandle, enabled: bool) {
     if !enabled {
@@ -31,7 +36,27 @@ pub fn start(app: AppHandle, enabled: bool) {
         {
             tracing::warn!(%error, "startup update failed");
         }
+        loop {
+            tokio::time::sleep(RECHECK_INTERVAL).await;
+            wait_until_idle(|| service.background_blocked(), BUSY_RETRY).await;
+            // A staged update makes `check` return at once, so nothing is
+            // fetched twice; a failure is retried at the next interval.
+            if let Err(error) = check_and_download_once(
+                async { service.check(&app).await.map(|state| state.status) },
+                || service.download(&app),
+            )
+            .await
+            {
+                tracing::warn!(%error, "periodic update check failed");
+            }
+        }
     });
+}
+
+async fn wait_until_idle(blocked: impl Fn() -> bool, retry: Duration) {
+    while blocked() {
+        tokio::time::sleep(retry).await;
+    }
 }
 
 async fn check_and_download_once<E, D: Future<Output = Result<(), E>>>(
@@ -79,6 +104,21 @@ mod tests {
                 assert_eq!(downloads.get(), usize::from(status == UpdateStatus::Available));
             }
         });
+    }
+
+    #[test]
+    fn periodic_checks_run_every_few_hours_and_wait_out_saves() {
+        assert_eq!(RECHECK_INTERVAL, Duration::from_secs(6 * 60 * 60));
+        let polls = Cell::new(0);
+        tauri::async_runtime::block_on(wait_until_idle(
+            || {
+                polls.set(polls.get() + 1);
+                polls.get() < 3
+            },
+            Duration::from_millis(1),
+        ));
+        assert_eq!(polls.get(), 3, "blocked twice, then idle");
+        tauri::async_runtime::block_on(wait_until_idle(|| false, Duration::from_secs(3600)));
     }
 
     #[test]

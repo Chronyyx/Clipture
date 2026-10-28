@@ -17,6 +17,7 @@ static OFFERED: AtomicBool = AtomicBool::new(false);
 /// Installs this exact version per-user. Returns whether it did.
 pub async fn install_per_user(gate: &dyn UpdateGate) -> Result<bool, UpdateError> {
     let Some(runtime) = activation::running_runtime() else { return Ok(false) };
+    remove_stale_installers(&std::env::temp_dir());
     if installation::registered(Scope::User).is_some() || installation::registered(Scope::Machine).is_none() {
         return Ok(false);
     }
@@ -79,6 +80,19 @@ fn migrate_shortcuts(machine: &Path, user: &Path) {
 
 #[cfg(not(windows))]
 fn migrate_shortcuts(_: &Path, _: &Path) {}
+
+/// A migration interrupted mid-install (closed, crashed, power loss) leaves
+/// its downloaded installer in the temp folder; the next attempt removes it.
+/// An installer still running is in use and stays.
+fn remove_stale_installers(temp: &Path) {
+    let Ok(entries) = std::fs::read_dir(temp) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("clipture-setup-") && name.ends_with(".exe") && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
 
 /// Re-authenticates the exact bytes about to run while holding them open
 /// against writes, then runs the installer without closing this process.
@@ -167,3 +181,18 @@ fn elevate(helper: &Path, machine: &Path) -> Result<bool, UpdateError> {
 
 #[cfg(not(windows))]
 fn elevate(_: &Path, _: &Path) -> Result<bool, UpdateError> { Ok(false) }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn interrupted_migration_installers_are_removed_and_nothing_else() {
+        let temp = tempfile::tempdir().unwrap();
+        for name in ["clipture-setup-1.7.4-123.exe", "clipture-setup-1.7.5-9.exe", "other-setup.exe", "clipture-setup-notes.txt"] {
+            std::fs::write(temp.path().join(name), b"x").unwrap();
+        }
+        super::remove_stale_installers(temp.path());
+        let mut left: Vec<_> = std::fs::read_dir(temp.path()).unwrap().flatten().map(|entry| entry.file_name().into_string().unwrap()).collect();
+        left.sort();
+        assert_eq!(left, ["clipture-setup-notes.txt", "other-setup.exe"]);
+    }
+}

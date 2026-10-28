@@ -263,6 +263,12 @@ impl UpdateService {
         Ok(())
     }
 
+    /// True while a clip is saving or the recorder's state is unreadable:
+    /// background checks wait instead of competing with capture.
+    pub(super) fn background_blocked(&self) -> bool {
+        self.gate.block_reason(UpdateOperation::Download).is_some()
+    }
+
     fn ensure_allowed(
         &self,
         app: &AppHandle,
