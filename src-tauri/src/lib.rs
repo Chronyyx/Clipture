@@ -137,6 +137,8 @@ pub fn run() {
             updates::commands::check_for_updates,
             updates::commands::download_update,
             updates::commands::install_update,
+            updates::commands::get_old_installation,
+            updates::commands::remove_old_installation,
             commands::open_theme_font_download,
             commands::hide_notification,
             commands::select_folder,

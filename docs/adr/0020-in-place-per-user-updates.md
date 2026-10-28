@@ -147,7 +147,10 @@ its own dialog that the move makes future updates smooth, and asks whether to
 remove the Program Files copy before Windows raises its administrator prompt.
 One elevated helper (`--remove-machine-install`) deletes the old files, its
 HKLM uninstall and protocol registrations, and its all-users shortcuts.
-Declining either prompt is remembered, and both copies keep working.
+Declining either prompt is remembered, and both copies keep working. While the
+old copy exists, Settings > Storage shows one quiet row offering to remove it:
+no banner, badge or reminder. Pressing its button is the consent, so Windows'
+prompt follows directly.
 
 Firewall settings belong to the user and are not modified. Windows asks about
 the per-user executable once, the first time sharing goes online, and since

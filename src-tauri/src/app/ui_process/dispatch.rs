@@ -193,6 +193,8 @@ pub async fn invoke(
                 .await
                 .map_err(|error| error.to_string())?,
         ),
+        "get_old_installation" => encode(updates::commands::get_old_installation()),
+        "remove_old_installation" => encode(updates::commands::remove_old_installation().await),
         "open_main_window" => encode(commands::open_main_window(app.clone())?),
         "close_main_window" => encode(commands::close_main_window(app.clone())?),
         "exit_app" => {

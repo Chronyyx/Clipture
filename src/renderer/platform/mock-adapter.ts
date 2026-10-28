@@ -197,6 +197,9 @@ export function createMockCliptureController(seed: MockCliptureState = {}): Mock
     checkForUpdates: async () => clone(update),
     downloadUpdate: async () => unavailable('downloadUpdate'),
     installUpdate: async () => unavailable('installUpdate'),
+    // A browser or the web demo never has a Program Files copy to remove.
+    getOldInstallation: async () => null,
+    removeOldInstallation: async () => ({ outcome: 'failed', message: 'There is no old copy to remove.' }),
     openThemeFontDownload: async () => unavailable('openThemeFontDownload'),
     onLibraryChanged: (callback) => libraryChanged.subscribe(callback),
     onUpdateStateChanged: (callback) => updateChanged.subscribe(callback),

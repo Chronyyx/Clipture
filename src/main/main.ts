@@ -3866,6 +3866,10 @@ ipcMain.handle("updates:getState", () => updateState);
 ipcMain.handle("updates:check", () => performUpdateCheck());
 ipcMain.handle("updates:download", () => downloadAppUpdate());
 ipcMain.handle("updates:install", () => installDownloadedUpdate());
+// The Electron host is never the per-user install that supersedes a
+// Program Files copy (ADR 0020), so it has nothing to offer.
+ipcMain.handle("updates:getOldInstallation", () => null);
+ipcMain.handle("updates:removeOldInstallation", () => ({ outcome: "failed", message: "Only the Tauri host removes old copies." }));
 const themeFontDownloadUrls: Record<ThemeFontId, string> = {
   glitten: "https://www.dafont.com/glitten.font"
 };

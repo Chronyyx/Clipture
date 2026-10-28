@@ -201,6 +201,8 @@ impl AppState {
                 "check_for_updates",
                 "download_update",
                 "install_update",
+                "get_old_installation",
+                "remove_old_installation",
                 "updates://state-changed",
                 "capture-aware-updates",
                 "lazy-disposable-webview",

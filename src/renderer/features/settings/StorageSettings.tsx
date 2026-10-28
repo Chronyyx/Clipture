@@ -1,6 +1,7 @@
 import type { ClipSettings } from '../../../shared/types';
 import { clipture } from '../../platform';
 import { ClipRepairPanel } from './ClipRepairPanel';
+import { OldInstallationPanel } from './OldInstallationPanel';
 import { SettingRow, SettingsSection } from './SettingsSection';
 
 interface StorageSettingsProps {
@@ -22,6 +23,7 @@ export function StorageSettings({ settings, onChange }: StorageSettingsProps) {
         control={(id) => <button id={id} className='secondary-button' type='button' onClick={() => void chooseFolder()}>Change…</button>}
       />
       <ClipRepairPanel />
+      <OldInstallationPanel />
     </SettingsSection>
   );
 }

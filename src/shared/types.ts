@@ -582,6 +582,17 @@ export interface SaveClipResult {
 
 export type UpdateStatus = "idle" | "checking" | "available" | "downloading" | "ready" | "error";
 
+/** A Program Files copy that a per-user install superseded (ADR 0020). */
+export interface OldInstallation {
+  folder: string;
+}
+
+export interface OldInstallationRemoval {
+  /** `declined`: Windows' administrator prompt was declined. */
+  outcome: 'removed' | 'declined' | 'failed';
+  message?: string;
+}
+
 export interface UpdateState {
   status: UpdateStatus;
   version?: string;
@@ -644,6 +655,10 @@ export interface CliptureApi {
   checkForUpdates(): Promise<UpdateState>;
   downloadUpdate(): Promise<void>;
   installUpdate(): Promise<void>;
+  /** The superseded Program Files copy, or null when there is none. */
+  getOldInstallation(): Promise<OldInstallation | null>;
+  /** Removes it after Windows' administrator prompt. Never throws. */
+  removeOldInstallation(): Promise<OldInstallationRemoval>;
   openThemeFontDownload(theme: ThemeFontId): Promise<void>;
   onLibraryChanged: (callback: (addedClip?: ClipRecord) => void) => () => void;
   onUpdateStateChanged: (callback: (state: UpdateState) => void) => () => void;

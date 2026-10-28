@@ -35,6 +35,8 @@ const api: CliptureApi = {
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
   downloadUpdate: () => ipcRenderer.invoke("updates:download"),
   installUpdate: () => ipcRenderer.invoke("updates:install"),
+  getOldInstallation: () => ipcRenderer.invoke("updates:getOldInstallation"),
+  removeOldInstallation: () => ipcRenderer.invoke("updates:removeOldInstallation"),
   openThemeFontDownload: (theme: ThemeFontId) => ipcRenderer.invoke("theme:openFontDownload", theme),
   onLibraryChanged: (callback: (addedClip?: ClipRecord) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, addedClip?: ClipRecord) => callback(addedClip);

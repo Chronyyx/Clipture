@@ -138,6 +138,20 @@ pub fn offer_machine_cleanup() {
     });
 }
 
+/// The superseded Program Files folder Settings may offer to remove.
+pub fn machine_copy() -> Option<std::path::PathBuf> {
+    if !activation::enabled() { return None; }
+    installation::machine_leftover()
+}
+
+/// Removal asked for from Settings. Pressing the button is the consent, so
+/// Windows' prompt follows directly. Ok(false) when it was declined.
+pub fn remove_machine_copy() -> Result<bool, UpdateError> {
+    let machine = machine_copy().ok_or_else(|| invalid("No old Program Files copy is registered"))?;
+    let user = installation::registered(Scope::User).ok_or_else(|| invalid("No per-user installation is registered"))?;
+    elevate(&user.join(installation::EXECUTABLE), &machine)
+}
+
 /// Says what the Windows administrator prompt is for before it appears, so
 /// it is never a surprise. Declining here is remembered like declining it.
 #[cfg(windows)]

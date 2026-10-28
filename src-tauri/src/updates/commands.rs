@@ -1,9 +1,28 @@
 use tauri::{AppHandle, State};
 
 use super::{
-    model::UpdateState,
+    inplace::migrate,
+    model::{OldInstallation, OldInstallationOutcome, OldInstallationRemoval, UpdateState},
     service::{UpdateError, UpdateService},
 };
+
+/// The superseded Program Files copy, if Settings should offer to remove it.
+#[tauri::command]
+pub fn get_old_installation() -> Option<OldInstallation> {
+    migrate::machine_copy().map(|folder| OldInstallation { folder: folder.display().to_string() })
+}
+
+#[tauri::command]
+pub async fn remove_old_installation() -> OldInstallationRemoval {
+    let result = tauri::async_runtime::spawn_blocking(migrate::remove_machine_copy).await;
+    let (outcome, message) = match result {
+        Ok(Ok(true)) => (OldInstallationOutcome::Removed, None),
+        Ok(Ok(false)) => (OldInstallationOutcome::Declined, None),
+        Ok(Err(error)) => (OldInstallationOutcome::Failed, Some(error.to_string())),
+        Err(error) => (OldInstallationOutcome::Failed, Some(error.to_string())),
+    };
+    OldInstallationRemoval { outcome, message }
+}
 
 #[tauri::command]
 pub fn get_update_state(updates: State<'_, UpdateService>) -> UpdateState {

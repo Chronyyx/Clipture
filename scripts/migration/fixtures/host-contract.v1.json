@@ -37,6 +37,8 @@
     { "method": "checkForUpdates", "transport": "invoke", "channel": "updates:check" },
     { "method": "downloadUpdate", "transport": "invoke", "channel": "updates:download" },
     { "method": "installUpdate", "transport": "invoke", "channel": "updates:install" },
+    { "method": "getOldInstallation", "transport": "invoke", "channel": "updates:getOldInstallation" },
+    { "method": "removeOldInstallation", "transport": "invoke", "channel": "updates:removeOldInstallation" },
     { "method": "openThemeFontDownload", "transport": "invoke", "channel": "theme:openFontDownload" },
     { "method": "onLibraryChanged", "transport": "event", "channel": "library:changed" },
     { "method": "onUpdateStateChanged", "transport": "event", "channel": "updates:stateChanged" },

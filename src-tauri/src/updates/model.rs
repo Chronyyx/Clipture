@@ -130,6 +130,30 @@ impl UpdateState {
     }
 }
 
+/// A Program Files copy that a per-user install superseded (ADR 0020).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OldInstallation {
+    pub folder: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OldInstallationOutcome {
+    Removed,
+    /// Windows' administrator prompt was declined.
+    Declined,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OldInstallationRemoval {
+    pub outcome: OldInstallationOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UpdateOperation {
     Download,
