@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.6] - 2026-10-28
+
+### Updates
+
+- **Start with Windows fixed after the move:** After Clipture moved to your user folder, its startup entry could name the app with an internal Windows path form (`\\?\C:\...`) that Windows may not start at sign-in. Clipture now writes the normal path and corrects the entry the next time it starts.
+- **The admin prompt is explained first:** Removing the old Program Files copy needs administrator permission once. Clipture now explains that the move makes future updates smooth and asks you first, instead of Windows asking with no warning. Saying no is remembered.
+- **The cleanup leaves your firewall alone:** It no longer changes firewall settings, so no PowerShell window opens. Windows asks about the new copy once, the first time friend sharing goes online, and won't ask again after updates because Clipture's path no longer changes.
+
 ## [1.7.5] - 2026-10-28
 
 ### Updates
