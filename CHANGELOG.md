@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.7.7] - 2026-10-28
+
+### Updates
+
+- **Remove the old copy whenever you like:** If you said no when Clipture offered to remove its old copy in Program Files, Settings > Storage now has a "Remove old copy" button. It appears only while that copy exists, never as a reminder or badge, and pressing it goes straight to the Windows permission prompt.
+
+### Website
+
+- **No blocked script on clipture.app:** Cloudflare was adding an analytics script to every page that the site's own security policy then blocked. Pages are now served so the network leaves them untouched.
+
+### Development
+
+- **Faster releases:** CI on `main` builds and tests each commit once and keeps the signed build. A release reuses that build instead of compiling and testing the same code again, and starts its own checks while CI is still running. Compiled dependencies are now cached for real, so CI compiles only Clipture's own code: 6.7 minutes instead of 12.9 in the first warm run.
+- **Leaner build:** The app library no longer also builds the mobile-only static and dynamic libraries, about 16% off Clipture's own release compile with an identical app.
+- **No compiler warnings:** All 31 warnings are gone. Code nothing used is removed, and helpers only tests use are marked as such.
+
 ## [1.7.6] - 2026-10-28
 
 ### Updates

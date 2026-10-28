@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.7.6",
+  "version": "1.7.7",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.7.6: Cleaner Move to Your User Folder",
+  "releaseTitle": "Clipture 1.7.7: Remove the Old Copy Anytime",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

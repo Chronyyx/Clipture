@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "clipture"
-version = "1.7.6"
+version = "1.7.7"
 dependencies = [
  "auto-launch",
  "base64 0.23.1",
