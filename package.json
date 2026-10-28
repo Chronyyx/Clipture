@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.7.4: Updates Without Admin Prompts",
+  "releaseTitle": "Clipture 1.7.5: Notices Updates While Running",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

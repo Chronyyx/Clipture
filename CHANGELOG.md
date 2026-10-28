@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.7.5] - 2026-10-28
+
+### Updates
+
+- **Updates found while Clipture keeps running:** Clipture checked for updates only when it started, so a copy running since Windows started could miss a release for days. It now checks again every six hours and waits while a clip is saving. Each check is one small request, and an update already downloaded is not fetched again.
+- **No leftover installer:** If moving from Program Files to a per-user install was interrupted mid-install, its downloaded installer could stay in the temp folder. The next attempt removes it.
+
+### Development
+
+- **Patches build in seconds:** Release CI built its patch tool as part of the app, recompiling Tauri and Clipture for a tool that needs only zstd. `tools/make-patches` is now a standalone crate, pinned to the zstd release the app decodes with, and builds in about 15 s. A shared fixture fails both crates' tests if the tool and the app ever disagree.
+
 ## [1.7.4] - 2026-10-28
 
 ### Updates
