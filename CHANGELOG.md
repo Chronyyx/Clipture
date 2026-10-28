@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0] - 2026-10-28
+
+### Performance
+
+- **Half the capture work while you play:** Windows hands Clipture every frame your screen shows, often three or more for each frame a clip records on a high-refresh monitor. Each one was copied and, with HDR on, tone-mapped on your GPU, and most were then thrown away. Clipture now waits until just before a clip frame is due and processes only the newest screen frame, so frames that could never be recorded cost nothing. On a 210 Hz HDR monitor recording at 60 FPS, that is about half the GPU copies and 12% less engine CPU, which leaves more of your GPU to the game during smokes, molotovs and other heavy moments.
+- **Clips stay exactly as fresh:** Every clip frame is the same screen frame it would have been before. In stress tests through smoke and molotov load, fresh frames stayed at 99.9-100% and the longest freeze in smokes dropped from two frames to one.
+
 ## [1.7.7] - 2026-10-28
 
 ### Updates
