@@ -174,7 +174,7 @@ jobs:
             ~/.cargo/git/db/
             src-tauri/target/release
             src-tauri/target/x86_64-pc-windows-msvc/release
-            !src-tauri/target/x86_64-pc-windows-msvc/release/bundle
+            !src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**
           key: cargo-release-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: cargo-release-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
 
@@ -230,6 +230,12 @@ jobs:
           @{ bundle = @{ windows = @{ signCommand = $env:WINDOWS_SIGN_COMMAND } } } | ConvertTo-Json -Depth 4 |
             Out-File -FilePath src-tauri/tauri.signing.conf.json -Encoding utf8
           "config_arg=--config src-tauri/tauri.signing.conf.json" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      # The installer folder must hold this build's installer only. Caches
+      # saved before their exclusion worked still carry an older one.
+      - name: Clear earlier installer output
+        shell: pwsh
+        run: Remove-Item -Recurse -Force src-tauri/target/x86_64-pc-windows-msvc/release/bundle -ErrorAction SilentlyContinue
 
       - name: Build the signed release
         env:

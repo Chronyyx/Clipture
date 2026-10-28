@@ -262,7 +262,7 @@ jobs:
             ~/.cargo/git/db/
             src-tauri/target/release
             src-tauri/target/x86_64-pc-windows-msvc/release
-            !src-tauri/target/x86_64-pc-windows-msvc/release/bundle
+            !src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**
           key: cargo-release-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: cargo-release-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
 
@@ -300,6 +300,13 @@ jobs:
 
       - name: Verify pinned FFmpeg
         run: node scripts/release/test-ffmpeg-pin.cjs
+
+      # The installer folder must hold this build's installer only. Caches
+      # saved before their exclusion worked still carry an older one.
+      - name: Clear earlier installer output
+        if: env.CI_RUN_ID == ''
+        shell: pwsh
+        run: Remove-Item -Recurse -Force src-tauri/target/x86_64-pc-windows-msvc/release/bundle -ErrorAction SilentlyContinue
 
       - name: Build signed Tauri NSIS release
         id: tauri_release
