@@ -10,6 +10,7 @@
 ### Development
 
 - **Patches build in seconds:** Release CI built its patch tool as part of the app, recompiling Tauri and Clipture for a tool that needs only zstd. `tools/make-patches` is now a standalone crate, pinned to the zstd release the app decodes with, and builds in about 15 s. A shared fixture fails both crates' tests if the tool and the app ever disagree.
+- **Faster releases, tested main:** Release builds never reused their Rust cache, because GitHub lets a tag's workflow read caches only from that tag or `main`, so every release compiled Tauri and every dependency from scratch. A CI workflow now tests every push to `main` and warms the caches releases restore, and a release whose engine sources match reuses the engine CI built and tested.
 
 ## [1.7.4] - 2026-10-28
 

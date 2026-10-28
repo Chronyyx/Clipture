@@ -13,7 +13,8 @@ concurrency:
   cancel-in-progress: false
 
 # The release is built in stages so the slow parts overlap:
-#   engine: build the capture engine and run its tests (needed by both below)
+#   engine: build the capture engine and run its tests (needed by both below),
+#     or reuse the build CI on main made from the same engine sources
 #   rust-tests and release run side by side once the engine exists; release
 #   builds the signed installer into a draft release
 #   publish: only after both pass, check the assets and make the release public
@@ -24,10 +25,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # CI on main builds and tests the engine and caches it by its sources.
+      # A release with the same engine sources reuses that build; otherwise
+      # it builds and tests here as before.
+      - name: Reuse the engine CI built from these sources
+        id: engine_cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/engine/Release/clipture_engine.exe
+          key: engine-${{ runner.os }}-${{ hashFiles('engine/**', 'third_party/**') }}
+
       - name: Build native capture engine
+        if: steps.engine_cache.outputs.cache-hit != 'true'
         run: npm run build:engine
 
       - name: Test native capture engine
+        if: steps.engine_cache.outputs.cache-hit != 'true'
         run: ctest --test-dir build/engine -C Release --output-on-failure
 
       - name: Hand the engine to the later jobs
@@ -59,10 +72,14 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      # Restores what CI on main saved under the same key. A tag cannot save
+      # a cache any later tag could read, so it does not try.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> src-tauri/target
+          shared-key: rust-tests
+          save-if: false
 
       - name: Install dependencies
         run: npm ci
@@ -113,10 +130,14 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      # Restores what CI on main saved under the same key. A tag cannot save
+      # a cache any later tag could read, so it does not try.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> src-tauri/target
+          shared-key: release-windows-x64
+          save-if: false
 
       - name: Install dependencies
         run: npm ci
