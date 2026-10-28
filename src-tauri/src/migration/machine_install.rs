@@ -1,9 +1,9 @@
 //! Elevated, one-time removal of a Program Files installation that a
-//! per-user installation superseded (ADR 0020). It touches only machine-wide
-//! state: the old directory, its HKLM registrations, all-users shortcuts, and
-//! firewall rules naming executables that are going away. The user's choice
-//! in those rules moves to the per-user executable, so Windows does not ask
-//! again. Per-user state was already moved by the unelevated installer.
+//! per-user installation superseded (ADR 0020). It touches only the old
+//! installation's machine-wide state: its directory, its HKLM registrations
+//! and its all-users shortcuts. Firewall settings are the user's and are left
+//! alone; Windows asks about the per-user executable the normal way. Per-user
+//! state was already moved without elevation.
 use std::{ffi::OsString, path::{Path, PathBuf}};
 
 const FLAG: &str = "--remove-machine-install";
@@ -16,8 +16,8 @@ pub fn command() -> Option<i32> {
         return None;
     }
     let result = match &args[1..] {
-        [machine, replacement, store] => remove(Path::new(machine), Path::new(replacement), Path::new(store)),
-        _ => Err("Expected the old directory, the new executable and the runtime store".into()),
+        [machine] => remove(Path::new(machine)),
+        _ => Err("Expected the old installation directory".into()),
     };
     Some(match result {
         Ok(()) => 0,
@@ -29,7 +29,7 @@ pub fn command() -> Option<i32> {
 }
 
 #[cfg(windows)]
-fn remove(machine: &Path, replacement: &Path, store: &Path) -> Result<(), String> {
+fn remove(machine: &Path) -> Result<(), String> {
     // SAFETY: no arguments; reads the current token.
     if !unsafe { windows::Win32::UI::Shell::IsUserAnAdmin() }.as_bool() {
         return Err("Must run elevated".into());
@@ -41,17 +41,6 @@ fn remove(machine: &Path, replacement: &Path, store: &Path) -> Result<(), String
     }
     if !machine.join("uninstall.exe").is_file() || !machine.join("clipture.exe").is_file() {
         return Err("Directory does not look like a Clipture installation".into());
-    }
-    let replacement = replacement.canonicalize().map_err(|error| format!("New executable: {error}"))?;
-    if replacement.starts_with(&machine) || !replacement.ends_with("clipture.exe") {
-        return Err("New executable must be a separate clipture.exe".into());
-    }
-    if !store.ends_with(r"Clipture\runtime") {
-        return Err("Unexpected runtime store path".into());
-    }
-    if let Err(error) = move_firewall_rules(&machine.join("clipture.exe"), &replacement, store) {
-        // Losing the rule only means Windows asks once more.
-        eprintln!("Firewall rules were not moved: {error}");
     }
     // Delete files before registrations: if anything still runs from the
     // old directory, stop here and leave a working installation behind.
@@ -73,7 +62,7 @@ fn remove(machine: &Path, replacement: &Path, store: &Path) -> Result<(), String
 }
 
 #[cfg(not(windows))]
-fn remove(_: &Path, _: &Path, _: &Path) -> Result<(), String> { Err("Windows only".into()) }
+fn remove(_: &Path) -> Result<(), String> { Err("Windows only".into()) }
 
 #[cfg(windows)]
 fn registered_machine_location() -> Option<PathBuf> {
@@ -126,42 +115,6 @@ fn names(text: &str, machine: &Path) -> bool {
     let directory = machine.to_string_lossy();
     let directory = directory.trim_start_matches(r"\\?\").to_lowercase();
     text.to_lowercase().contains(&directory)
-}
-
-/// Copies each distinct rule for the old executable or a runtime-store
-/// version to the new executable, then deletes the old rules. PowerShell
-/// receives paths through the environment, never through its command text.
-#[cfg(windows)]
-fn move_firewall_rules(old: &Path, new: &Path, store: &Path) -> Result<(), String> {
-    use base64::Engine;
-    const SCRIPT: &str = r#"
-$ErrorActionPreference = 'Stop'
-$store = $env:CLIPTURE_STORE.TrimEnd('\') + '\'
-$filters = @(Get-NetFirewallApplicationFilter | Where-Object {
-  $_.Program -and ($_.Program -ieq $env:CLIPTURE_OLD -or $_.Program.StartsWith($store, [StringComparison]::OrdinalIgnoreCase)) })
-$covered = @(Get-NetFirewallApplicationFilter | Where-Object { $_.Program -ieq $env:CLIPTURE_NEW }).Count -gt 0
-$seen = @{}
-foreach ($rule in @($filters | Get-NetFirewallRule)) {
-  $protocol = ($rule | Get-NetFirewallPortFilter).Protocol
-  $key = "$($rule.Direction)|$($rule.Action)|$($rule.Profile)|$protocol"
-  if (-not $covered -and -not $seen.ContainsKey($key)) {
-    $seen[$key] = $true
-    New-NetFirewallRule -DisplayName 'Clipture' -Direction $rule.Direction -Action $rule.Action -Profile $rule.Profile -Protocol $protocol -Program $env:CLIPTURE_NEW | Out-Null
-  }
-  Remove-NetFirewallRule -Name $rule.Name
-}
-"#;
-    let strip = |path: &Path| path.to_string_lossy().trim_start_matches(r"\\?\").to_owned();
-    let encoded = base64::engine::general_purpose::STANDARD
-        .encode(SCRIPT.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>());
-    let status = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encoded])
-        .env("CLIPTURE_OLD", strip(old))
-        .env("CLIPTURE_NEW", strip(new))
-        .env("CLIPTURE_STORE", strip(store))
-        .status()
-        .map_err(|error| error.to_string())?;
-    status.success().then_some(()).ok_or_else(|| format!("PowerShell ended with {status}"))
 }
 
 #[cfg(test)]

@@ -20,11 +20,13 @@ pub fn managed() -> Option<Paths> {
 /// The directory `managed` would choose, without probing that it is
 /// writable, so a launch with no update in flight writes nothing.
 pub fn candidate() -> Option<Paths> {
-    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-    if in_runtime_store(&exe) {
+    let exe = std::env::current_exe().ok()?;
+    // Canonical paths only for comparison: they carry the `\\?\` prefix,
+    // which must never reach autostart, shortcuts or other programs.
+    if in_runtime_store(&exe.canonicalize().ok()?) {
         return registered(Scope::User).filter(|directory| directory.join(EXECUTABLE).is_file()).map(Paths::new);
     }
-    exe.parent().map(Paths::new)
+    exe.parent().map(|directory| Paths::new(plain(directory)))
 }
 
 /// Shortcuts and autostart must survive updates, so they never name a
@@ -33,14 +35,25 @@ pub fn candidate() -> Option<Paths> {
 pub fn stable_executable() -> PathBuf {
     let current = std::env::current_exe().unwrap_or_default();
     if let Some(paths) = managed() {
-        return paths.installed(EXECUTABLE);
+        return plain(&paths.installed(EXECUTABLE));
     }
     if current.canonicalize().is_ok_and(|exe| in_runtime_store(&exe)) {
         if let Some(machine) = registered(Scope::Machine).map(|directory| directory.join(EXECUTABLE)).filter(|path| path.is_file()) {
             return machine;
         }
     }
-    current
+    plain(&current)
+}
+
+/// `\\?\C:\…` becomes `C:\…`. The verbatim form is fine for Win32 file calls
+/// but not for the shell: a startup entry or shortcut naming it may not run.
+/// UNC paths and anything else are returned unchanged.
+pub fn plain(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
 }
 
 pub fn in_runtime_store(exe: &Path) -> bool {
@@ -77,4 +90,26 @@ pub fn machine_leftover() -> Option<PathBuf> {
     let user = registered(Scope::User)?;
     let same = machine.canonicalize().ok().zip(user.canonicalize().ok()).is_some_and(|(a, b)| a == b);
     (!same && user.join(EXECUTABLE).is_file()).then_some(machine)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plain;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn verbatim_drive_paths_become_plain_and_others_are_unchanged() {
+        assert_eq!(plain(Path::new(r"\\?\C:\Users\a\AppData\Local\Programs\Clipture\clipture.exe")),
+            PathBuf::from(r"C:\Users\a\AppData\Local\Programs\Clipture\clipture.exe"));
+        assert_eq!(plain(Path::new(r"C:\Program Files\Clipture")), PathBuf::from(r"C:\Program Files\Clipture"));
+        assert_eq!(plain(Path::new(r"\\?\UNC\server\share\clipture.exe")), PathBuf::from(r"\\?\UNC\server\share\clipture.exe"));
+    }
+
+    #[test]
+    fn the_running_installation_is_never_named_by_a_verbatim_path() {
+        if let Some(paths) = super::candidate() {
+            assert!(!paths.install().to_string_lossy().starts_with(r"\\?\"));
+        }
+        assert!(!super::stable_executable().to_string_lossy().starts_with(r"\\?\"));
+    }
 }

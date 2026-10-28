@@ -142,12 +142,19 @@ installation in the background:
   at once, replacing the controller with the signed bytes.
 - Autostart is re-registered against the stable executable, never `current_exe`.
 
-When the user next opens the main window, never mid-game, Clipture offers once to
-remove the Program Files copy. One elevated helper (`--remove-machine-install`)
-deletes the old files, its HKLM uninstall and protocol registrations, and its
-all-users shortcuts. It also copies the user's firewall decision from the old
-executable and runtime-store versions to the per-user executable, so Windows
-does not ask again. Declining is remembered, and both copies keep working.
+When the user next opens the main window, never mid-game, Clipture explains in
+its own dialog that the move makes future updates smooth, and asks whether to
+remove the Program Files copy before Windows raises its administrator prompt.
+One elevated helper (`--remove-machine-install`) deletes the old files, its
+HKLM uninstall and protocol registrations, and its all-users shortcuts.
+Declining either prompt is remembered, and both copies keep working.
+
+Firewall settings belong to the user and are not modified. Windows asks about
+the per-user executable once, the first time sharing goes online, and since
+that path never changes it does not ask again after updates. 1.7.4 moved
+firewall rules through an elevated PowerShell step; that was removed in 1.7.6
+because it edited a security setting and showed a PowerShell window, to save
+a single prompt Windows handles itself.
 
 Settings, clips and the library live under `%APPDATA%\Clipture\data` and the
 user's `saveFolder` (ADR 0003) and are not touched.
@@ -230,8 +237,7 @@ ran under a Basic User token on a passed-through RTX 3080:
   autostart and firewall rules: updated through the runtime store, then moved
   per-user while recording. The desktop shortcut, autostart and the protocol
   handler followed it. The elevated cleanup removed the old copy and its
-  machine-wide registrations and moved the firewall rules. The runtime store
-  was then retired.
+  machine-wide registrations, and the runtime store was then retired.
 
 That run found the restart-after-rollback case, the bundle-stamped controller
 and the 32-bit installer's shortcut reads, all fixed above.

@@ -13,7 +13,7 @@ pub struct VerifiedRuntime {
 }
 
 pub fn root() -> Result<PathBuf, UpdateError> {
-    dirs::data_local_dir().map(|path| path.join("Clipture/runtime"))
+    dirs::data_local_dir().map(|path| path.join("Clipture").join("runtime"))
         .ok_or_else(|| invalid("LocalAppData is unavailable"))
 }
 

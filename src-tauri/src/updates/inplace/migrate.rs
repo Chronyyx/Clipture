@@ -128,7 +128,7 @@ pub fn offer_machine_cleanup() {
     let Some(user) = installation::registered(Scope::User) else { return };
     let Ok(marker) = super::supervisor::quarantine_root().map(|root| root.join(DECLINED)) else { return };
     if marker.exists() { return; }
-    std::thread::spawn(move || match elevate(&user.join(installation::EXECUTABLE), &machine) {
+    std::thread::spawn(move || match confirm(&machine).then(|| elevate(&user.join(installation::EXECUTABLE), &machine)).unwrap_or(Ok(false)) {
         Ok(true) => tracing::info!("Removed the superseded Program Files installation"),
         Ok(false) => {
             tracing::info!("Removal of the Program Files installation was declined");
@@ -138,15 +138,35 @@ pub fn offer_machine_cleanup() {
     });
 }
 
+/// Says what the Windows administrator prompt is for before it appears, so
+/// it is never a surprise. Declining here is remembered like declining it.
+#[cfg(windows)]
+fn confirm(machine: &Path) -> bool {
+    use windows::{core::PCWSTR, Win32::UI::WindowsAndMessaging::{MessageBoxW, IDYES, MB_ICONQUESTION, MB_SETFOREGROUND, MB_YESNO}};
+    let text = format!(
+        "Clipture now runs from your user folder, so future updates install smoothly in the \
+         background, without administrator prompts.\n\n\
+         The old copy in {} is no longer used. Remove it now?\n\n\
+         Windows will ask for administrator permission this one time.",
+        machine.display()
+    );
+    let wide = |value: &str| value.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let (text, title) = (wide(&text), wide("Finish moving Clipture"));
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    unsafe { MessageBoxW(None, PCWSTR(text.as_ptr()), PCWSTR(title.as_ptr()), MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) == IDYES }
+}
+
+#[cfg(not(windows))]
+fn confirm(_: &Path) -> bool { false }
+
 /// Ok(false) when the user declined the elevation prompt.
 #[cfg(windows)]
 fn elevate(helper: &Path, machine: &Path) -> Result<bool, UpdateError> {
     use std::os::windows::ffi::OsStrExt;
     use windows::{core::PCWSTR, Win32::{Foundation::{CloseHandle, WAIT_OBJECT_0}, System::Threading::{GetExitCodeProcess, WaitForSingleObject}, UI::{Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW}, WindowsAndMessaging::SW_HIDE}}};
     let wide = |text: &std::ffi::OsStr| text.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
-    let runtime_root = super::super::runtime_store::root()?;
-    let arguments = format!("{CLEANUP_FLAG} \"{}\" \"{}\" \"{}\"", machine.display(), helper.display(), runtime_root.display());
-    if [machine, helper, &runtime_root].iter().any(|path| path.to_string_lossy().contains('"')) {
+    let arguments = format!("{CLEANUP_FLAG} \"{}\"", machine.display());
+    if machine.to_string_lossy().contains('"') {
         return Err(invalid("Unexpected quote in an installation path"));
     }
     let (verb, file, parameters) = (wide("runas".as_ref()), wide(helper.as_os_str()), wide(arguments.as_ref()));
