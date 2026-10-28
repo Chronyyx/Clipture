@@ -1,12 +1,14 @@
 use std::{
-    ffi::{OsStr, OsString},
-    io::{Read, Take},
+    ffi::OsString,
+    io::Read,
     path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
     sync::{Arc, Condvar, Mutex},
     thread,
     time::{Duration, Instant},
 };
+#[cfg(test)]
+use std::ffi::OsStr;
 
 use crate::error::{AppError, AppResult};
 
@@ -99,9 +101,6 @@ impl CommandFfmpeg {
         }
     }
 
-    pub fn executable(&self) -> &Path {
-        &self.executable
-    }
 }
 
 impl FfmpegExecutor for CommandFfmpeg {

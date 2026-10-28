@@ -70,6 +70,7 @@ impl PathAuthorizer {
             .map(|clip| clip.id.as_str())
     }
 
+    #[cfg(test)]
     pub fn contains_canonical_path(&self, path: &Path) -> bool {
         let Ok(path) = path.canonicalize() else {
             return false;

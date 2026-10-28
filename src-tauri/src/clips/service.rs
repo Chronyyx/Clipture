@@ -25,10 +25,6 @@ impl ClipService {
         Self { repository }
     }
 
-    pub fn repository(&self) -> &Arc<ClipRepository> {
-        &self.repository
-    }
-
     /// Mirrors Electron's list cleanup and enriches legacy records without
     /// making the renderer infer folder ownership.
     pub fn list_saved(&self, save_folder: &Path) -> AppResult<Vec<ClipRecord>> {

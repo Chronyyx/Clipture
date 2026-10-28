@@ -55,8 +55,6 @@ pub struct PlaybackDescriptor {
 
 #[derive(Clone, Debug)]
 pub struct ResolvedSession {
-    pub id: String,
-    pub clip_id: String,
     pub path: PathBuf,
     pub content_type: &'static str,
     pub selected_audio_indexes: Vec<u8>,
@@ -67,7 +65,6 @@ pub struct ResolvedSession {
 
 #[derive(Clone, Debug)]
 struct SessionEntry {
-    clip_id: String,
     path: PathBuf,
     selected_audio_indexes: Vec<u8>,
     playback_patches: Vec<PlaybackPatch>,
@@ -146,7 +143,6 @@ impl MediaSessionRegistry {
         sessions.insert(
             id.clone(),
             SessionEntry {
-                clip_id: clip_id.into(),
                 path,
                 selected_audio_indexes: indexes.clone(),
                 playback_patches,
@@ -190,8 +186,6 @@ impl MediaSessionRegistry {
         validate_unchanged_regular_file(&entry.path, &entry.path)?;
         entry.touched_at = Instant::now();
         Ok(ResolvedSession {
-            id: id.into(),
-            clip_id: entry.clip_id.clone(),
             content_type: media_content_type(&entry.path),
             path: entry.path.clone(),
             selected_audio_indexes: entry.selected_audio_indexes.clone(),
@@ -200,6 +194,7 @@ impl MediaSessionRegistry {
         })
     }
 
+    #[cfg(test)]
     pub fn release(&self, id: &str, owner: &str) -> bool {
         let mut sessions = self
             .sessions
@@ -237,6 +232,7 @@ impl MediaSessionRegistry {
         before - sessions.len()
     }
 
+    #[cfg(test)]
     pub fn active_count(&self) -> usize {
         let mut sessions = self
             .sessions

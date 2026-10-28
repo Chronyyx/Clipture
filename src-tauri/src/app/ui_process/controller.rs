@@ -131,6 +131,7 @@ impl UiController {
         }
     }
 
+    #[cfg(any(debug_assertions, test))]
     pub fn is_open(&self) -> bool {
         self.current
             .lock()

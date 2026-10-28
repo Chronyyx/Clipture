@@ -285,10 +285,6 @@ impl MediaService {
         self.thumbnails.thumbnail(authority, clip_id)
     }
 
-    pub fn release_session(&self, session_id: &str, owner: &str) -> bool {
-        self.sessions.release(session_id, owner)
-    }
-
     /// Player switch/close: playback sessions only. Thumbnails stay cached so
     /// the library does not re-run FFmpeg for every card after each clip.
     pub fn release_owner(&self, owner: &str) -> usize {

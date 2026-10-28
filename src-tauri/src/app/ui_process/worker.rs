@@ -4,7 +4,9 @@ use super::{
     wire::{self, Message, PROTOCOL_VERSION},
 };
 use std::{sync::Arc, thread};
-use tauri::{ipc::InvokeBody, Listener, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{ipc::InvokeBody, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+#[cfg(debug_assertions)]
+use tauri::Listener;
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // This role is entered before the single-instance plugin or AppState setup.

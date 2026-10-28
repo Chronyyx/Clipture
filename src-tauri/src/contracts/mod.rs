@@ -10,5 +10,5 @@ pub use engine::{
     SaveLifecycleEvent, SavePhase, SaveSource,
 };
 pub use settings::{
-    AudioSourceKind, AudioSourceRule, ClipSettings, NotificationPosition, ResolutionPreset, UiTheme,
+    AudioSourceKind, AudioSourceRule, ClipSettings, NotificationPosition, UiTheme,
 };

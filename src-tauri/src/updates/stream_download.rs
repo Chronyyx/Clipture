@@ -11,7 +11,7 @@ use reqwest::{
     header::{HeaderMap, HeaderValue, ACCEPT},
     Url,
 };
-use std::{io::Write, time::Duration};
+use std::time::Duration;
 use tauri_plugin_updater::Update;
 use tempfile::NamedTempFile;
 use tokio::{io::AsyncWriteExt, time::Instant};
@@ -217,7 +217,7 @@ mod tests {
     use super::super::service::AllowUpdates;
     use super::*;
     use std::{
-        io::Read,
+        io::{Read, Write},
         net::TcpListener,
         sync::atomic::{AtomicBool, Ordering},
     };

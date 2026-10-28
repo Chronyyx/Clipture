@@ -27,6 +27,7 @@ pub fn open(app: &AppHandle) -> crate::error::AppResult<()> {
 pub fn close(app: &AppHandle) {
     app.state::<UiController>().close();
 }
+#[cfg(any(debug_assertions, test))]
 pub fn is_open(app: &AppHandle) -> bool {
     app.try_state::<UiController>()
         .is_some_and(|controller| controller.is_open())

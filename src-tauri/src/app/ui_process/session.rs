@@ -16,6 +16,8 @@ pub struct Session {
     pub alive: AtomicBool,
     pub ready: AtomicBool,
     pub closing: AtomicBool,
+    // Read only by the debug-build smoke run.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub smoke: bool,
     child: Mutex<Option<Child>>,
     #[cfg(windows)]

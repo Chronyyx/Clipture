@@ -1,7 +1,7 @@
 use std::{
     fs,
     io::{BufWriter, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Mutex,
 };
 
@@ -26,10 +26,6 @@ impl ClipRepository {
             clips_file: clips_file.into(),
             gate: Mutex::new(()),
         }
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.clips_file
     }
 
     pub fn load(&self) -> AppResult<Vec<ClipRecord>> {
@@ -144,6 +140,7 @@ impl ClipRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn clip(id: &str, path: &Path) -> ClipRecord {
         ClipRecord {

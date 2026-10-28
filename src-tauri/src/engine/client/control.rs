@@ -45,18 +45,6 @@ impl EngineClient {
         .await
     }
 
-    pub async fn process_executable_path(self: &Arc<Self>, process_id: u32) -> AppResult<String> {
-        if self.paths.test_mode || process_id == 0 {
-            return Ok(String::new());
-        }
-        self.call(
-            "getProcessExecutablePath",
-            &serde_json::json!({ "processId": process_id }),
-            DEFAULT_REQUEST_TIMEOUT,
-        )
-        .await
-    }
-
     pub async fn configure_settings(
         self: &Arc<Self>,
         settings: &crate::contracts::ClipSettings,

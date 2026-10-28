@@ -1,5 +1,4 @@
 use std::{
-    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -28,10 +27,11 @@ pub enum NotificationKind {
 
 #[derive(Clone, Debug)]
 pub struct NotificationRequest {
+    // Read only by tests; the native overlay is drawn from the message.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub kind: NotificationKind,
     pub message: String,
     pub placement: NotificationPlacement,
-    pub thumbnail: Option<PathBuf>,
     pub visible_for: Duration,
 }
 
@@ -74,21 +74,15 @@ impl NotificationService {
             kind: NotificationKind::Saving,
             message: "Saving clip...".into(),
             placement,
-            thumbnail: None,
             visible_for: Duration::from_secs(30),
         })
     }
 
-    pub fn saved(
-        &self,
-        placement: NotificationPlacement,
-        thumbnail: Option<PathBuf>,
-    ) -> AppResult<()> {
+    pub fn saved(&self, placement: NotificationPlacement) -> AppResult<()> {
         self.show(NotificationRequest {
             kind: NotificationKind::Saved,
             message: "Clip saved!".into(),
             placement,
-            thumbnail,
             visible_for: Duration::from_secs(4),
         })
     }
@@ -98,7 +92,6 @@ impl NotificationService {
             kind: NotificationKind::Failed,
             message: "Clip failed".into(),
             placement,
-            thumbnail: None,
             visible_for: Duration::from_secs(5),
         })
     }
@@ -121,6 +114,7 @@ impl NotificationService {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn current(&self) -> Option<NotificationRequest> {
         self.current
             .lock()
@@ -151,7 +145,7 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
         let service = NotificationService::new(sink.clone());
         service
-            .saved(NotificationPlacement::TopRight, None)
+            .saved(NotificationPlacement::TopRight)
             .unwrap();
         assert_eq!(sink.0.load(Ordering::Relaxed), 1);
         assert_eq!(service.current().unwrap().kind, NotificationKind::Saved);

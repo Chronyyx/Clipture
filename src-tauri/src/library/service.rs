@@ -19,6 +19,8 @@ pub struct ImportedMutation {
     pub settings: Option<ClipSettings>,
     pub removed_paths: Vec<PathBuf>,
     pub failed_paths: Vec<PathBuf>,
+    // Read only by tests; callers refresh the library instead.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub renamed_path: Option<PathBuf>,
 }
 
@@ -26,7 +28,6 @@ pub struct ImportedMutation {
 struct ImportedIndex {
     roots_key: String,
     clips: Vec<ClipRecord>,
-    report: ScanReport,
 }
 
 pub struct LibraryService {
@@ -52,7 +53,6 @@ impl LibraryService {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = ImportedIndex {
             roots_key: roots_key(settings),
             clips: report.clips.clone(),
-            report: report.clone(),
         };
         Ok(report)
     }
@@ -83,14 +83,6 @@ impl LibraryService {
             self.refresh_imported(settings)?;
         }
         self.list_cached(settings)
-    }
-
-    pub fn latest_scan_report(&self) -> ScanReport {
-        self.imported
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .report
-            .clone()
     }
 
     pub fn path_authorizer(&self, settings: &ClipSettings) -> AppResult<PathAuthorizer> {

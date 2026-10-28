@@ -31,9 +31,9 @@ mod trim;
 mod waveform;
 
 pub(crate) use base64::encode as encode_base64;
-pub use ffmpeg::{
-    AlwaysReady, CommandFfmpeg, FfmpegExecutor, FfmpegJob, FfmpegOutput, WorkScheduler,
-};
+pub use ffmpeg::{AlwaysReady, CommandFfmpeg, FfmpegExecutor, FfmpegJob};
+#[cfg(test)]
+pub use ffmpeg::FfmpegOutput;
 pub(crate) use ffmpeg::library_input;
 pub use layout_probe::layout_from_moov;
 pub use layout_repair::{ClipLayoutRepair, RepairCandidate};
@@ -44,11 +44,11 @@ pub use playback::{MediaService, VideoStreamPlan};
 pub(crate) use protocol::handle_request as handle_protocol_request;
 pub(crate) use protocol::MediaAdmission;
 pub use protocol::register as register_protocol;
-pub use range::{resolve_range, ByteRange, RangeError};
+pub use range::{resolve_range, ByteRange};
 pub use remote::{RemoteMediaFile, RemoteMediaSource, RemoteVideoChunk};
 pub use save_processor::MediaSaveProcessor;
 pub(crate) use sessions::random_token;
-pub use sessions::{MediaSessionRegistry, PlaybackDescriptor, ResolvedSession, MAXIMUM_TRACK_CHUNK_BYTES};
+pub use sessions::{MediaSessionRegistry, PlaybackDescriptor, MAXIMUM_TRACK_CHUNK_BYTES};
 pub use thumbnails::ThumbnailService;
 pub use mix::{ClipMixer, MixError, MixedClip, MAXIMUM_GAIN};
 pub use trim::{ClipTrimmer, TrimError, TrimmedClip};

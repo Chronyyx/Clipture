@@ -15,7 +15,6 @@ pub struct PlaybackPatch {
 #[derive(Clone, Copy, Debug)]
 struct BoxView {
     kind: [u8; 4],
-    start: usize,
     end: usize,
     payload: usize,
 }
@@ -180,7 +179,6 @@ fn box_at(data: &[u8], start: usize, limit: usize) -> Option<BoxView> {
     }
     Some(BoxView {
         kind,
-        start,
         end,
         payload: start + header,
     })

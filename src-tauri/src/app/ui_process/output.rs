@@ -31,6 +31,7 @@ impl Output {
             .send(Item::Frame(frame))
             .map_err(|_| "UI pipe closed".into())
     }
+    #[cfg(any(debug_assertions, test))]
     pub fn try_send(&self, frame: Frame) -> Result<(), String> {
         self.sender
             .try_send(Item::Frame(frame))

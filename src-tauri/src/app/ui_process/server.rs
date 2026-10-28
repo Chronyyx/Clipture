@@ -8,7 +8,9 @@ use std::{
     sync::{atomic::Ordering, Arc},
     thread,
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
+#[cfg(debug_assertions)]
+use tauri::Emitter;
 
 pub fn read(app: AppHandle, session: Arc<Session>, mut reader: impl Read) {
     let slots = super::admission::Admission::new();

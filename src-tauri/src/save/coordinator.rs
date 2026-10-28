@@ -200,7 +200,7 @@ impl SaveCoordinator {
 
         if settings.show_notification {
             let notification = if result.ok {
-                self.notifications.saved(placement, None)
+                self.notifications.saved(placement)
             } else {
                 self.notifications.failed(placement)
             };

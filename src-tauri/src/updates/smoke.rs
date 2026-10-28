@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
-use tauri::{Manager, RunEvent};
+use tauri::RunEvent;
 
 static CERTIFICATE: OnceLock<reqwest::Certificate> = OnceLock::new();
 const INPUT: &str = r"C:\CliptureInput";
