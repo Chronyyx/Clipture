@@ -8,7 +8,9 @@ rust-version = "1.91"
 
 [lib]
 name = "clipture_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Windows only: the template's staticlib and cdylib serve Tauri's mobile
+# targets, and building them cost every release build ~16% for nothing.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -11,6 +11,26 @@ Clipture's Windows release is one x64 NSIS installer with two update manifests:
 
 The release workflow creates a draft first, validates all four assets, and only then marks it latest. A failed bridge or signature check leaves a draft instead of publishing a release that strands one client generation.
 
+## Build once
+
+`ci.yml` runs on every push to `main` that touches app, engine or tooling
+code. It tests, and makes the full signed release build, kept for 14 days as
+the `release-build` artifact. Both `release.yml` jobs start as soon as the tag
+is pushed and first do everything that does not need a build: version and
+contract checks, signing setup, and downloading the last three releases for
+patches. Only then do they wait for CI's run of the tagged commit. When that
+run succeeded, the release publishes its build; no engine, test or compile
+step runs again.
+`scripts/release/reuse-ci-build.cjs` stands in for `tauri build`, so
+tauri-action still creates the draft and `latest.json`. Every later check
+runs on those files as usual. Without a usable CI build, the release builds
+and tests everything itself.
+
+So the usual sequence is: push the release commit to `main`, then push the
+tag, either at once or after CI finishes. Compiled dependencies are cached on
+`main` per `Cargo.lock` and Rust version; a release that builds itself
+restores them. A tag cannot save caches that a later tag could read.
+
 ## Required GitHub secrets
 
 - `TAURI_SIGNING_PRIVATE_KEY`: the complete Tauri updater private key or a secure path available only on the runner.

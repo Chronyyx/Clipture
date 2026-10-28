@@ -7,52 +7,23 @@ on:
 
 permissions:
   contents: write
+  # Read CI's runs and download the build it made for this commit.
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# The release is built in stages so the slow parts overlap:
-#   engine: build the capture engine and run its tests (needed by both below),
-#     or reuse the build CI on main made from the same engine sources
-#   rust-tests and release run side by side once the engine exists; release
-#   builds the signed installer into a draft release
+# Build once, and run everything else alongside CI. CI on main (ci.yml)
+# already builds, tests and keeps the signed release build of each commit.
+# Both jobs below start the moment the tag is pushed, do all the work that
+# does not need that build, and only then wait for CI's run of this commit:
+#   rust-tests: done when CI tested this commit; otherwise tests here
+#   release-windows-x64: publishes CI's build when there is one, otherwise
+#     builds here (engine included); either way creates the draft release
 #   publish: only after both pass, check the assets and make the release public
 jobs:
-  engine:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      # CI on main builds and tests the engine and caches it by its sources.
-      # A release with the same engine sources reuses that build; otherwise
-      # it builds and tests here as before.
-      - name: Reuse the engine CI built from these sources
-        id: engine_cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: build/engine/Release/clipture_engine.exe
-          key: engine-${{ runner.os }}-${{ hashFiles('engine/**', 'third_party/**') }}
-
-      - name: Build native capture engine
-        if: steps.engine_cache.outputs.cache-hit != 'true'
-        run: npm run build:engine
-
-      - name: Test native capture engine
-        if: steps.engine_cache.outputs.cache-hit != 'true'
-        run: ctest --test-dir build/engine -C Release --output-on-failure
-
-      - name: Hand the engine to the later jobs
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: clipture-engine
-          path: build/engine/Release/clipture_engine.exe
-          if-no-files-found: error
-          retention-days: 1
-
   rust-tests:
-    needs: engine
     runs-on: windows-latest
     env:
       CARGO_TERM_COLOR: always
@@ -61,47 +32,77 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Everything above runs while CI is still building this commit.
+      - name: Wait for CI's build of this commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/release/find-ci-build.sh
+
       - name: Setup Node
+        if: env.CI_RUN_ID == ''
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
 
       - name: Setup Rust
+        id: toolchain
+        if: env.CI_RUN_ID == ''
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      # Restores what CI on main saved under the same key. A tag cannot save
-      # a cache any later tag could read, so it does not try.
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      # The compiled dependencies CI on main saved under the same key. A tag
+      # cannot save a cache any later tag could read, so it only restores.
+      - name: Restore compiled test dependencies
+        if: env.CI_RUN_ID == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          workspaces: src-tauri -> src-tauri/target
-          shared-key: rust-tests
-          save-if: false
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/debug
+            src-tauri/target/x86_64-pc-windows-msvc/debug
+          key: cargo-test-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-test-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
+
+      # CI caches the engine it built and tested by its sources.
+      - name: Reuse the engine CI built from these sources
+        id: engine_cache
+        if: env.CI_RUN_ID == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/engine/Release/clipture_engine.exe
+          key: engine-${{ runner.os }}-${{ hashFiles('engine/**', 'third_party/**') }}
+
+      - name: Build native capture engine
+        if: env.CI_RUN_ID == '' && steps.engine_cache.outputs.cache-hit != 'true'
+        run: npm run build:engine
+
+      - name: Test native capture engine
+        if: env.CI_RUN_ID == '' && steps.engine_cache.outputs.cache-hit != 'true'
+        run: ctest --test-dir build/engine -C Release --output-on-failure
 
       - name: Install dependencies
+        if: env.CI_RUN_ID == ''
         run: npm ci
 
       # The Tauri build script embeds the renderer and checks the sidecars.
       - name: Build renderer
+        if: env.CI_RUN_ID == ''
         run: npm run build:renderer
 
-      - name: Get the capture engine
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: clipture-engine
-          path: build/engine/Release
-
       - name: Stage Tauri sidecars
+        if: env.CI_RUN_ID == ''
         run: npm run stage:tauri
 
       - name: Test Rust host
+        if: env.CI_RUN_ID == ''
         run: cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
 
   release-windows-x64:
-    needs: engine
     runs-on: windows-latest
     outputs:
       asset_name: ${{ steps.nsis.outputs.asset_name }}
@@ -126,18 +127,10 @@ jobs:
           cache: npm
 
       - name: Setup Rust
+        id: toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: x86_64-pc-windows-msvc
-
-      # Restores what CI on main saved under the same key. A tag cannot save
-      # a cache any later tag could read, so it does not try.
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          workspaces: src-tauri -> src-tauri/target
-          shared-key: release-windows-x64
-          save-if: false
 
       - name: Install dependencies
         run: npm ci
@@ -185,21 +178,6 @@ jobs:
       - name: Reject development updater key
         run: node scripts/release/validate-production-key.cjs
 
-      - name: Get the capture engine
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: clipture-engine
-          path: build/engine/Release
-
-      - name: Build renderer
-        run: npm run build:renderer
-
-      - name: Stage Tauri sidecars
-        run: npm run stage:tauri
-
-      - name: Verify pinned FFmpeg
-        run: node scripts/release/test-ffmpeg-pin.cjs
-
       - name: Require updater signing secrets
         shell: pwsh
         env:
@@ -246,6 +224,83 @@ jobs:
           "config_arg=--config src-tauri/tauri.signing.conf.json" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      # Inputs for the binary patches, fetched while CI is still building.
+      - name: Download the last three releases' runtimes
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tags = @(gh release list --exclude-drafts --exclude-pre-releases --limit 8 --json tagName --jq '.[].tagName') |
+            Where-Object { $_ -and $_ -ne $env:RELEASE_TAG } | Select-Object -First 3
+          foreach ($tag in $tags) {
+            $directory = "release-previous/$($tag.Substring(1))"
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            gh release download $tag --dir $directory --pattern clipture.exe --pattern clipture_engine.exe --pattern ffmpeg.exe --pattern default.mp3 --pattern option2.wav
+            if ($LASTEXITCODE -ne 0) { Write-Warning "$tag has no runtime assets; skipping it"; Remove-Item -Recurse -Force $directory }
+          }
+
+      - name: Build patch tool
+        continue-on-error: true
+        run: cargo build --locked --release --manifest-path tools/make-patches/Cargo.toml
+
+      # Everything above runs while CI is still building this commit.
+      - name: Wait for CI's build of this commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/release/find-ci-build.sh
+
+      # Without CI's build: compile here, from CI's cached dependencies.
+      - name: Restore compiled release dependencies
+        if: env.CI_RUN_ID == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/release
+            src-tauri/target/x86_64-pc-windows-msvc/release
+            !src-tauri/target/x86_64-pc-windows-msvc/release/bundle
+          key: cargo-release-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-release-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
+
+      # CI caches the engine it built and tested by its sources.
+      - name: Reuse the engine CI built from these sources
+        id: engine_cache
+        if: env.CI_RUN_ID == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/engine/Release/clipture_engine.exe
+          key: engine-${{ runner.os }}-${{ hashFiles('engine/**', 'third_party/**') }}
+
+      - name: Build native capture engine
+        if: env.CI_RUN_ID == '' && steps.engine_cache.outputs.cache-hit != 'true'
+        run: npm run build:engine
+
+      - name: Build renderer
+        if: env.CI_RUN_ID == ''
+        run: npm run build:renderer
+
+      - name: Stage Tauri sidecars
+        if: env.CI_RUN_ID == ''
+        run: npm run stage:tauri
+
+      # With CI's build: the installer, its updater signature, the controller,
+      # the staged sidecars and the renderer, at the paths a build leaves them.
+      - name: Get CI's build of this commit
+        if: env.CI_RUN_ID != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-build
+          path: .
+          run-id: ${{ env.CI_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify pinned FFmpeg
+        run: node scripts/release/test-ffmpeg-pin.cjs
+
       - name: Build signed Tauri NSIS release
         id: tauri_release
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
@@ -258,7 +313,9 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         with:
           projectPath: .
-          tauriScript: npm run tauri
+          # With CI's build in place, a stand-in checks it instead of compiling;
+          # tauri-action then publishes those files exactly as after a build.
+          tauriScript: ${{ env.CI_RUN_ID != '' && 'node scripts/release/reuse-ci-build.cjs' || 'npm run tauri' }}
           args: --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.release.conf.json ${{ steps.signing.outputs.config_arg }}
           tagName: ${{ github.ref_name }}
           releaseName: ${{ steps.release_notes.outputs.release_title }}
@@ -372,16 +429,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           $version = $env:RELEASE_TAG.Substring(1)
-          $tags = @(gh release list --exclude-drafts --exclude-pre-releases --limit 8 --json tagName --jq '.[].tagName') |
-            Where-Object { $_ -and $_ -ne $env:RELEASE_TAG } | Select-Object -First 3
-          foreach ($tag in $tags) {
-            $directory = "release-previous/$($tag.Substring(1))"
-            New-Item -ItemType Directory -Path $directory -Force | Out-Null
-            gh release download $tag --dir $directory --pattern clipture.exe --pattern clipture_engine.exe --pattern ffmpeg.exe --pattern default.mp3 --pattern option2.wav
-            if ($LASTEXITCODE -ne 0) { Write-Warning "$tag has no runtime assets; skipping it"; Remove-Item -Recurse -Force $directory }
-          }
           if (-not (Get-ChildItem release-previous -Directory -ErrorAction SilentlyContinue)) { Write-Host "No earlier runtime to patch from."; exit 0 }
-          # A standalone crate: builds in seconds instead of rebuilding the app.
           cargo run --locked --release --manifest-path tools/make-patches/Cargo.toml -- release-runtime $version release-previous release-patches
           if ($LASTEXITCODE -ne 0) { throw "Patch generation failed" }
           & ./node_modules/.bin/tauri.cmd signer sign release-patches/patches-v1.json
@@ -436,5 +484,6 @@ jobs:
   # Refresh clipture.app download links for the version just published.
   website:
     needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     uses: ./.github/workflows/site.yml
     secrets: inherit
