@@ -13,6 +13,16 @@ pub fn start(app: AppHandle, enabled: bool) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(INITIAL_CHECK_DELAY).await;
         let service = app.state::<UpdateService>();
+        match service.settle_installation().await {
+            #[cfg(windows)]
+            Ok(true) => {
+                if let Err(error) = crate::app::autostart::retarget() {
+                    tracing::warn!(%error, "Could not point the startup entry at the installation");
+                }
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "Could not consolidate the runtime into the installation"),
+        }
         if let Err(error) = check_and_download_once(
             async { service.check(&app).await.map(|state| state.status) },
             || service.download(&app),

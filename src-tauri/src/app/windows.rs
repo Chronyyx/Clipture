@@ -5,6 +5,7 @@ use crate::{error::AppResult, state::AppState};
 const MAIN_WINDOW_LABEL: &str = "main";
 
 pub fn open_main(app: &AppHandle) -> AppResult<()> {
+    crate::updates::offer_machine_cleanup();
     if super::ui_process::enabled() {
         return super::ui_process::open(app);
     }

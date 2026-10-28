@@ -338,6 +338,35 @@ jobs:
           gh release upload "$env:RELEASE_TAG" release-runtime/components-v1.json release-runtime/components-v1.json.sig release-runtime/clipture.exe release-runtime/clipture_engine.exe release-runtime/ffmpeg.exe release-runtime/assets/default.mp3 release-runtime/assets/option2.wav --clobber
           if ($LASTEXITCODE -ne 0) { throw "Runtime asset upload failed" }
 
+      # zstd patches from the last three releases to this runtime (ADR 0020).
+      # Optional by design: clients verify every patched file against the
+      # signed manifest and fall back to the normal download, so a failure
+      # here ships the release without patches, never a broken update.
+      - name: Publish binary patches from recent releases
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          $tags = @(gh release list --exclude-drafts --exclude-pre-releases --limit 8 --json tagName --jq '.[].tagName') |
+            Where-Object { $_ -and $_ -ne $env:RELEASE_TAG } | Select-Object -First 3
+          foreach ($tag in $tags) {
+            $directory = "release-previous/$($tag.Substring(1))"
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            gh release download $tag --dir $directory --pattern clipture.exe --pattern clipture_engine.exe --pattern ffmpeg.exe --pattern default.mp3 --pattern option2.wav
+            if ($LASTEXITCODE -ne 0) { Write-Warning "$tag has no runtime assets; skipping it"; Remove-Item -Recurse -Force $directory }
+          }
+          if (-not (Get-ChildItem release-previous -Directory -ErrorAction SilentlyContinue)) { Write-Host "No earlier runtime to patch from."; exit 0 }
+          cargo run --manifest-path src-tauri/Cargo.toml --release --target x86_64-pc-windows-msvc --example make_patches -- release-runtime $version release-previous release-patches
+          if ($LASTEXITCODE -ne 0) { throw "Patch generation failed" }
+          & ./node_modules/.bin/tauri.cmd signer sign release-patches/patches-v1.json
+          if ($LASTEXITCODE -ne 0) { throw "Patch list signing failed" }
+          gh release upload "$env:RELEASE_TAG" @(Get-ChildItem release-patches -File | ForEach-Object FullName) --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Patch upload failed" }
+
   publish:
     needs: [release-windows-x64, rust-tests]
     runs-on: windows-latest

@@ -4,7 +4,7 @@ use super::handoff_process::{self, OwnedProcess};
 
 static RUNTIME: OnceLock<VerifiedRuntime> = OnceLock::new();
 static UI_RUNTIME: Mutex<Option<VerifiedRuntime>> = Mutex::new(None);
-const HANDOFF: &str = "--runtime-handoff";
+pub(super) const HANDOFF: &str = "--runtime-handoff";
 
 pub fn public_key() -> String {
     let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
@@ -28,7 +28,7 @@ fn configured(key: &str, native_id: Option<&str>) -> bool {
             .and_then(|text| minisign_verify::PublicKey::decode(&text).ok()).is_some()
 }
 
-fn unelevated() -> Result<(), UpdateError> {
+pub(super) fn unelevated() -> Result<(), UpdateError> {
     #[cfg(windows)]
     {
         if unsafe { windows::Win32::UI::Shell::IsUserAnAdmin().as_bool() } {
@@ -64,15 +64,32 @@ pub fn startup() -> Result<bool, UpdateError> {
     if std::env::args().any(|arg| arg == "--ui-worker") { return Ok(false); }
     if !enabled() && !handoff { return Ok(false); }
     if handoff {
-        if RUNTIME.get().is_none() { return Err(invalid("Handoff target is not a verified runtime")); }
+        if RUNTIME.get().is_none() && !super::inplace::launch::accepts_handoff() {
+            return Err(invalid("Handoff target is neither a verified runtime nor a swapped-in installation"));
+        }
         receive_handoff()?;
         return Ok(false);
+    }
+    if let Some(restored) = super::inplace::launch::recover() {
+        // This image is the rolled-back controller; the previous version now
+        // installed at the same path takes over with the same arguments.
+        let mut command = Command::new(restored);
+        command.args(std::env::args_os().skip(1));
+        #[cfg(windows)]
+        { use std::os::windows::process::CommandExt; command.creation_flags(0x0800_0000); }
+        command.spawn()?;
+        return Ok(true);
     }
     Ok(false)
 }
 
+pub(super) fn running_runtime() -> Option<&'static VerifiedRuntime> { RUNTIME.get() }
+
 pub fn activate_at_launch() -> Result<bool, UpdateError> {
     if !enabled() || std::env::args().any(|arg| matches!(arg.as_str(), HANDOFF | "--runtime-recovery")) { return Ok(false); }
+    // A user-writable installation updates in place and never selects a
+    // runtime-store directory again.
+    if let Some(handed_off) = super::inplace::launch::activate_staged()? { return Ok(handed_off); }
     let key = public_key();
     let root = runtime_store::root()?;
     let current = std::env::current_exe()?.canonicalize()?;
@@ -97,7 +114,7 @@ pub fn activate_at_launch() -> Result<bool, UpdateError> {
     Ok(false)
 }
 
-pub struct HandoffChild(OwnedProcess);
+pub struct HandoffChild(pub(super) OwnedProcess);
 impl HandoffChild {
     pub fn commit(mut self) -> Result<(), UpdateError> {
         self.0.send(b"activate\n")?;
@@ -121,7 +138,7 @@ pub fn prepare(candidate: &VerifiedRuntime) -> Result<HandoffChild, UpdateError>
     Ok(HandoffChild(child))
 }
 
-fn receive_handoff() -> Result<(), UpdateError> {
+pub(super) fn receive_handoff() -> Result<(), UpdateError> {
     let mut output = handoff_process::output()?;
     output.write_all(b"prepared\n")?;
     output.flush()?;
@@ -136,12 +153,14 @@ pub(super) fn report_healthy() -> Result<(), UpdateError> {
     let mut output = handoff_process::output()?;
     output.write_all(b"healthy\n")?;
     output.flush()?;
+    if RUNTIME.get().is_none() { super::inplace::launch::finish_after_handoff(); }
     Ok(())
 }
 
 #[cfg(windows)]
 pub fn run_supervisor() -> Result<bool, UpdateError> {
     use std::os::windows::{fs::OpenOptionsExt, process::CommandExt};
+    if super::inplace::supervisor::run_if_requested()? { return Ok(true); }
     let args: Vec<_> = std::env::args().collect();
     let Some(index) = args.iter().position(|arg| arg == "--runtime-supervisor") else { return Ok(false); };
     if !enabled() { return Err(invalid("Runtime supervisor is disabled in this build")); }
@@ -193,7 +212,7 @@ pub fn run_supervisor() -> Result<bool, UpdateError> { Ok(false) }
 
 /// A `clipture:` invite link passed through a handoff verbatim, as a single
 /// argument. It is parsed and validated only by the sharing domain.
-fn invite_link_argument(args: &[String]) -> Option<&str> {
+pub(super) fn invite_link_argument(args: &[String]) -> Option<&str> {
     args.iter()
         .map(String::as_str)
         .find(|arg| arg.starts_with("clipture:") && arg.len() <= 512)
@@ -204,6 +223,10 @@ pub fn ui_executable() -> Result<PathBuf, UpdateError> {
     if !enabled() { return Ok(current); }
     let mut slot = UI_RUNTIME.lock().unwrap_or_else(|error| error.into_inner());
     let Some(native_id) = option_env!("CLIPTURE_NATIVE_ID") else { return Ok(current); };
+    if let Some(staged) = super::inplace::launch::ui_executable(native_id) {
+        unelevated()?;
+        return Ok(staged);
+    }
     let root = runtime_store::root()?;
     let key = public_key();
     let Ok(candidate) = runtime_store::load_candidate(&root, "pending.json", &key) else { return Ok(current); };

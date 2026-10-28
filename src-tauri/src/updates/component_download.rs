@@ -6,8 +6,7 @@ use super::{
 use std::{path::Path, time::Duration};
 use tokio::{io::AsyncWriteExt, time::Instant};
 
-pub const METADATA_URL: &str = "https://api.github.com/repos/Chronyyx/Clipture/releases/latest";
-pub const ASSET_BASE: &str = "https://github.com/Chronyyx/Clipture/releases/download";
+use super::release_source;
 
 pub fn client() -> Result<reqwest::Client, UpdateError> {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
@@ -18,7 +17,7 @@ pub fn client() -> Result<reqwest::Client, UpdateError> {
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(1800))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.previous().len() >= 10 || attempt.url().scheme() != "https" {
+            if attempt.previous().len() >= 10 || !release_source::allows(attempt.url()) {
                 attempt.error("Unsafe update redirect")
             } else {
                 attempt.follow()
@@ -27,7 +26,7 @@ pub fn client() -> Result<reqwest::Client, UpdateError> {
         .build()?)
 }
 
-async fn bounded(client: &reqwest::Client, url: &reqwest::Url, limit: usize) -> Result<Vec<u8>, UpdateError> {
+pub(super) async fn bounded(client: &reqwest::Client, url: &reqwest::Url, limit: usize) -> Result<Vec<u8>, UpdateError> {
     let mut response = client.get(url.clone()).send().await?.error_for_status()?;
     if response.content_length().is_some_and(|length| length > limit as u64) {
         return Err(invalid("Update metadata is too large"));
@@ -44,8 +43,8 @@ async fn bounded(client: &reqwest::Client, url: &reqwest::Url, limit: usize) -> 
 
 pub async fn check(key: &str, current: &str) -> Result<Option<(SignedManifest, Manifest)>, UpdateError> {
     let client = client()?;
-    let metadata = reqwest::Url::parse(METADATA_URL).map_err(|_| invalid("Invalid update metadata URL"))?;
-    if metadata.scheme() != "https" && !(cfg!(test) && metadata.host_str() == Some("127.0.0.1")) {
+    let metadata = reqwest::Url::parse(&release_source::metadata_url()).map_err(|_| invalid("Invalid update metadata URL"))?;
+    if !release_source::allows(&metadata) {
         return Err(invalid("Update metadata requires HTTPS"));
     }
     let release: serde_json::Value = serde_json::from_slice(&bounded(&client, &metadata, 1024 * 1024).await?)
@@ -61,7 +60,7 @@ pub async fn check(key: &str, current: &str) -> Result<Option<(SignedManifest, M
         return Err(invalid("Release is not stable"));
     }
     let asset = |name: &str| -> Result<String, UpdateError> {
-        let expected = format!("{ASSET_BASE}/{tag}/{name}");
+        let expected = format!("{}/{tag}/{name}", release_source::asset_base());
         let assets = release["assets"].as_array().ok_or_else(|| invalid("Release assets missing"))?;
         if assets
             .iter()
@@ -84,11 +83,11 @@ pub async fn fetch_manifest(
     client: &reqwest::Client, manifest_url: &str, signature_url: &str, key: &str, current: &str,
 ) -> Result<(SignedManifest, Manifest), UpdateError> {
     let manifest_url = reqwest::Url::parse(manifest_url).map_err(|_| invalid("Invalid manifest URL"))?;
-    if manifest_url.scheme() != "https" && !(cfg!(test) && manifest_url.host_str() == Some("127.0.0.1")) {
+    if !release_source::allows(&manifest_url) {
         return Err(invalid("Signed manifest requires HTTPS"));
     }
     let signature_url = reqwest::Url::parse(signature_url).map_err(|_| invalid("Invalid signature URL"))?;
-    if signature_url.scheme() != "https" && !(cfg!(test) && signature_url.host_str() == Some("127.0.0.1")) {
+    if !release_source::allows(&signature_url) {
         return Err(invalid("Manifest signature requires HTTPS"));
     }
     {
@@ -135,7 +134,7 @@ pub async fn download_differential(
         return download_file(client, expected, destination, gate, progress).await;
     }
     let url = reqwest::Url::parse(&expected.url).map_err(|_| invalid("Invalid runtime URL"))?;
-    if url.scheme() != "https" && !(cfg!(test) && url.host_str() == Some("127.0.0.1")) {
+    if !release_source::allows(&url) {
         return Err(invalid("Runtime transfers require HTTPS"));
     }
     let mut output = tokio::fs::OpenOptions::new().write(true).create_new(true).open(destination).await?;
@@ -204,7 +203,7 @@ pub async fn download_file(
     gate: &dyn UpdateGate, progress: &mut impl FnMut(u64),
 ) -> Result<(), UpdateError> {
     let url = reqwest::Url::parse(&expected.url).map_err(|_| invalid("Invalid runtime URL"))?;
-    if url.scheme() != "https" && !(cfg!(test) && url.host_str() == Some("127.0.0.1")) {
+    if !release_source::allows(&url) {
         return Err(invalid("Runtime transfers require HTTPS"));
     }
     wait_until_allowed(gate).await?;

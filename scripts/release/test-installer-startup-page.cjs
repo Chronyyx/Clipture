@@ -23,6 +23,7 @@ RequestExecutionLevel user
 SetCompress off
 !define MAINBINARYNAME "__clipture_inert_no_application__"
 !define PRODUCTNAME "Clipture inert installer test"
+!define UNINSTKEY "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Clipture inert installer test"
 Var PassiveMode
 Var UpdateMode
 Var AppStartMenuFolder
@@ -49,9 +50,12 @@ Var AppStartMenuFolder
 Function RunMainBinary
 FunctionEnd
 Section
+!insertmacro CLIPTURE_UNLESS_MIGRATING
+!insertmacro CLIPTURE_END_UNLESS
 !insertmacro NSIS_HOOK_POSTINSTALL
 SectionEnd
 Section "Uninstall"
+!insertmacro NSIS_HOOK_POSTUNINSTALL
 SectionEnd
 `;
 const script = path.join(work, 'compile-test.nsi');

@@ -652,7 +652,9 @@ Section Install
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
 
+  !insertmacro CLIPTURE_UNLESS_MIGRATING
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  !insertmacro CLIPTURE_END_UNLESS
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
@@ -735,10 +737,12 @@ Section Install
 
   ; Create desktop shortcut for silent and passive installers
   ; because finish page will be skipped
+  !insertmacro CLIPTURE_UNLESS_MIGRATING
   ${If} $PassiveMode = 1
   ${OrIf} ${Silent}
     Call CreateOrUpdateDesktopShortcut
   ${EndIf}
+  !insertmacro CLIPTURE_END_UNLESS
 
   !ifmacrodef NSIS_HOOK_POSTINSTALL
     !insertmacro NSIS_HOOK_POSTINSTALL

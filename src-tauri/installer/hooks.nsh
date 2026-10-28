@@ -6,6 +6,10 @@ Var CliptureLegacyDirectory
 Var CliptureLegacyScope
 Var CliptureStartupCheckbox
 Var CliptureStartupChoice
+; 1 when a running Clipture moves itself from Program Files to a per-user
+; install (ADR 0020). That Clipture keeps running from elsewhere, so the
+; installer must not close it. Clipture moves the user's shortcuts itself.
+Var CliptureMigrateMode
 
 !macro CLIPTURE_STARTUP_PAGE
   Page custom CliptureStartupPage CliptureStartupLeave
@@ -72,7 +76,25 @@ Var CliptureStartupChoice
   FunctionEnd
 !macroend
 
+; A migrating Clipture runs from elsewhere and installs into an empty
+; directory: closing Clipture by name would only stop its recording, and a
+; desktop shortcut is created only where the user already had one.
+!macro CLIPTURE_UNLESS_MIGRATING
+  ${If} $CliptureMigrateMode <> 1
+!macroend
+
+!macro CLIPTURE_END_UNLESS
+  ${EndIf}
+!macroend
+
 !macro CLIPTURE_INIT_BEGIN
+  StrCpy $CliptureMigrateMode 0
+  ClearErrors
+  ${GetOptions} $CMDLINE "/MIGRATE" $8
+  ${IfNot} ${Errors}
+    StrCpy $CliptureMigrateMode 1
+  ${EndIf}
+  ClearErrors
   StrCpy $CliptureRequestedDirectory ""
   ${If} $INSTDIR != "${PLACEHOLDER_INSTALL_DIR}"
   ${AndIf} $INSTDIR != ""
@@ -110,6 +132,16 @@ Var CliptureStartupChoice
     ${If} $8 == ""
       StrCpy $INSTDIR $CliptureLegacyDirectory
     ${EndIf}
+  !if "${INSTALLMODE}" == "currentUser"
+  ${ElseIf} $INSTDIR == "$LOCALAPPDATA\${PRODUCTNAME}"
+    ; Upstream's per-user default is %LOCALAPPDATA%\Clipture, which also holds
+    ; the replay cache and runtime store. New installs use the Windows
+    ; per-user program location; earlier per-user installs stay where they are.
+    ReadRegStr $8 HKCU "${MANUPRODUCTKEY}" ""
+    ${If} $8 == ""
+      StrCpy $INSTDIR "$LOCALAPPDATA\Programs\${PRODUCTNAME}"
+    ${EndIf}
+  !endif
   ${EndIf}
 !macroend
 
@@ -153,8 +185,17 @@ Var CliptureStartupChoice
   ${EndIf}
 !macroend
 
+!macro NSIS_HOOK_POSTUNINSTALL
+  ; Staged or backed-up update files are part of the installation.
+  RMDir /r "$INSTDIR\.update"
+  RMDir "$INSTDIR"
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro CLIPTURE_REFRESH_ICONS
+  ; A full install is authoritative. A leftover in-place transaction
+  ; (ADR 0020) could otherwise restore its backups over these files.
+  RMDir /r "$INSTDIR\.update"
   ; Electron's updater uses --force-run; Tauri's installer normally uses /R.
   ${If} ${Silent}
     ClearErrors

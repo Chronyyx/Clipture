@@ -22,6 +22,12 @@ mod updates;
 use tauri::{Manager, RunEvent};
 use tauri_plugin_autostart::MacosLauncher;
 
+/// Release tooling (`examples/make_patches.rs`): binary patches from earlier
+/// releases to a new runtime. Never used by the running app.
+pub fn write_runtime_patches(runtime: &std::path::Path, version: &str, previous: &std::path::Path, out: &std::path::Path) -> Result<usize, String> {
+    updates::patches::write_runtime_patches(runtime, version, previous, out).map_err(|error| error.to_string())
+}
+
 pub fn installer_startup_command() -> Option<i32> {
     #[cfg(windows)]
     return app::installer_startup::command();

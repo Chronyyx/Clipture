@@ -5,5 +5,9 @@ fn main() {
         std::env::set_var("STATIC_VCRUNTIME", "true");
     }
     println!("cargo:rerun-if-env-changed=CLIPTURE_NATIVE_ID");
+    println!("cargo:rerun-if-env-changed=CLIPTURE_TEST_RELEASE_ORIGIN");
+    if let Ok(origin) = std::env::var("CLIPTURE_TEST_RELEASE_ORIGIN") {
+        println!("cargo:warning=Sandbox test build: updates come from {origin}, not GitHub");
+    }
     tauri_build::build();
 }

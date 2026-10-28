@@ -1,6 +1,8 @@
 # ADR 0009: Signed component runtimes with supervised activation
 
-- Status: Implemented candidate; production rollout gated on isolated signed handoff validation
+- Status: Implemented candidate; production rollout gated on isolated signed handoff validation.
+  Runtime-store activation is superseded by ADR 0020 for user-writable
+  installations and remains only for unmigrated Program Files installs.
 - Date: 2026-09-19
 - Scope: Updater only. No capture, cadence, encoder, replay-buffer or FPS-policy changes.
 

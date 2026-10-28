@@ -105,6 +105,17 @@ are reused. Missing blocks use validated HTTP ranges; a server returning a full
 200 response falls back to a bounded, authenticated whole-file download. Release publishing
 signs and verifies `components-v1.json` with the existing updater key.
 
+Release publishing also builds zstd patches from the last three releases'
+runtime files (`examples/make_patches.rs`) and uploads them with
+`patches-v1.json`, signed with the same key. A client whose installed file
+matches a patch's starting hash downloads the patch instead, typically a few
+hundred KiB instead of about 30 MiB. The result must match the signed
+manifest, and any failure falls back to the download above. The step is
+optional: if it fails, the release ships without patches.
+
+User-writable installations update in place (ADR 0020). Program Files
+installations keep the runtime store described below until they migrate.
+
 Runtime files live under `%LOCALAPPDATA%\Clipture\runtime`; durable data and
 `saveFolder` remain unchanged. Activation occurs on the next full launch or by
 explicit Apply now confirmation. Native activation restarts the controller and

@@ -34,7 +34,7 @@ function describeFile(root, relative, version) {
   }
   return {
     path: relative, size: stat.size, sha256: hash.digest("hex"),
-    url: `https://github.com/Chronyyx/Clipture/releases/download/v${version}/${path.basename(relative)}`,
+    url: `${process.env.CLIPTURE_TEST_RELEASE_ORIGIN || "https://github.com"}/Chronyyx/Clipture/releases/download/v${version}/${path.basename(relative)}`,
     blocks, blockSize: BLOCK_SIZE,
   };
 }

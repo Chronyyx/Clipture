@@ -16,7 +16,9 @@ const upstream = template.split('\n').slice(3).join('\n')
   .replace('!insertmacro CLIPTURE_FINISH_SETUP\n', '')
   .replace('!insertmacro CLIPTURE_FINISH_ACTION\n', '')
   .replace('!insertmacro CLIPTURE_PROGRESS_STYLE ""\n', '')
-  .replace('!insertmacro CLIPTURE_PROGRESS_STYLE "un."\n', '');
+  .replace('!insertmacro CLIPTURE_PROGRESS_STYLE "un."\n', '')
+  .replaceAll('  !insertmacro CLIPTURE_UNLESS_MIGRATING\n', '')
+  .replaceAll('  !insertmacro CLIPTURE_END_UNLESS\n', '');
 assert.equal(createHash('sha256').update(upstream).digest('hex'),
   '20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079',
   'Keep product logic in hooks.nsh, not in the vendored template');
@@ -28,6 +30,12 @@ assert.ok(init.indexOf('CLIPTURE_INIT_END') > init.indexOf('MULTIUSER_INIT'));
 assert.ok(template.indexOf('CLIPTURE_STARTUP_PAGE') < template.indexOf('!insertmacro MUI_PAGE_INSTFILES'));
 assert.ok(template.indexOf('CLIPTURE_FINISH_SETUP') < template.indexOf('!insertmacro MUI_PAGE_FINISH'));
 assert.ok(template.indexOf('CLIPTURE_FINISH_ACTION') > template.indexOf('!insertmacro MUI_PAGE_FINISH'));
+// A migrating Clipture (ADR 0020) keeps running and keeps the user's shortcuts.
+const guarded = (statement) => new RegExp(`CLIPTURE_UNLESS_MIGRATING\\n[^\\n]*${statement}[\\s\\S]*?CLIPTURE_END_UNLESS`);
+assert.match(template, guarded('CheckIfAppIsRunning "\\$\\{MAINBINARYNAME\\}\\.exe"'));
+assert.match(template, guarded('\\$\\{If\\} \\$PassiveMode = 1\\n  \\$\\{OrIf\\} \\$\\{Silent\\}\\n    Call CreateOrUpdateDesktopShortcut'));
+assert.equal(template.match(/CLIPTURE_UNLESS_MIGRATING/g).length, 2, 'Only the running check and silent desktop shortcut are skipped');
+assert.equal(config.bundle.windows.nsis.installMode, 'currentUser', 'Installs and updates never require administrator rights');
 const hooks = fs.readFileSync(path.join(root, 'src-tauri/installer/hooks.nsh'), 'utf8');
 assert.match(hooks, /StrCpy \$CliptureStartupChoice \$\{BST_CHECKED\}/);
 assert.match(hooks, /\$\{Silent\}[\s\S]*?\$PassiveMode = 1[\s\S]*?\$UpdateMode = 1[\s\S]*?Abort/);
@@ -66,4 +74,4 @@ for (const [name, width, height] of [['sidebarImage', 656, 1256], ['headerImage'
   assert.equal(bmp.readInt32LE(22), height);
   assert.equal(bmp.readUInt16LE(28), 24, 'NSIS artwork uses opaque 24-bit BMP');
 }
-console.log('Pinned template: seven expected hooks; themed assets valid; startup checked, updates preserve choice.');
+console.log('Pinned template: nine expected hooks; themed assets valid; startup checked, updates preserve choice.');

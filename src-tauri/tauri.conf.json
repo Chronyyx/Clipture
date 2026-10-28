@@ -35,7 +35,7 @@
     "windows": {
       "nsis": {
         "displayLanguageSelector": false,
-        "installMode": "both",
+        "installMode": "currentUser",
         "installerHooks": "installer/hooks.nsh",
         "installerIcon": "../assets/icon.ico",
         "uninstallerIcon": "../assets/icon.ico",

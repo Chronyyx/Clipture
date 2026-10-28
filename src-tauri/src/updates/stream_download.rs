@@ -56,6 +56,30 @@ pub async fn download(
     .await
 }
 
+/// The signed per-user installer of an already verified release (ADR 0020).
+pub(super) async fn download_installer(
+    url: &Url,
+    public_key: &str,
+    signature: &str,
+    gate: &dyn UpdateGate,
+) -> Result<NamedTempFile, UpdateError> {
+    let client = client_builder()
+        .user_agent("Clipture-Tauri-Updater")
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(1800))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                attempt.error("too many redirects")
+            } else if attempt.url().scheme() == "https" {
+                attempt.follow()
+            } else {
+                attempt.error("update redirects must use HTTPS")
+            }
+        }))
+        .build()?;
+    transfer(&client, url, HeaderMap::new(), public_key, signature, gate, |_, _| {}).await
+}
+
 fn client_builder() -> reqwest::ClientBuilder {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -76,8 +100,7 @@ async fn transfer(
     gate: &dyn UpdateGate,
     mut progress: impl FnMut(usize, Option<u64>),
 ) -> Result<NamedTempFile, UpdateError> {
-    let local_test = cfg!(test) && url.host_str() == Some("127.0.0.1");
-    if url.scheme() != "https" && !local_test {
+    if !super::release_source::allows(url) {
         return Err(UpdateError::Transfer(
             "update downloads require HTTPS".into(),
         ));

@@ -1,0 +1,238 @@
+# ADR 0020: In-place updates of a per-user installation
+
+- Status: Implemented in 1.7.4; end-to-end checked in Windows Sandbox with a throwaway signing key
+- Date: 2026-10-27
+- Supersedes: the runtime-store activation of ADR 0009 for user-writable
+  installations. Signed manifests, differential transfer, the capture gate,
+  startup health and quarantine from ADR 0009 are kept.
+
+## Context
+
+ADR 0009 runs each update from a new directory,
+`%LOCALAPPDATA%\Clipture\runtime\<version>-<hash>\clipture.exe`. Windows
+Firewall rules are per program path, so every update made Windows ask again,
+with an administrator prompt, when friend sharing opened its socket. Autostart
+was registered against the versioned path too. Every runtime directory stayed on
+disk (eight versions, about 1 GiB, on one development machine), and each launch
+re-hashed the whole runtime before starting.
+
+The installer was `installMode: both` with highest available execution level, so
+it requested elevation whenever an administrator opened it, and most machines
+ended up with a Program Files install that the user cannot write to.
+
+## Decision
+
+1. The installer is per-user (`installMode: currentUser`) and never requests
+   elevation. New installs go to `%LOCALAPPDATA%\Programs\Clipture`; existing
+   per-user installs keep their directory.
+2. Updates replace the changed files of that installation in place. The
+   executable path never changes.
+3. A Program Files installation migrates once to a per-user one, without
+   elevation. Removing the old copy is the only elevated step, it is offered
+   once, and it is optional.
+
+### Layout
+
+```text
+<install>\clipture.exe ...        the installation, always one copy
+<install>\.update\staged\<path>   new bytes of changed files only
+<install>\.update\backup\<path>   replaced bytes, moved (not copied) aside
+<install>\.update\journal.json    phase: staged, applying, applied, committed
+<install>\.update\handoff.lock    held exclusively by the owning supervisor
+```
+
+Every swap step is a same-volume `MoveFileExW(MOVEFILE_WRITE_THROUGH)`. No file
+is copied or written in place during the swap, so a file's location alone shows
+how far its swap got. The journal is written to a temporary file, flushed and
+renamed over the old one with write-through, so it always names a phase whose
+preconditions are on disk.
+
+### Sequence
+
+| Step | Where | Capture |
+|---|---|---|
+| Download changed files, reusing 1 MiB blocks of the installed copy; verify each against the signed manifest; write the journal (`staged`) | running version | recording |
+| Start the supervisor; it locks every target file (read and rename allowed, writes denied) and verifies the complete set | supervisor | recording |
+| Reserve the capture/save gate; old controller exits | old version | stopped |
+| Rename installed files to `backup`, staged files into place (`applying`, then `applied`) | supervisor | stopped |
+| Start `<install>\clipture.exe --runtime-handoff`; wait for health, then five seconds of liveness | supervisor | starting |
+| `committed`; delete backups and the work directory | supervisor, then new version | recording |
+
+The supervisor runs from the executable it replaces. Windows allows a running
+image to be renamed but not deleted, so the new version starts from the stable
+path at once. The backup of that executable is removed after the supervisor
+exits, by the new version or the next launch.
+
+### Binary patches
+
+A release may publish zstd `--patch-from` patches from its three predecessors,
+listed with their sizes, digests and starting hashes in `patches-v1.json` and
+signed with the updater key. When an installed file matches a patch's starting
+hash, staging downloads the patch instead of the file. The zstd library is used
+on both sides: release CI runs `examples/make_patches.rs` and the client
+decodes with the same pinned crate. A patch is an optimisation only. Its output
+is size-bounded and must match the signed manifest. A missing, unsigned,
+corrupt or mismatched patch falls back to the block-differential download.
+
+Measured on real releases: 1.7.2 to 1.7.3 needs 0.46 MiB instead of about
+30 MiB. From 1.7.0 it needs 1.4 MiB, from 1.6.6 1.9 MiB. The installer's
+bundle-stamped controller matches no patch, so the first update after a fresh
+install downloads it normally.
+
+### Health
+
+An update succeeds only when the new controller reports both readiness stages
+from ADR 0009: the Tauri event loop is running, and the engine has accepted its
+configuration and hotkey RPC with `engineRunning`. The process must then stay
+alive for five more seconds. Process start alone is not success.
+
+### Recovery
+
+Recovery never rolls forward. Any launch that finds `.update` and no live
+supervisor makes the installation consistent before anything else starts:
+
+| Found | Action |
+|---|---|
+| `staged` | Keep; apply at the next launch or on *Apply now* |
+| `applying` or `applied`, no supervisor | Restore backups; return new bytes to `staged`; retry once |
+| Second activation without a verdict | Restore, discard and quarantine that exact version |
+| Explicit health failure | Restore, discard and quarantine at once |
+| `committed` | Finish deleting backups; never restore them |
+| Journal missing or corrupt | Restore any backups present; discard the rest |
+| Staged files without a journal | Discard (an interrupted download) |
+
+A launch can itself be the interrupted update: after a power loss in the
+`applied` phase, the next launch starts the new controller from the stable
+path. Recovery then moves that running image back to `staged`, so the process
+relaunches the restored previous controller with the same arguments and exits
+before starting anything. The relaunch retries the stage.
+
+A file that stays locked (an old process, a scanner, the indexer) is retried
+with backoff for 15 seconds, then the swap is undone and the previous version
+restarted. The stage is kept for the next attempt. A lock does not count against
+the version. Cleanup deletes the journal last, so a backup that is still in use
+can never be mistaken for an interrupted swap.
+
+A full install from the installer is authoritative and removes `.update`. The
+uninstaller removes it too.
+
+### Migration from Program Files
+
+The first version with this ADR still arrives through ADR 0009 and runs from the
+runtime store, because the old version picks the path. It then settles the
+installation in the background:
+
+- **Per-user base install (HKCU):** copy the verified runtime files over the base
+  in one in-place transaction and commit at once. Those bytes are already running
+  healthy, and the base files are not executing. No restart.
+- **Program Files base install (HKLM):** download this exact version's signed
+  per-user installer, verify it, hold it against writes, and run
+  `setup.exe /S /MIGRATE`. Migration mode installs into an empty per-user
+  directory without closing the running Clipture and creates no desktop
+  shortcut of its own. Clipture keeps recording throughout. It then
+  retargets the user's own desktop and pinned shortcuts and adds a per-user
+  desktop shortcut only if a public one existed. This runs in Clipture's
+  64-bit process, which reads shortcut targets expanded and unredirected,
+  unlike the 32-bit installer.
+- The bundler stamps its bundle type into the installer's copy of
+  `clipture.exe` (three bytes differ from the signed runtime file). Migration
+  therefore verifies the other files against the manifest, then consolidates
+  at once, replacing the controller with the signed bytes.
+- Autostart is re-registered against the stable executable, never `current_exe`.
+
+When the user next opens the main window, never mid-game, Clipture offers once to
+remove the Program Files copy. One elevated helper (`--remove-machine-install`)
+deletes the old files, its HKLM uninstall and protocol registrations, and its
+all-users shortcuts. It also copies the user's firewall decision from the old
+executable and runtime-store versions to the per-user executable, so Windows
+does not ask again. Declining is remembered, and both copies keep working.
+
+Settings, clips and the library live under `%APPDATA%\Clipture\data` and the
+user's `saveFolder` (ADR 0003) and are not touched.
+
+Once no Program Files copy remains, runtime-store versions are deleted. Only the
+quarantine marker `failed.json` is kept.
+
+## Compared with ADR 0009
+
+| ADR 0009 property | Here |
+|---|---|
+| Exact bytes authenticated by the signed manifest | Kept: verified at staging, re-verified under lock before shutdown |
+| Differential, capture-aware transfer | Kept: same downloader; the installed copy is the block source |
+| Immutable runtime directories, read-locked while running | Replaced by the journal. Staged files are write-locked from verification until renamed |
+| Rollback to the previous version after a failed start | Kept until commit. After commit there is no older copy to return to, by design |
+| `previous.json` fallback across releases | Removed with the duplicate installs it required |
+| Quarantine of the exact failed version | Kept; same `failed.json` |
+| Compatible UI-only refresh | Kept: the staged controller serves as the UI when only `clipture.exe` changes |
+| Per-launch hashing of the whole runtime | Removed from startup |
+| Program Files installs | Use the runtime store until they migrate |
+
+The trust boundary is unchanged: an installation the user can write to can be
+modified by any process of that user, as the runtime store already could.
+
+## Measurements
+
+Worst case, all five files changed, 130.3 MiB taken from the installed release
+binaries, release build, NVMe, three runs (`update_downtime_benchmark`):
+
+| Step | Time | Capture |
+|---|---|---|
+| Verify and lock the stage | 636–697 ms | still recording |
+| Swap every file | 38–39 ms | stopped |
+| Roll back every file | 20–28 ms | stopped |
+| ADR 0009 per-launch runtime hash, now gone | 705–755 ms | before startup |
+
+So the swap adds about 40 ms to an update restart, and every launch loses about
+0.7 s of hashing. Restart downtime is otherwise the new version's own startup to
+health, which this change does not alter. It was not measured end to end.
+
+## Verification
+
+Automated (`updates::inplace`, `migration::machine_install`):
+
+- Power loss injected before every rename and journal write of a swap: recovery
+  restores the previous installation byte for byte, keeps the stage, and a retry
+  commits.
+- Power loss injected during recovery itself: a second recovery completes.
+- Unproven activation is retried once, then quarantined.
+- A lock that clears is retried. One that does not, simulated and with a real
+  open handle, undoes the swap and does not count as a failed attempt.
+- A backup still in use delays cleanup and is never restored over a committed
+  update.
+- A missing or corrupt journal restores the backups. An interrupted stage is
+  discarded.
+- After every finished path (commit, rollback, discard) the install directory
+  contains exactly one copy of each file and no work directory.
+- Staging writes only changed files, reuses a matching stage without network,
+  and verified files cannot be rewritten while locked.
+- A real running executable is renamed aside, the replacement starts from the
+  same path, and cleanup completes after the old process exits.
+- Installer: the pinned template differs from upstream only by hook macros, and
+  the hooks compile with the bundled NSIS.
+
+End to end, in Windows Sandbox (2026-10-27), with two release builds (9.0.0
+and 9.0.1) signed by a throwaway key and served from a local mirror. Clipture
+ran under a Basic User token on a passed-through RTX 3080:
+
+- A clean per-user install without elevation, registered under HKCU only.
+- A signed release that cannot pass health (9.0.2, carrying 9.0.1's
+  controller): swapped in, rolled back to 9.0.0, quarantined, and the previous
+  version restarted. No leftover files.
+- Power loss in `applied`: the next launch restored 9.0.0, restarted into it,
+  re-applied and committed 9.0.1. That took 8.5 s from launch to engine
+  running, rollback and retry included.
+- A clean update: swapped 1.1 s after launch, the new engine running at 1.4 s,
+  committed after the five-second health window.
+- Uninstall with a staged update removed everything.
+- Program Files 9.0.0 with all-users shortcuts, an HKLM protocol handler,
+  autostart and firewall rules: updated through the runtime store, then moved
+  per-user while recording. The desktop shortcut, autostart and the protocol
+  handler followed it. The elevated cleanup removed the old copy and its
+  machine-wide registrations and moved the firewall rules. The runtime store
+  was then retired.
+
+That run found the restart-after-rollback case, the bundle-stamped controller
+and the 32-bit installer's shortcut reads, all fixed above.
+
+Still not covered: an update between two releases signed with the production
+key, which needs a published release.

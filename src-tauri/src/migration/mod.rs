@@ -1,5 +1,9 @@
-//! Installer-only, read-only compatibility checks. Never starts the desktop host.
+//! Installer-only commands: read-only compatibility checks, and the elevated
+//! removal of a superseded Program Files install. Never starts the desktop host.
 mod legacy_preflight;
+mod machine_install;
+
+pub use machine_install::command as machine_cleanup_command;
 
 pub fn installer_command() -> Option<i32> {
     let mut args = std::env::args_os().skip(1);

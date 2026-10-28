@@ -2,6 +2,9 @@ mod background;
 mod manifest;
 mod component_download;
 mod runtime_store;
+mod release_source;
+pub(crate) mod patches;
+mod inplace;
 pub(crate) mod activation;
 mod handoff_process;
 pub(crate) mod startup_health;
@@ -39,6 +42,17 @@ pub(crate) fn runtime_service(
     } else {
         UpdateService::new(gate)
     }
+}
+
+/// The executable path that survives updates; shortcuts and autostart use it.
+pub(crate) fn stable_executable() -> std::path::PathBuf {
+    inplace::installation::stable_executable()
+}
+
+/// Offers, once and only while the user is at the main window, to remove a
+/// Program Files copy that a per-user install superseded.
+pub(crate) fn offer_machine_cleanup() {
+    inplace::migrate::offer_machine_cleanup();
 }
 
 pub(crate) fn automatic_checks_enabled(test_mode: bool) -> bool {

@@ -96,7 +96,7 @@ impl Manifest {
             }
             total += file.size;
             let name = file.path.rsplit('/').next().unwrap_or_default();
-            let expected = format!("https://github.com/Chronyyx/Clipture/releases/download/v{}/{name}", self.version);
+            let expected = format!("{}/v{}/{name}", super::release_source::asset_base(), self.version);
             let local_test = cfg!(test) && file.url.starts_with("http://127.0.0.1:");
             if file.url != expected && !local_test {
                 return Err(invalid("Runtime file URL is not the expected release asset"));

@@ -31,7 +31,11 @@ function validateProductionKey(config) {
 
 if (require.main === module) {
   const file = path.resolve(__dirname, '../../src-tauri/tauri.release.conf.json');
-  try { validateProductionKey(JSON.parse(fs.readFileSync(file, 'utf8'))); }
+  try {
+    // Sandbox test builds fetch updates from a local mirror (ADR 0020).
+    if (process.env.CLIPTURE_TEST_RELEASE_ORIGIN) throw new Error('Release blocked: CLIPTURE_TEST_RELEASE_ORIGIN is set.');
+    validateProductionKey(JSON.parse(fs.readFileSync(file, 'utf8')));
+  }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }
 module.exports = { validateProductionKey };
