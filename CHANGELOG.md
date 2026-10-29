@@ -1,11 +1,19 @@
 # Changelog
 
-## [1.8.0] - 2026-10-28
+## [1.8.0] - 2026-10-29
 
 ### Performance
 
-- **Half the capture work while you play:** Windows hands Clipture every frame your screen shows, often three or more for each frame a clip records on a high-refresh monitor. Each one was copied and, with HDR on, tone-mapped on your GPU, and most were then thrown away. Clipture now waits until just before a clip frame is due and processes only the newest screen frame, so frames that could never be recorded cost nothing. On a 210 Hz HDR monitor recording at 60 FPS, that is about half the GPU copies and 12% less engine CPU, which leaves more of your GPU to the game during smokes, molotovs and other heavy moments.
-- **Clips stay exactly as fresh:** Every clip frame is the same screen frame it would have been before. In stress tests through smoke and molotov load, fresh frames stayed at 99.9-100% and the longest freeze in smokes dropped from two frames to one.
+- **No more stutter in smokes:** Clips no longer freeze or skip through smokes, molotovs and big fights. Clipture's colour conversion used to wait behind the game on your GPU, and frames were lost while it waited; that step now runs on the video encoder instead. In live CS2 the heaviest smoke seconds came out with no repeated frames, against 10-25 of every 60 before: up to 19x less stutter.
+- **What you saw is what you get:** About 6x fewer skipped frames overall, so fast flicks and sprays look the way they did on your screen. The rare hitch left is half as long.
+- **No FPS hit:** Your game runs a little faster while Clipture records than it did before. Clipture prepares only the screen frames a clip can use, and Windows no longer copies frames for the source Clipture is not recording, up to 6x less extra work for Windows while you play.
+- **Half the memory:** Clipture uses about 2x less RAM while you play and less video memory, leaving more for the game, Discord and OBS.
+
+### Recording
+
+- **True colours on HDR monitors:** Normal (non-HDR) games recorded with Windows HDR on keep their exact colours. Whites came out slightly grey and dark tones a little muddy; clips now match what was on screen.
+- **HDR just works:** HDR games and videos are detected automatically and their highlights are softened to fit the clip, with nothing to set up.
+- **Alt-tab freely:** Switching out of the game and back records cleanly.
 
 ## [1.7.7] - 2026-10-28
 

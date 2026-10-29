@@ -3,7 +3,7 @@
   "version": "1.8.0",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.8.0: Half the Capture Work",
+  "releaseTitle": "Clipture 1.8.0: Smoother Clips, Half the Memory",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {
