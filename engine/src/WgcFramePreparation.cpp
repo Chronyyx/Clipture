@@ -15,17 +15,39 @@ PreparedWgcFrame prepareWgcFrame(ID3D11Texture2D* source, UINT width, UINT heigh
         error = "WGC source format or content size is unsupported.";
         return {}; // Never publish an uninitialized or partly copied texture.
     }
-    auto owned = pool.acquire(device, width, height, hdr, error, hdr && policy.deferPreparation,
-        policy.directTextureRead && policy.isolatedDevice && policy.gpuHandoff);
+    // Tone mapping reads the WGC surface in place; WGC creates it as a shader
+    // resource, and the pass is queued before the frame returns to its pool.
+    const bool directTone = hdr && policy.wgcDirectTonemap && !policy.deferPreparation;
+    // Slot layout follows the session, not the frame: an 8-bit game window on an
+    // HDR desktop must not regenerate the pool at every recorded-source switch.
+    const bool hdrSession = tone != nullptr;
+    auto owned = pool.acquire(device, width, height, hdrSession, error, hdrSession && policy.deferPreparation,
+        policy.directTextureRead && policy.isolatedDevice && policy.gpuHandoff,
+        hdrSession && policy.wgcDirectTonemap && !policy.deferPreparation);
     if (!owned.lease) return {}; // Pool counts GPU-pressure drops itself.
-    const D3D11_BOX box {0, 0, 0, width, height, 1};
-    {
+    std::shared_ptr<DeferredFramePreparation> preparation;
+    if (directTone) {
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> sourceView;
+        if (FAILED(device->CreateShaderResourceView(source, nullptr, &sourceView)) || !sourceView) {
+            error = "WGC surface shader view creation failed.";
+            return {};
+        }
+        Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
+        context.As(&multithread);
+        if (multithread) multithread->Enter();
+        const auto start = monotonicNow100ns();
+        const bool toned = tone->Process(sourceView.Get(), owned.toneOutputView.Get(), width, height, error);
+        const auto finished = monotonicNow100ns();
+        if (multithread) multithread->Leave();
+        if (!toned) return {};
+        stats->framePreparationLatency.record(finished, finished - start);
+    } else {
+        const D3D11_BOX box {0, 0, 0, width, height, 1};
         auto sample = copyProbe.scope(context.Get());
         context->CopySubresourceRegion(hdr ? owned.hdrInputTexture.Get() : owned.texture.Get(),
             0, 0, 0, 0, source, 0, &box);
     }
-    std::shared_ptr<DeferredFramePreparation> preparation;
-    if (hdr) {
+    if (hdr && !directTone) {
         preparation = deferDesktopPreparation(owned, std::move(tone), nullptr, {},
             std::move(stats), context, width, height);
     }

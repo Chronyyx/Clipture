@@ -3,9 +3,11 @@
 #include "GameWindowCoverage.hpp"
 #include "OverlayWindowCapture.hpp"
 #include "WgcFramePreparation.hpp"
+#include "VramTrace.hpp"
 #include "clipture/SourceTimestampGate.hpp"
 
 #include "clipture/HeldFrame.hpp"
+#include "clipture/ResourceSizingPolicy.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/Tonemapper.hpp"
 
@@ -135,6 +137,7 @@ struct WgcCaptureBackend::Impl {
         GraphicsCaptureSession session { nullptr };
         winrt::event_token frameArrivedToken {};
         winrt::Windows::Graphics::SizeInt32 size {};
+        DirectXPixelFormat format = DirectXPixelFormat::B8G8R8A8UIntNormalized;
         bool verified = false;  // a captured frame showed content (never black-only)
         int64_t lastProbe100ns = 0;
     };
@@ -263,7 +266,9 @@ struct WgcCaptureBackend::Impl {
             }
             if (fromGame != recordGame.load(std::memory_order_acquire)) {
                 if (!fromGame && pullQueue && capturePipelinePolicy().desktopGapFill) keepNewestDesktopFrame(sender);
-                else drain(sender, fromGame);
+                else if (!capturePipelinePolicy().idlePoolNoDrain) drain(sender, fromGame);
+                // Otherwise the pool fills and WGC stops writing into it; the
+                // switch back drains what is left (setRecordGame).
                 return;
             }
             if (!fromGame) dropGapFill();
@@ -283,7 +288,7 @@ struct WgcCaptureBackend::Impl {
                         game.size = size;
                         game.verified = false;
                         heldFrame.drop(closePending);
-                        sender.Recreate(direct3DDevice, framePoolPixelFormat, 4, size);
+                        sender.Recreate(direct3DDevice, game.format, resourceSizingPolicy().wgcBuffers, size);
                         return;
                     }
                     if (size.Width != framePoolSize.Width || size.Height != framePoolSize.Height) {
@@ -306,7 +311,7 @@ struct WgcCaptureBackend::Impl {
                         shared->resolution =
                             std::to_string(size.Width) + "x" + std::to_string(size.Height);
                     }
-                    sender.Recreate(direct3DDevice, framePoolPixelFormat, 4, size);
+                    sender.Recreate(direct3DDevice, framePoolPixelFormat, resourceSizingPolicy().wgcBuffers, size);
                     return;
                 }
 
@@ -392,11 +397,14 @@ struct WgcCaptureBackend::Impl {
                 abiItem.put_void()));
             game.item = abiItem.as<GraphicsCaptureItem>();
             game.size = game.item.Size();
+            game.format = capturePipelinePolicy().sdrGameBgra ? DirectXPixelFormat::B8G8R8A8UIntNormalized
+                                                              : framePoolPixelFormat;
             game.framePool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-                direct3DDevice, framePoolPixelFormat, 4, game.size);
+                direct3DDevice, game.format, resourceSizingPolicy().wgcBuffers, game.size);
             game.frameArrivedToken = game.framePool.FrameArrived([this](auto const& sender, auto const&) {
                 onFrames(sender, true);
             });
+            traceVram(d3dDevice.Get(), "wgc-game-pool");
             game.session = game.framePool.CreateCaptureSession(game.item);
             game.session.IsCursorCaptureEnabled(true);
             if (auto cadence = game.session.try_as<winrt::Windows::Graphics::Capture::IGraphicsCaptureSession5>()) {
@@ -426,6 +434,8 @@ struct WgcCaptureBackend::Impl {
     }
 
     void closeGame() {
+        // An undrained desktop pool raises no FrameArrived until it is drained.
+        if (capturePipelinePolicy().idlePoolNoDrain) setRecordGame(false, "game window closed");
         recordGame.store(false, std::memory_order_release);
         if (game.framePool) {
             try { game.framePool.FrameArrived(game.frameArrivedToken); } catch (...) {}
@@ -446,7 +456,17 @@ struct WgcCaptureBackend::Impl {
     }
 
     void setRecordGame(bool next, const std::string& reason) {
-        if (recordGame.exchange(next, std::memory_order_acq_rel) == next) return;
+        if (recordGame.load(std::memory_order_acquire) == next) return;
+        if (capturePipelinePolicy().idlePoolNoDrain) {
+            // The pool now recorded sat undrained: drop its stale frames before
+            // any callback can queue them.
+            std::lock_guard callbackLock(callbackMutex);
+            auto const& pool = next ? game.framePool : framePool;
+            if (pool) drain(pool, next);
+            recordGame.store(next, std::memory_order_release);
+        } else if (recordGame.exchange(next, std::memory_order_acq_rel) == next) {
+            return;
+        }
         if (auto* queue = shared->frameQueue.load(std::memory_order_acquire)) {
             queue->traceCapture('s', monotonicNow100ns(), next ? 1u : 0u);
         }
@@ -547,6 +567,7 @@ BackendStartResult WgcCaptureBackend::start() {
         state.apartmentThreadId = GetCurrentThreadId();
         HRESULT hr = createD3dDeviceForOutput(state.output.adapter.Get(), state.d3dDevice, state.d3dContext);
         if (FAILED(hr)) return { false, "D3D11 device creation for WGC failed: " + hresultHex(hr) };
+        traceVram(state.d3dDevice.Get(), "wgc-device");
 
         Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
         hr = state.d3dDevice.As(&dxgiDevice);
@@ -610,9 +631,10 @@ BackendStartResult WgcCaptureBackend::start() {
         state.framePool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             state.direct3DDevice,
             pixelFormat,
-            4,
+            resourceSizingPolicy().wgcBuffers,
             state.framePoolSize);
 
+        traceVram(state.d3dDevice.Get(), "wgc-monitor-pool");
         state.frameArrivedToken = state.framePool.FrameArrived([this](auto const& sender, auto const&) {
             impl_->onFrames(sender, false);
         });

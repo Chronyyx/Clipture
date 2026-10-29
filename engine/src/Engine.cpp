@@ -1,4 +1,5 @@
 #include "clipture/Engine.hpp"
+#include "clipture/platform/ThreadName.hpp"
 #include "clipture/AudioProcessSpec.hpp"
 #include "clipture/CapturePipelinePolicy.hpp"
 #include "clipture/CaptureSession.hpp"
@@ -833,6 +834,7 @@ void Engine::refreshAudioRouting() {
 }
 
 void Engine::gameDetectionLoop() {
+    nameCurrentThread(L"game-detection");
     {
         std::unique_lock lock(gameDetectionWaitMutex_);
         if (gameDetectionWaitCv_.wait_for(lock, std::chrono::milliseconds(900), [this] {

@@ -1,4 +1,5 @@
 #include "clipture/CaptureSession.hpp"
+#include "clipture/platform/ThreadName.hpp"
 
 #include "CaptureBackend.hpp"
 #include "DesktopDuplicationBackend.hpp"
@@ -310,6 +311,7 @@ struct CaptureSession::Impl {
              kind = decision.kind,
              captureWindow,
              targetName = std::move(targetName)](std::stop_token stopToken) mutable {
+                nameCurrentThread(L"capture-backend");
                 runController(
                     stopToken,
                     std::move(selectedOutput),

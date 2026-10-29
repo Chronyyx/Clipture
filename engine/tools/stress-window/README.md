@@ -61,6 +61,12 @@ The window also takes the foreground (games always hold it) and records the
 share of frames it held it per phase (`foregroundPct`). Treat phases far below
 100% as invalid.
 
+`--patches` draws six known 8-bit colour squares (red, green, blue, grey 128, a
+skin tone, white; 240 px from (0, 200) in buffer pixels) for capture colour
+checks. Each phase in `summary.json` counts frames by DXGI presentation mode
+(`presentationModes`: composed, overlay, none, failure), which shows whether a
+capture session forces DWM composition of the window.
+
 `CLIPTURE_TEST_ENCODER_STALL=<ms>,<periodMs>` (engine environment, via
 `--env`) delays one encoder cadence wake by `<ms>` every `<periodMs>`. Busy
 games delay that wake in practice; this injects it deterministically.

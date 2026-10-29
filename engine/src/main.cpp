@@ -1,4 +1,5 @@
 #include "clipture/Engine.hpp"
+#include "clipture/platform/ThreadName.hpp"
 
 #include <Windows.h>
 #include <mmsystem.h>
@@ -127,6 +128,7 @@ private:
 }  // namespace
 
 int main() {
+    clipture::nameCurrentThread(L"engine-main");
     timeBeginPeriod(1);
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
     if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {

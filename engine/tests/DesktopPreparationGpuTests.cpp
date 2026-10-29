@@ -2,6 +2,7 @@
 #include "WgcFramePreparation.hpp"
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -43,6 +44,80 @@ static std::vector<uint32_t> pixels(ID3D11Device* device, ID3D11DeviceContext* c
     return result;
 }
 
+static uint16_t half(float value) {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    const uint32_t sign = (bits >> 16) & 0x8000;
+    const int exponent = static_cast<int>((bits >> 23) & 0xff) - 127 + 15;
+    uint32_t mantissa = bits & 0x7fffff;
+    if (exponent <= 0) {  // subnormal half
+        if (exponent < -10) return static_cast<uint16_t>(sign);
+        mantissa |= 0x800000;
+        const int shift = 14 - exponent;
+        return static_cast<uint16_t>(sign | ((mantissa + (1u << (shift - 1))) >> shift));
+    }
+    const uint32_t rounded = ((static_cast<uint32_t>(exponent) << 10) | (mantissa >> 13)) + ((mantissa >> 12) & 1);
+    return static_cast<uint16_t>(sign | rounded);
+}
+
+// Windows composes SDR pixels into scRGB with the sRGB curve times SDR white.
+static float scRgbFromSdr(int value, float white) {
+    const float c = value / 255.0f;
+    return white * (c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f));
+}
+
+static ComPtr<ID3D11Texture2D> texture(ID3D11Device* device, DXGI_FORMAT format, UINT bind, const void* data, UINT pitch) {
+    D3D11_TEXTURE2D_DESC desc {};
+    desc.Width = desc.Height = 16;
+    desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+    desc.Format = format;
+    desc.BindFlags = bind;
+    D3D11_SUBRESOURCE_DATA initial { data, pitch, 0 };
+    ComPtr<ID3D11Texture2D> result;
+    require(SUCCEEDED(device->CreateTexture2D(&desc, data ? &initial : nullptr, &result)));
+    return result;
+}
+
+// SDR content on an HDR desktop maps back to its own 8-bit values; a highlight
+// above SDR white switches to the roll-off, which then compresses SDR white.
+static void toneCurve(ID3D11Device* device, ID3D11DeviceContext* context) {
+    constexpr float white = 2.5f;  // 200 nits
+    std::vector<uint16_t> sdr(16 * 16 * 4), bright(16 * 16 * 4);
+    for (int i = 0; i < 256; ++i) {
+        for (int c = 0; c < 3; ++c) {
+            sdr[i * 4 + c] = half(scRgbFromSdr(i, white));
+            bright[i * 4 + c] = half(i == 0 ? 4.0f * white : scRgbFromSdr(255, white));
+        }
+        sdr[i * 4 + 3] = bright[i * 4 + 3] = half(1.0f);
+    }
+    const auto sdrInput = texture(device, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE, sdr.data(), 16 * 8);
+    const auto brightInput = texture(device, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE, bright.data(), 16 * 8);
+    const auto output = texture(device, DXGI_FORMAT_B8G8R8A8_UNORM, D3D11_BIND_UNORDERED_ACCESS, nullptr, 0);
+    std::string error;
+    Tonemapper tone(device);
+    require(tone.Initialize(error, white));
+    for (int frame = 0; frame < 8; ++frame) {
+        require(tone.Process(sdrInput, output, error));
+        context->Flush();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    require(!tone.hdrContent());
+    const auto exact = pixels(device, context, output.Get());
+    for (int i = 0; i < 256; ++i) require((exact[i] & 0xffffff) == static_cast<uint32_t>(i * 0x010101));
+
+    const auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(2)) {
+        require(tone.Process(brightInput, output, error));
+        context->Flush();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (tone.hdrContent() && std::chrono::steady_clock::now() - start > std::chrono::milliseconds(400)) break;
+    }
+    require(tone.hdrContent());
+    const auto rolled = pixels(device, context, output.Get());
+    require((rolled[1] & 0xff) < 250);  // SDR white now below the highlight
+    require((rolled[0] & 0xff) == 255);
+}
+
 int main(int argc, char**) {
     const bool shared = argc > 1;
     ComPtr<ID3D11Device> device;
@@ -55,6 +130,9 @@ int main(int argc, char**) {
     std::string error;
     auto tone = std::make_shared<Tonemapper>(device);
     require(tone->Initialize(error, 1.0f));
+    // Pixel comparisons across calls need one curve, not the measured one.
+    tone->holdKnee(ToneCurveControl::kHdrKnee);
+    toneCurve(device.Get(), context.Get());
     auto cursor = std::make_shared<DesktopPointerCompositor>(device, context);
     require(cursor->initialize(error));
     auto stats = std::make_shared<CaptureSharedState>();
@@ -84,6 +162,7 @@ int main(int argc, char**) {
         CaptureTexturePool wgcPool(stats);
         GpuStageProbe copyProbe("wgc-test-copy");
         CapturePipelinePolicy policy;
+        policy.wgcDirectTonemap = false;  // the copy path first; direct below
         require(tone->Process(early.hdrInputTexture, early.texture, error));
         const auto plainReference = pixels(device.Get(), context.Get(), early.texture.Get());
         auto wgc = prepareWgcFrame(early.hdrInputTexture.Get(), 32, 32, wgcPool, tone,
@@ -113,6 +192,7 @@ int main(int argc, char**) {
         error.clear();
         context->UpdateSubresource(early.hdrInputTexture.Get(), 0, nullptr, hdr.data(), 32 * 8, 0);
         policy.deferPreparation = false;
+        policy.wgcDirectTonemap = true;  // tone-mapped from the source in place: same pixels
         auto eager = prepareWgcFrame(early.hdrInputTexture.Get(), 32, 32, wgcPool, tone,
             stats, device.Get(), context, copyProbe, policy, error);
         require(static_cast<bool>(eager.owned.lease));
@@ -174,5 +254,5 @@ int main(int argc, char**) {
     require(pixels(device.Get(), context.Get(), output.Get()) == reference);
     require(work->prepare(error)); // Repeats must not tone-map/composite twice.
     require(pixels(device.Get(), context.Get(), output.Get()) == reference);
-    std::cout << "WARP: DXGI/WGC deferred HDR, crop, source reuse, cursor, epoch and repeat pixels match.\n";
+    std::cout << "WARP: exact SDR tone curve, HDR roll-off, DXGI/WGC deferred HDR, crop, source reuse, cursor, epoch and repeat pixels match.\n";
 }

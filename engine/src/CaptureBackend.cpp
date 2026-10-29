@@ -1,6 +1,8 @@
 #include "CaptureBackend.hpp"
 #include "clipture/GpuTextureReadState.hpp"
 #include "clipture/CapturePipelinePolicy.hpp"
+#include "VramTrace.hpp"
+#include "clipture/ResourceSizingPolicy.hpp"
 
 #include "clipture/MediaClock.hpp"
 #include "clipture/DesktopDuplicationHelpers.hpp"
@@ -576,7 +578,9 @@ namespace {
 // Warm the common case, then grow only when cross-thread leases overlap. Queue
 // admission bounds that overlap; a hard texture cap must not turn temporary
 // encoder pressure into permanent capture starvation.
-constexpr std::size_t kCaptureTextureWarmSlots = 4;
+std::size_t captureTextureWarmSlots() {
+    return static_cast<std::size_t>(resourceSizingPolicy().captureWarmSlots);
+}
 // Slots grown past the warm set are freed once nothing has leased them for
 // this long. Leases prefer low indices, so surplus slots go idle at the back.
 constexpr std::chrono::milliseconds kCaptureTextureIdleRelease{2000};
@@ -618,7 +622,8 @@ CaptureTexture CaptureTexturePool::acquire(
     bool needsUnorderedAccess,
     std::string& error,
     bool deferredHdr,
-    bool sharePrepared) {
+    bool sharePrepared,
+    bool externalHdrInput) {
     if (!device || width == 0 || height == 0) return {};
     std::lock_guard lock(mutex_);
     const bool needsNewGeneration = slots_.empty() || device_.Get() != device ||
@@ -645,8 +650,8 @@ CaptureTexture CaptureTexturePool::acquire(
         if (needsUnorderedAccess) desc_.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
         if (sharePrepared) desc_.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
-        slots_.reserve(kCaptureTextureWarmSlots);
-        for (std::size_t index = 0; index < kCaptureTextureWarmSlots; ++index) {
+        slots_.reserve(captureTextureWarmSlots());
+        for (std::size_t index = 0; index < captureTextureWarmSlots(); ++index) {
             auto slot = std::make_shared<Slot>();
             HRESULT hr = device->CreateTexture2D(&desc_, nullptr, &slot->texture);
             if (FAILED(hr) && desc_.MiscFlags) {
@@ -670,12 +675,14 @@ CaptureTexture CaptureTexturePool::acquire(
             shared_->captureTextureSlots.observe(static_cast<int>(slots_.size()));
         }
 
-        if (needsUnorderedAccess && !deferredHdr) {
+        traceVram(device, "capture-slots");
+        if (needsUnorderedAccess && !deferredHdr && !externalHdrInput) {
             if (!createHdrInput(device, desc_, hdrInputTexture_, hdrInputView_)) {
                 error = "Creating HDR capture staging failed.";
                 slots_.clear();
                 return {};
             }
+            traceVram(device, "capture-hdr-staging");
         }
     }
 
@@ -742,7 +749,7 @@ CaptureTexture CaptureTexturePool::acquire(
         deferredHdr ? slot->hdrInputView : hdrInputView_, slot->toneOutputView, std::move(lease), slot->gpuReadState };
 }
 void CaptureTexturePool::releaseIdleSlots(std::chrono::steady_clock::time_point now) {
-    while (slots_.size() > kCaptureTextureWarmSlots) {
+    while (slots_.size() > captureTextureWarmSlots()) {
         const auto& slot = slots_.back();
         if (slot->leased.load(std::memory_order_acquire)) return;
         if (slot->gpuReadState && !slot->gpuReadState->reusable()) return;

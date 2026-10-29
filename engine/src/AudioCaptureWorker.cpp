@@ -1,4 +1,5 @@
 #include "clipture/AudioCaptureWorker.hpp"
+#include "clipture/platform/ThreadName.hpp"
 #include "clipture/AudioProcessSpec.hpp"
 #include "clipture/AudioTimeline.hpp"
 #include "clipture/LoopbackSilencePolicy.hpp"
@@ -755,6 +756,7 @@ void AudioCaptureWorker::signalMicRefresh() {
 }
 
 void AudioCaptureWorker::runDeviceNotificationLoop() {
+    nameCurrentThread(L"audio-devices");
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool coInitialized = SUCCEEDED(hr);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return;
@@ -803,6 +805,7 @@ void AudioCaptureWorker::runDeviceNotificationLoop() {
 }
 
 void AudioCaptureWorker::runMicrophoneCapture() {
+    nameCurrentThread(L"audio-mic");
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool coInitialized = SUCCEEDED(hr);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -1367,6 +1370,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
 }
 
 void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processName, std::shared_ptr<std::atomic<bool>> stopRequested) {
+    nameCurrentThread(L"audio-app");
     const auto captureSpec = parseAudioProcessSpec(processName);
     const std::string captureName = captureSpec.processName;
     const std::string sourceId = sourceIdForProcessSpec(processName);

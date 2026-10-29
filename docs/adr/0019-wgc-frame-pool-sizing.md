@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 
-Status: option 2 tried and rejected 2026-10-29 (see Result). Options 1 and 3 remain open.
+Status: option 2 tried and rejected 2026-10-29 (see Result). Option 1 re-measured with holding in ADR 0023; option 3 narrowed to SDR games there.
 
 ## Context
 

@@ -1,4 +1,5 @@
 #include "clipture/AudioReplayCoordinator.hpp"
+#include "clipture/platform/ThreadName.hpp"
 
 #include "clipture/AacEncoderSession.hpp"
 #include "clipture/AudioPacketRouting.hpp"
@@ -463,6 +464,7 @@ struct AudioReplayCoordinator::Impl {
     }
 
     void run() {
+        nameCurrentThread(L"audio-replay");
         const int previousPriority = GetThreadPriority(GetCurrentThread());
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
         std::vector<EncodedPacket> incoming;

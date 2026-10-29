@@ -25,7 +25,7 @@ struct FrameConstants {
     uint32_t iterations;
     float highlight;
     float stampWhite;
-    float padding;
+    float patches;
 };
 static_assert(sizeof(FrameConstants) % 16 == 0);
 
@@ -37,6 +37,7 @@ cbuffer Frame : register(b0) {
     uint iterations;
     float highlight;   // 1 in SDR; scRGB multiplier for HDR highlights
     float stampWhite;
+    float patches;     // 1 draws the known colour patches
 };
 
 float4 fullscreen(uint id : SV_VertexID) : SV_Position {
@@ -55,6 +56,13 @@ float4 scene(float4 position : SV_Position) : SV_Target {
     float barX = frac(seconds * 0.5) * size.x;
     if (n > 0.97) color *= highlight;
     if (abs(p.x - barX) < 40.0) color = float3(1.0, 0.6, 0.1) * highlight;
+    // Known 8-bit colours for capture colour checks: red, green, blue, grey 128,
+    // a skin tone, white; 240 px squares from (0, 200).
+    if (patches > 0.5 && p.y >= 200.0 && p.y < 440.0 && p.x < 1440.0) {
+        const float3 known[6] = { float3(255, 0, 0), float3(0, 255, 0), float3(0, 0, 255),
+                                  float3(128, 128, 128), float3(200, 150, 100), float3(255, 255, 255) };
+        return float4(known[uint(p.x / 240.0)] / 255.0, 1);
+    }
     return float4(color, 1);
 }
 
@@ -248,7 +256,7 @@ RenderedFrame StressRenderer::render(uint32_t counter, double seconds, int loadL
         *static_cast<FrameConstants*>(mapped.pData) = {static_cast<float>(width_), static_cast<float>(height_),
                                                        static_cast<float>(seconds), stampPayload(counter),
                                                        kLoadIterations, hdr_ ? 8.0f : 1.0f,
-                                                       hdr_ ? 2.5f : 1.0f, 0};
+                                                       hdr_ ? 2.5f : 1.0f, patches_ ? 1.0f : 0.0f};
         context_->Unmap(constants_.Get(), 0);
     }
     const D3D11_VIEWPORT viewport{0, 0, static_cast<float>(width_), static_cast<float>(height_), 0, 1};
@@ -299,6 +307,13 @@ RenderedFrame StressRenderer::render(uint32_t counter, double seconds, int loadL
 
     RenderedFrame frame;
     frame.presented = SUCCEEDED(swapChain_->Present(0, tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0));
+    // Whether DWM composes this window or it flips independently: a capture
+    // session can force composition, which costs the game latency and GPU time.
+    ComPtr<IDXGISwapChainMedia> media;
+    DXGI_FRAME_STATISTICS_MEDIA statistics{};
+    if (SUCCEEDED(swapChain_.As(&media)) && SUCCEEDED(media->GetFrameStatisticsMedia(&statistics))) {
+        frame.presentationMode = static_cast<int>(statistics.CompositionMode);
+    }
     if (measureLoad) frame.loadGpuMs = readLoadTimestamps();
     return frame;
 }

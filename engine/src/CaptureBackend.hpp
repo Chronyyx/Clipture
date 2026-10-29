@@ -155,7 +155,8 @@ public:
         bool needsUnorderedAccess,
         std::string& error,
         bool deferredHdr = false,
-        bool sharePrepared = false);
+        bool sharePrepared = false,
+        bool externalHdrInput = false);
     void reset();
 
 private:

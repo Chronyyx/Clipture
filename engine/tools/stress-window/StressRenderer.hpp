@@ -13,6 +13,9 @@ struct RenderedFrame {
     bool presented = false;
     // GPU time of the load layers, when a timestamp measurement was requested.
     double loadGpuMs = -1;
+    // DXGI_FRAME_PRESENTATION_MODE of the last statistics (0 composed, 1 overlay,
+    // 2 none, 3 composition failure), or -1 when unavailable.
+    int presentationMode = -1;
 };
 
 // Uncapped flip-model renderer: scrolling detail plus a moving bar so every
@@ -27,6 +30,8 @@ public:
     // D3D11 GPU thread priority (-7..7), as games may raise theirs. Returns the active value.
     int setGpuPriority(int priority);
     RenderedFrame render(uint32_t counter, double seconds, int loadLayers, bool measureLoad);
+    // Draws six known-colour squares for capture colour checks (SDR only).
+    void showPatches(bool show) { patches_ = show && !hdr_; }
 
     // GPU milliseconds of one load layer, averaged over `frames` measured frames.
     double calibrateLayerMs(int layers, int frames);
@@ -61,6 +66,7 @@ private:
     bool tearing_ = false;
     bool hdr_ = false;
     bool computeLoad_ = false;
+    bool patches_ = false;
 };
 
 }  // namespace clipture::stress

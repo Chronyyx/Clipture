@@ -1,4 +1,5 @@
 #include "clipture/ReplaySegmentStore.hpp"
+#include "clipture/platform/ThreadName.hpp"
 #include "clipture/replay/InPlacePacketArchive.hpp"
 #include "clipture/replay/Mp4SamplePacker.hpp"
 
@@ -840,6 +841,7 @@ struct ReplaySegmentStore::Impl {
     }
 
     void run() {
+        nameCurrentThread(L"replay-store");
         const int previousPriority = GetThreadPriority(GetCurrentThread());
         const bool backgroundMode = SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) != FALSE;
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);

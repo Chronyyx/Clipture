@@ -29,6 +29,7 @@ const USAGE = `Usage: node scripts/performance/run-stress-trial.cjs [options]
   --no-solo             skip the window-alone pass (no windowCost; needs --layer-ms or --baseline)
   --compute-load        issue GPU load as compute dispatches (volumetric smoke style)
   --audio               play soft noise from the window during GPU-loaded phases
+  --patches             draw six known-colour squares for capture colour checks (SDR window)
   --as-game             run the window as cs2.exe so game detection and game-audio capture bind to it
   --daily-audio         capture audio like the daily app (sources from %APPDATA%\Clipture\data\settings.json)
   --env KEY=VALUE       engine environment override; repeatable
@@ -52,6 +53,7 @@ function parseArgs(argv) {
     else if (arg === '--compute-load') options.computeLoad = true;
     else if (arg === '--daily-audio') options.dailyAudio = true;
     else if (arg === '--audio') options.audio = true;
+    else if (arg === '--patches') options.patches = true;
     else if (arg === '--as-game') options.asGame = true;
     else if (arg === '--cpu-games-priority') options.cpuGamesPriority = true;
     else if (arg === '--gpu-priority') options.gpuPriority = Number(value());
@@ -146,6 +148,7 @@ async function main() {
     ...(options.renderSize ? ['--render-size', options.renderSize] : []),
     ...(options.cpuThreads ? ['--cpu-threads', String(options.cpuThreads), '--cpu-busy', String(options.cpuBusy)] : []),
     ...(options.computeLoad ? ['--compute-load'] : []), ...(options.audio ? ['--audio'] : []),
+    ...(options.patches ? ['--patches'] : []),
     ...(options.cpuGamesPriority ? ['--cpu-games-priority'] : []),
     ...(options.gpuPriority ? ['--gpu-priority', String(options.gpuPriority)] : []),
     ...(options.vramMb ? ['--vram-mb', String(options.vramMb)] : [])];

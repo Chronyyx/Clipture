@@ -36,6 +36,7 @@ struct Options {
     int cpuThreads = 0;
     int cpuBusyPercent = 100;
     bool computeLoad = false;
+    bool patches = false;
     bool audio = false;
     bool cpuGamesPriority = false;
     int gpuPriority = 0;
@@ -48,6 +49,7 @@ struct FrameRecord {
     int phase;
     int64_t presentUs;
     bool foreground;
+    int presentationMode = -1;
 };
 
 std::atomic<bool> g_start{false};
@@ -105,6 +107,7 @@ bool parseOptions(int argc, char** argv, Options& options) {
         else if (arg == "--hdr") options.hdr = true;
         else if (arg == "--reflex") options.reflex = true;
         else if (arg == "--compute-load") options.computeLoad = true;
+        else if (arg == "--patches") options.patches = true;
         else if (arg == "--audio") options.audio = true;
         else if (arg == "--cpu-games-priority") options.cpuGamesPriority = true;
         else if (arg == "--gpu-priority" && hasValue) options.gpuPriority = std::clamp(std::atoi(argv[++i]), -7, 7);
@@ -115,7 +118,7 @@ bool parseOptions(int argc, char** argv, Options& options) {
                  std::sscanf(argv[++i], "%dx%d", &options.renderWidth, &options.renderHeight) == 2) {}
         else {
             std::cerr << "Usage: clipture_stress_window [--timeline name:seconds:loadMs,...] [--out dir]\n"
-                         "       [--layer-ms ms] [--max-latency 1-16] [--autostart] [--hdr] [--render-size WxH]\n"
+                         "       [--layer-ms ms] [--max-latency 1-16] [--autostart] [--hdr] [--patches] [--render-size WxH]\n"
                          "       [--cpu-threads N] [--cpu-busy 1-100] [--compute-load] [--audio] [--cpu-games-priority] [--gpu-priority -7..7]\n"
                          "       [--vram-mb N]\n";
             return false;
@@ -162,6 +165,7 @@ void writeResults(const Options& options, const StressTimeline& timeline, const 
     for (size_t phase = 0; phase < names.size(); ++phase) {
         std::vector<double> intervals;
         int64_t first = -1, last = -1, count = 0, foreground = 0;
+        int64_t modes[5] {};  // composed, overlay, none, composition failure, unknown
         uint32_t firstFrame = 0, lastFrame = 0;
         for (size_t i = 0; i < frames.size(); ++i) {
             if (frames[i].phase != static_cast<int>(phase)) continue;
@@ -170,6 +174,7 @@ void writeResults(const Options& options, const StressTimeline& timeline, const 
             last = frames[i].presentUs;
             lastFrame = frames[i].counter;
             foreground += frames[i].foreground ? 1 : 0;
+            ++modes[frames[i].presentationMode >= 0 && frames[i].presentationMode < 4 ? frames[i].presentationMode : 4];
             ++count;
         }
         const double seconds = count > 1 ? (last - first) / 1e6 : 0;
@@ -178,7 +183,9 @@ void writeResults(const Options& options, const StressTimeline& timeline, const 
              << ",\"lastFrame\":" << lastFrame << ",\"foregroundPct\":" << (count ? 100.0 * foreground / count : 0) << ",\"seconds\":" << seconds
              << ",\"fps\":" << (seconds > 0 ? (count - 1) / seconds : 0)
              << ",\"frameMsP50\":" << percentile(intervals, 0.5) << ",\"frameMsP99\":" << percentile(intervals, 0.99)
-             << ",\"frameMsMax\":" << percentile(intervals, 1.0) << "}";
+             << ",\"frameMsMax\":" << percentile(intervals, 1.0)
+             << ",\"presentationModes\":{\"composed\":" << modes[0] << ",\"overlay\":" << modes[1]
+             << ",\"none\":" << modes[2] << ",\"failure\":" << modes[3] << ",\"unknown\":" << modes[4] << "}}";
     }
     json << "]}\n";
 }
@@ -219,6 +226,7 @@ int main(int argc, char** argv) {
         std::cerr << error << '\n';
         return 1;
     }
+    renderer.showPatches(options.patches);
     Reflex reflex;
     if (options.reflex && !reflex.enable(renderer.device(), true, error)) {
         std::cerr << "Reflex: " << error << '\n';
@@ -280,9 +288,9 @@ int main(int argc, char** argv) {
         audioLoad.setActive(layers[phase] > 0);
         vramLoad.touch();
         reflex.sleep();
-        renderer.render(counter, nowUs / 1e6, layers[phase], false);
+        const auto rendered = renderer.render(counter, nowUs / 1e6, layers[phase], false);
         QueryPerformanceCounter(&now);
-        frames.push_back({counter, phase, micros(now), GetForegroundWindow() == window});
+        frames.push_back({counter, phase, micros(now), GetForegroundWindow() == window, rendered.presentationMode});
     }
     DestroyWindow(window);
     writeResults(options, *timeline, frames, layers, width, height, bufferWidth, bufferHeight);
