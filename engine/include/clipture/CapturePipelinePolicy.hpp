@@ -24,6 +24,9 @@ struct CapturePipelinePolicy {
     bool hybridGameCapture = true;
     // WGC frames wait unprepared until the encoder's tick (HeldFrame.hpp).
     bool holdUntilTick = true;
+    // While the game window is recorded, a tick with no game-window frame takes
+    // the newest desktop frame, which WGC still delivers (ADR 0022).
+    bool desktopGapFill = false;
 };
 inline const CapturePipelinePolicy& capturePipelinePolicy() {
     static const auto policy = [] {
@@ -49,6 +52,7 @@ inline const CapturePipelinePolicy& capturePipelinePolicy() {
         result.timedCatchUp = flag(L"CLIPTURE_TIMED_CATCH_UP", result.timedCatchUp);
         result.hybridGameCapture = flag(L"CLIPTURE_HYBRID_GAME_CAPTURE", result.hybridGameCapture);
         result.holdUntilTick = flag(L"CLIPTURE_HOLD_UNTIL_TICK", result.holdUntilTick);
+        result.desktopGapFill = flag(L"CLIPTURE_DESKTOP_GAP_FILL", result.desktopGapFill);
         return result;
     }();
     return policy;

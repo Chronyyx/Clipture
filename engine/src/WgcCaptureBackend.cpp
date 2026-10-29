@@ -92,6 +92,11 @@ struct WgcCaptureBackend::Impl {
     // Set while the encoder flushes held frames at its ticks; frames are held
     // only then.
     FrameQueue* pullQueue = nullptr;
+    // Desktop gap fill (guarded by callbackMutex): the newest desktop frame
+    // while the game window is recorded, and whether a game-window frame was
+    // queued since the encoder's last tick.
+    winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame gapFillFrame { nullptr };
+    bool gameQueuedSinceTick = false;
     bool apartmentInitialized = false;
     DWORD apartmentThreadId = 0;
 
@@ -163,6 +168,42 @@ struct WgcCaptureBackend::Impl {
         }
     }
 
+    void dropGapFill() {
+        if (gapFillFrame) { try { gapFillFrame.Close(); } catch (...) {} }
+        gapFillFrame = nullptr;
+    }
+
+    // Keeps only the newest unprepared desktop frame. Called with callbackMutex held.
+    void keepNewestDesktopFrame(Direct3D11CaptureFramePool const& pool) {
+        while (auto frame = pool.TryGetNextFrame()) {
+            traceArrival(frame, false);
+            const auto size = frame.ContentSize();
+            if (size.Width != framePoolSize.Width || size.Height != framePoolSize.Height) {
+                try { frame.Close(); } catch (...) {}
+                continue;
+            }
+            dropGapFill();
+            gapFillFrame = frame;
+        }
+    }
+
+    // The encoder woke for a tick: queue the held game frame, or, if no game
+    // frame was queued since the last tick, the newest desktop frame.
+    void flushForTick() {
+        heldFrame.flush([this](PendingFrame pending) { prepareAndPublish(std::move(pending)); });
+        if (!gameQueuedSinceTick && gapFillFrame) {
+            const int64_t sourceRelative100ns = gapFillFrame.SystemRelativeTime().count();
+            int64_t outputTimestamp100ns = 0;
+            if (sourceClock.accept(sourceRelative100ns) &&
+                shared->selectFrameTimestamp(mediaTimeFromSystemRelative100ns(sourceRelative100ns), outputTimestamp100ns)) {
+                ++shared->desktopPresents;
+                prepareAndPublish({ std::move(gapFillFrame), outputTimestamp100ns, framePoolSize, false });
+            }
+            dropGapFill();
+        }
+        gameQueuedSinceTick = false;
+    }
+
     static void closePending(PendingFrame pending) {
         try { pending.frame.Close(); } catch (...) {}
     }
@@ -195,6 +236,7 @@ struct WgcCaptureBackend::Impl {
             }
             return;
         }
+        if (pending.fromGame) gameQueuedSinceTick = true;
         shared->publish(
             std::move(prepared.owned.texture),
             std::move(prepared.owned.lease),
@@ -220,9 +262,11 @@ struct WgcCaptureBackend::Impl {
                 return;
             }
             if (fromGame != recordGame.load(std::memory_order_acquire)) {
-                drain(sender, fromGame);
+                if (!fromGame && pullQueue && capturePipelinePolicy().desktopGapFill) keepNewestDesktopFrame(sender);
+                else drain(sender, fromGame);
                 return;
             }
+            if (!fromGame) dropGapFill();
 
             while (auto frame = sender.TryGetNextFrame()) {
                 traceArrival(frame, fromGame);
@@ -388,6 +432,7 @@ struct WgcCaptureBackend::Impl {
         }
         std::lock_guard callbackLock(callbackMutex);
         heldFrame.drop(closePending);
+        dropGapFill();
         if (game.session) {
             try { game.session.Close(); } catch (...) {}
         }
@@ -595,9 +640,7 @@ BackendStartResult WgcCaptureBackend::start() {
             if (auto* queue = state.shared->frameQueue.load(std::memory_order_acquire)) {
                 queue->setBeforeSelect([impl = impl_.get()] {
                     std::lock_guard callbackLock(impl->callbackMutex);
-                    impl->heldFrame.flush([impl](Impl::PendingFrame pending) {
-                        impl->prepareAndPublish(std::move(pending));
-                    });
+                    impl->flushForTick();
                 });
                 std::lock_guard callbackLock(state.callbackMutex);
                 state.pullQueue = queue;
@@ -663,6 +706,7 @@ void WgcCaptureBackend::stop() {
     {
         std::lock_guard callbackLock(state.callbackMutex);
         state.heldFrame.drop(Impl::closePending);
+        state.dropGapFill();
         if (state.session) {
             try {
                 state.session.Close();

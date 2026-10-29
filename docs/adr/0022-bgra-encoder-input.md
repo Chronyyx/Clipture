@@ -89,8 +89,11 @@ gaps over 20 ms across three runs, the desktop source kept delivering, at a
 median of 80-86 distinct images per second (122-136 overall): CS2 presented
 and the monitor showed it, but Windows.Graphics.Capture of the game window
 skipped those frames. They are outside the capture pipeline and not addressed
-here. Hybrid capture receives those desktop frames and discards them; using the
-newest one for a tick that has no game-window frame would fill most of them.
+here. Hybrid capture receives those desktop frames and discards them.
+`CLIPTURE_DESKTOP_GAP_FILL=1` (off by default) keeps the newest one unprepared
+and lets the encoder's flush queue it for a tick with no game-window frame. The
+stress window has no such gaps (longest 23 ms), so it needs a live CS2 check
+before it becomes a default.
 
 Known colours (pure RGB, grey 128, a skin tone, white) captured through both
 paths decode to identical 8-bit values. Desktop, headless, two runs each:
