@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 
-Status: proposed; not implemented. Recorded for a later pass after ADR 0018.
+Status: option 2 tried and rejected 2026-10-29 (see Result). Options 1 and 3 remain open.
 
 ## Context
 
@@ -53,3 +53,22 @@ with the stress window recording the game window (`--as-game`), at least two
 alternated runs per configuration under normal load and with `--vram-mb 8600`.
 Check alt-tab and overlay switches for repeated or late frames after a resize,
 and confirm in a real game before changing the default.
+
+## Result (2026-10-29)
+
+Option 2 was implemented with `Recreate` on every recorded-source switch: the
+recorded pool at four buffers, the other at one (two while ADR 0022's desktop
+gap fill holds a frame). Stress window as the game, Reflex on, ADR 0021 holding
+and ADR 0022 BGRA input, two alternated runs each, all with the window in
+front:
+
+| | Engine dedicated VRAM | Committed RAM | Stutter / slot drops |
+| --- | ---: | ---: | --- |
+| Four buffers per pool | 714-729 MB | 439 MB | 0-2 / 0 |
+| Resized on switch | 834-909 MB | 439-454 MB | 0-1 / 0 |
+
+VRAM stayed flat at the higher level for the whole run, also with a context
+flush and `IDXGIDevice3::Trim` after each resize: `Recreate` does not return the
+old buffers, so resizing adds memory. Reverted. Any pool sizing must be decided
+when a pool is created (option 1), not by recreating a live pool.
+
