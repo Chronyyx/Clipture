@@ -19,7 +19,7 @@ FrameSelectionTrace::Config environment(uint32_t capacity) {
     if (const auto seconds = _wgetenv(L"CLIPTURE_SELECTION_TRACE_SECONDS")) {
         wchar_t* end = nullptr;
         const long value = wcstol(seconds, &end, 10);
-        if (end != seconds && !*end && value >= 10 && value <= 180) config.milliseconds = static_cast<uint32_t>(value * 1000);
+        if (end != seconds && !*end && value >= 10 && value <= 600) config.milliseconds = static_cast<uint32_t>(value * 1000);
     }
     return config;
 }
@@ -37,8 +37,8 @@ struct FrameSelectionTrace::State {
     std::vector<Event> events;
     std::thread writer;
     explicit State(Config next) : config(std::move(next)) {
-        config.limit = std::clamp(config.limit, 1u, 65'536u);
-        config.milliseconds = std::clamp(config.milliseconds, 1u, 180'000u);
+        config.limit = std::clamp(config.limit, 1u, 524'288u);
+        config.milliseconds = std::clamp(config.milliseconds, 1u, 600'000u);
         events.reserve(config.limit);
         // Never overwrite an earlier trial. Open once, serialize only after collection.
         file = CreateFileW(config.path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,

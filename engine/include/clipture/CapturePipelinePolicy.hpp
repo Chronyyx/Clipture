@@ -7,7 +7,10 @@ namespace clipture {
 struct CapturePipelinePolicy {
     // Prepared at capture: queued frames hold no raw HDR copy (ADR 0018).
     bool deferPreparation = false;
-    bool nv12Input = true;
+    // NVENC takes the BGRA slot copy and converts colour itself. A per-frame
+    // NV12 conversion pass shares the game's 3D engine and, under real game
+    // load, held capture slots long enough to drop frames (ADR 0022).
+    bool nv12Input = false;
     bool isolatedDevice = true;
     bool gpuHandoff = true;
     bool idleBackoff = true;

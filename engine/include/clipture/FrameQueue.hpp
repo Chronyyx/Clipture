@@ -86,6 +86,10 @@ public:
     void setBeforeSelect(std::function<void()> hook);
     void beforeSelect();
 
+    // Selection trace only (CLIPTURE_SELECTION_TRACE_PATH): capture-side
+    // events, `source` in system-relative 100 ns.
+    void traceCapture(char kind, int64_t source100ns, uint32_t flags, uint64_t sequence = 0);
+
 private:
     bool supersededBy(int64_t olderPts100ns, int64_t newerPts100ns) const;
 

@@ -19,6 +19,7 @@ const USAGE = `Usage: node scripts/performance/run-stress-trial.cjs [options]
   --fps <n>             capture frame rate (default: 120)
   --timeline <spec>     name:seconds:loadMs,... (default: ${DEFAULT_TIMELINE})
   --hdr                 present FP16 scRGB with HDR highlights
+  --reflex              NVIDIA Reflex low latency + boost in the window, as CS2 "On + Boost"
   --render-size <WxH>   render smaller and stretch to the screen (e.g. 1920x1440 4:3)
   --cpu-threads <n>     CPU-burning threads during GPU-loaded phases (game simulation)
   --cpu-busy <pct>      busy share of each CPU thread (default 100)
@@ -36,7 +37,7 @@ const USAGE = `Usage: node scripts/performance/run-stress-trial.cjs [options]
 
 function parseArgs(argv) {
   const options = { label: 'trial', engine: path.join(release, 'clipture_engine.exe'), fps: 120,
-    timeline: DEFAULT_TIMELINE, hdr: false, renderSize: null, cpuThreads: 0, cpuBusy: 100, computeLoad: false, dailyAudio: false, audio: false, asGame: false, cpuGamesPriority: false, gpuPriority: 0, vramMb: 0, env: {}, layerMs: 0, baseline: null };
+    timeline: DEFAULT_TIMELINE, hdr: false, renderSize: null, cpuThreads: 0, cpuBusy: 100, computeLoad: false, dailyAudio: false, audio: false, asGame: false, reflex: false, cpuGamesPriority: false, gpuPriority: 0, vramMb: 0, env: {}, layerMs: 0, baseline: null };
   for (let i = 0; i < argv.length; ++i) {
     const arg = argv[i], value = () => { if (i + 1 >= argv.length) throw Error(USAGE); return argv[++i]; };
     if (arg === '--label') options.label = value();
@@ -44,6 +45,7 @@ function parseArgs(argv) {
     else if (arg === '--fps') options.fps = Number(value());
     else if (arg === '--timeline') options.timeline = value();
     else if (arg === '--hdr') options.hdr = true;
+    else if (arg === '--reflex') options.reflex = true;
     else if (arg === '--render-size') options.renderSize = value();
     else if (arg === '--cpu-threads') options.cpuThreads = Number(value());
     else if (arg === '--cpu-busy') options.cpuBusy = Number(value());
@@ -140,6 +142,7 @@ async function main() {
   }
   const windowArgs = out => ['--timeline', options.timeline, '--out', out,
     ...(options.layerMs ? ['--layer-ms', String(options.layerMs)] : []), ...(options.hdr ? ['--hdr'] : []),
+    ...(options.reflex ? ['--reflex'] : []),
     ...(options.renderSize ? ['--render-size', options.renderSize] : []),
     ...(options.cpuThreads ? ['--cpu-threads', String(options.cpuThreads), '--cpu-busy', String(options.cpuBusy)] : []),
     ...(options.computeLoad ? ['--compute-load'] : []), ...(options.audio ? ['--audio'] : []),
@@ -182,7 +185,7 @@ async function main() {
     idleReleases: (engine.after[releases] ?? 0) - (engine.before[releases] ?? 0) };
   const report = {
     label: options.label, startedAt: engine.startedAt, engine: options.engine, env: options.env,
-    fps: options.fps, timeline: options.timeline, hdrWindow: options.hdr, renderSize: options.renderSize,
+    fps: options.fps, timeline: options.timeline, hdrWindow: options.hdr, reflex: options.reflex, renderSize: options.renderSize,
     cpuThreads: options.cpuThreads, cpuBusy: options.cpuBusy, computeLoad: options.computeLoad, dailyAudio: options.dailyAudio, audio: options.audio, asGame: options.asGame, cpuGamesPriority: options.cpuGamesPriority, gpuPriority: options.gpuPriority, layerMs: options.layerMs,
     hdrTonemapping: engine.after.hdrTonemapping ?? null, video,
     slotPools: { capture: slotPool('captureTextureSlots', 'captureTextureSlotIdleReleases'),

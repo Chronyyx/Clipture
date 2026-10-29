@@ -36,6 +36,9 @@ private:
     double readLoadTimestamps();
 
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
+public:
+    ID3D11Device* device() const { return device_.Get(); }
+private:
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain_;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> target_;

@@ -1,5 +1,6 @@
 // Synthetic capture workload: an uncapped, frame-stamped, full-screen window
 // whose GPU load follows a scripted timeline. See README.md.
+#include "Reflex.hpp"
 #include "AudioLoad.hpp"
 #include "CpuLoad.hpp"
 #include "StressRenderer.hpp"
@@ -39,6 +40,7 @@ struct Options {
     bool cpuGamesPriority = false;
     int gpuPriority = 0;
     int vramMb = 0;
+    bool reflex = false;
 };
 
 struct FrameRecord {
@@ -101,6 +103,7 @@ bool parseOptions(int argc, char** argv, Options& options) {
         else if (arg == "--max-latency" && hasValue) options.maxFrameLatency = std::clamp(std::atoi(argv[++i]), 1, 16);
         else if (arg == "--autostart") options.autostart = true;
         else if (arg == "--hdr") options.hdr = true;
+        else if (arg == "--reflex") options.reflex = true;
         else if (arg == "--compute-load") options.computeLoad = true;
         else if (arg == "--audio") options.audio = true;
         else if (arg == "--cpu-games-priority") options.cpuGamesPriority = true;
@@ -153,7 +156,7 @@ void writeResults(const Options& options, const StressTimeline& timeline, const 
     const int refreshHz = EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) ? static_cast<int>(mode.dmDisplayFrequency) : 0;
     json << "{\"width\":" << width << ",\"height\":" << height << ",\"refreshHz\":" << refreshHz << ",\"bufferWidth\":" << bufferWidth
          << ",\"bufferHeight\":" << bufferHeight << ",\"layerMs\":" << options.layerMs
-         << ",\"maxFrameLatency\":" << options.maxFrameLatency
+         << ",\"maxFrameLatency\":" << options.maxFrameLatency << ",\"reflex\":" << (options.reflex ? "true" : "false")
          << ",\"hdr\":" << (options.hdr ? "true" : "false") << ",\"timeline\":\"" << options.timeline
          << "\",\"phases\":[";
     for (size_t phase = 0; phase < names.size(); ++phase) {
@@ -216,6 +219,11 @@ int main(int argc, char** argv) {
         std::cerr << error << '\n';
         return 1;
     }
+    Reflex reflex;
+    if (options.reflex && !reflex.enable(renderer.device(), true, error)) {
+        std::cerr << "Reflex: " << error << '\n';
+        return 1;
+    }
     VramLoad vramLoad(options.vramMb);
     const int activeGpuPriority = options.gpuPriority ? renderer.setGpuPriority(options.gpuPriority) : 0;
     if (options.layerMs <= 0) options.layerMs = renderer.calibrateLayerMs(8, 40);
@@ -271,6 +279,7 @@ int main(int argc, char** argv) {
         cpuLoad.setActive(layers[phase] > 0);
         audioLoad.setActive(layers[phase] > 0);
         vramLoad.touch();
+        reflex.sleep();
         renderer.render(counter, nowUs / 1e6, layers[phase], false);
         QueryPerformanceCounter(&now);
         frames.push_back({counter, phase, micros(now), GetForegroundWindow() == window});

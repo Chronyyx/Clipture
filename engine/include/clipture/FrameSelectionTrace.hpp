@@ -8,12 +8,15 @@ namespace clipture {
 class FrameSelectionTrace {
 public:
     struct Event {
-        char kind = 'p'; // publication, tick, clear, unsupported consumer
+        // publication (p), tick (t), late tick (l), clear (c), unsupported
+        // consumer (u); capture arrival (a), recorded-source switch (s),
+        // hybrid coverage change (v)
+        char kind = 'p';
         int64_t at = 0, source = 0, deadline = 0;
         uint64_t epoch = 0, sequence = 0;
         uint32_t depth = 0, coalesced = 0, overflow = 0, fps = 0;
     };
-    struct Config { std::wstring path; uint32_t milliseconds = 90'000, limit = 65'536, queueCapacity = 8; };
+    struct Config { std::wstring path; uint32_t milliseconds = 90'000, limit = 524'288, queueCapacity = 8; };
     explicit FrameSelectionTrace(uint32_t queueCapacity);
     explicit FrameSelectionTrace(Config config);
     ~FrameSelectionTrace();

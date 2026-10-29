@@ -144,8 +144,21 @@ struct WgcCaptureBackend::Impl {
     std::unique_ptr<OverlayWindowCapture> overlayCapture;
     static constexpr int64_t kGameSwitchDelay100ns = 2'000'000;  // 200 ms of steady coverage
 
-    static void drain(Direct3D11CaptureFramePool const& pool) {
+    // Selection trace: every frame Windows delivers. Flags: 1 game window,
+    // 2 recorded source, 4 game frames verified.
+    void traceArrival(winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame const& frame, bool fromGame) {
+        auto* queue = shared->frameQueue.load(std::memory_order_acquire);
+        if (!queue) return;
+        int64_t source = 0;
+        try { source = frame.SystemRelativeTime().count(); } catch (...) {}
+        const uint32_t flags = (fromGame ? 1u : 0u) |
+            (fromGame == recordGame.load(std::memory_order_acquire) ? 2u : 0u) | (game.verified ? 4u : 0u);
+        queue->traceCapture('a', source, flags);
+    }
+
+    void drain(Direct3D11CaptureFramePool const& pool, bool fromGame) {
         while (auto frame = pool.TryGetNextFrame()) {
+            traceArrival(frame, fromGame);
             try { frame.Close(); } catch (...) {}
         }
     }
@@ -207,11 +220,12 @@ struct WgcCaptureBackend::Impl {
                 return;
             }
             if (fromGame != recordGame.load(std::memory_order_acquire)) {
-                drain(sender);
+                drain(sender, fromGame);
                 return;
             }
 
             while (auto frame = sender.TryGetNextFrame()) {
+                traceArrival(frame, fromGame);
                 ++shared->acquiredUpdates;
 
                 const auto size = frame.ContentSize();
@@ -388,8 +402,22 @@ struct WgcCaptureBackend::Impl {
 
     void setRecordGame(bool next, const std::string& reason) {
         if (recordGame.exchange(next, std::memory_order_acq_rel) == next) return;
+        if (auto* queue = shared->frameQueue.load(std::memory_order_acquire)) {
+            queue->traceCapture('s', monotonicNow100ns(), next ? 1u : 0u);
+        }
         std::cerr << "[capture] Hybrid capture records "
                   << (next ? "the game window" : "the desktop: " + reason) << ".\n";
+    }
+
+    // Selection trace: why hybrid capture keeps the desktop. Codes: 1 overlay,
+    // 2 waiting for game frames, 3 size mismatch, 4 other.
+    void traceCoverage(const std::string& reason) {
+        auto* queue = shared->frameQueue.load(std::memory_order_acquire);
+        if (!queue) return;
+        const uint32_t code = reason.find("overlay") != std::string::npos ? 1u
+            : reason.find("waiting") != std::string::npos ? 2u
+            : reason.find("game window is") != std::string::npos ? 3u : 4u;
+        queue->traceCapture('v', monotonicNow100ns(), code);
     }
 
     // Runs on the backend thread every poll.
@@ -428,12 +456,18 @@ struct WgcCaptureBackend::Impl {
             coveredSince100ns = 0;
             if (coverage.reason != lastCoverageReason) {
                 lastCoverageReason = coverage.reason;
+                traceCoverage(coverage.reason);
                 if (!recordGame.load(std::memory_order_acquire)) {
                     std::cerr << "[capture] Hybrid capture stays on the desktop: " << coverage.reason << ".\n";
                 }
             }
             setRecordGame(false, coverage.reason);
             return;
+        }
+        if (!lastCoverageReason.empty()) {
+            if (auto* queue = shared->frameQueue.load(std::memory_order_acquire)) {
+                queue->traceCapture('v', monotonicNow100ns(), 0);
+            }
         }
         lastCoverageReason.clear();
         const int64_t now = monotonicNow100ns();

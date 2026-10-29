@@ -53,6 +53,11 @@ bool FrameQueue::wouldSupersede(int64_t olderPts100ns, int64_t newerPts100ns) co
     return supersededBy(olderPts100ns, newerPts100ns);
 }
 
+void FrameQueue::traceCapture(char kind, int64_t source100ns, uint32_t flags, uint64_t sequence) {
+    if (!selectionTrace_.enabled()) return;
+    selectionTrace_.record({kind, 0, source100ns, 0, 0, sequence, flags});
+}
+
 void FrameQueue::setBeforeSelect(std::function<void()> hook) {
     std::lock_guard lock(hookMutex_);
     beforeSelect_ = std::move(hook);
@@ -123,10 +128,17 @@ std::optional<CapturedFrame> FrameQueue::consumeLatestAtOrBefore(int64_t pts100n
     std::lock_guard lock(mutex_);
     std::optional<CapturedFrame> latest;
     std::size_t consumed = 0;
+    const auto depth = frames_.size();
     while (!frames_.empty() && frames_.front().pts100ns <= pts100ns) {
         latest = std::move(frames_.front());
         frames_.pop_front();
         ++consumed;
+    }
+    if (selectionTrace_.enabled()) {
+        const auto& anchor = detail::mediaClockAnchor();
+        selectionTrace_.record({'l', 0, 0, pts100ns - anchor.fileTime100ns + anchor.systemRelative100ns,
+            latest ? latest->captureEpoch : 0, latest ? latest->sequence : 0, static_cast<uint32_t>(depth),
+            static_cast<uint32_t>(consumed > 1 ? consumed - 1 : 0)});
     }
     if (consumed > 1) stats_.coalescedDrops += consumed - 1;
     return latest;
