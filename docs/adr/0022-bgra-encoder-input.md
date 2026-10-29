@@ -60,6 +60,23 @@ growth); 590 with 987; 884 with 1,359 (NV12 block); 23 with 1 (BGRA block); 6
 with 1 (lobby). A drop repeats a tick only when no other frame for that tick
 was queued, so the repeat count stays below the drop count.
 
+A second match, BGRA input, 102 s recording the game window: 1 slot drop, 19
+in-time-but-unqueued repeats, 1.6 repeats per second in all.
+
+The stress window reproduces it once the window runs NVIDIA Reflex low latency
+with boost (`--reflex`, as CS2's "On + Boost"); without Reflex it never did.
+ADR 0015 setup, 60 FPS, no encoder stall injected:
+
+| Stress window | Reflex | Slot drops | Missed | Longest freeze |
+| --- | --- | ---: | ---: | ---: |
+| NV12 | on | 7, 31 | 43, 28 | 133, 67 ms |
+| BGRA | on | 0, 0 | 2, 1 | 50, 33 ms |
+| NV12 | off | 0 | 1 | 33 ms |
+
+The first NV12 run with Reflex lost the foreground; its 58 stutter frames are
+weaker evidence than its drops. Lab trials of encoder input changes must use
+`--reflex` from now on.
+
 The remaining repeats, about 1.5 per second in every run whatever the input
 path, are intervals in which Windows delivered no game-window frame at all
 (187 of 190 in the BGRA block; 3 had frames whose timestamps were older than
@@ -79,6 +96,6 @@ not rule out stalls under shared GPU contention.
 
 Scaled output (a recording resolution below the source) still converts on the
 GPU through the video processor and can still stall under a saturated game.
-One live match was measured; confirm across more sessions. Running a second
+Two live matches and the Reflex stress window were measured. Running a second
 engine during a match caused visible hitches for the player: live probes are
 for investigation only.
