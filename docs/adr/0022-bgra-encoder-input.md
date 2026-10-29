@@ -53,6 +53,18 @@ developer's own Clipture, HDR 2560x1440 at 210 Hz, RTX 3080:
 | Capture slot drops | 1,352 | 1 |
 | Distinct output FPS | 51.2 | 58.2 |
 
+Repeats the trace attributes to a frame that arrived in time but was never
+queued follow the engine's slot drops run by run (all while recording the game
+window): 1,227 with 2,036 drops over four minutes; 761 with 1,100 (pool
+growth); 590 with 987; 884 with 1,359 (NV12 block); 23 with 1 (BGRA block); 6
+with 1 (lobby). A drop repeats a tick only when no other frame for that tick
+was queued, so the repeat count stays below the drop count.
+
+The remaining repeats, about 1.5 per second in every run whatever the input
+path, are intervals in which Windows delivered no game-window frame at all
+(187 of 190 in the BGRA block; 3 had frames whose timestamps were older than
+the interval). They are outside the capture pipeline and not addressed here.
+
 Known colours (pure RGB, grey 128, a skin tone, white) captured through both
 paths decode to identical 8-bit values. Desktop, headless, two runs each:
 engine CPU 0.27-0.28 cores against 0.25, engine dedicated VRAM 773-803 MB
