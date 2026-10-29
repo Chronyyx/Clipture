@@ -2062,16 +2062,21 @@ private:
         slot.surfaceSourceFrameSequence = 0;
     }
 
-    // Frees one surplus slot that has not been reserved recently. Reservations
-    // take the lowest free index, so idle slots collect past the warm set.
+    // Frees one slot that has not been reserved recently. Reservations take the
+    // lowest free index, so idle slots collect at the top. Past the warm set the
+    // whole slot goes; warm slots keep their small bitstream buffer but drop
+    // their full-frame input surface, so surfaces follow the frames actually in
+    // flight rather than the largest burst since the session started.
     void releaseIdleOutputSlot() {
         const int64_t now = monotonicNow100ns();
         OutputSlot* idle = nullptr;
+        bool warm = false;
         {
             std::lock_guard lock(outputMutex_);
-            for (std::size_t index = outputSlots_.size(); index > kWarmNvencOutputSlots; --index) {
+            for (std::size_t index = outputSlots_.size(); index > 0; --index) {
                 auto& slot = outputSlots_[index - 1];
-                if (slot.inFlight || (!slot.bitstreamBuffer && !slot.scaledTexture)) continue;
+                warm = index <= kWarmNvencOutputSlots;
+                if (slot.inFlight || (!slot.scaledTexture && (warm || !slot.bitstreamBuffer))) continue;
                 if (now - slot.lastReserved100ns < kIdleNvencOutputSlotRelease100ns) continue;
                 // Reserve it so no frame picks the slot while its buffers are freed.
                 slot.inFlight = true;
@@ -2081,7 +2086,7 @@ private:
         }
         if (!idle) return;
         releaseOutputSlotSurface(*idle);
-        releaseOutputSlotBuffers(*idle);
+        if (!warm) releaseOutputSlotBuffers(*idle);
         releaseOutputSlotReservation(*idle);
         if (outputSlotUsage_) ++outputSlotUsage_->idleReleases;
     }
