@@ -19,7 +19,7 @@ struct CapturePipelinePolicy {
     bool highPriorityCapture = true;
     bool timedCatchUp = true;
     bool hybridGameCapture = true;
-    // WGC frames wait unprepared for the tick's lead window (HeldFrame.hpp).
+    // WGC frames wait unprepared until the encoder's tick (HeldFrame.hpp).
     bool holdUntilTick = true;
 };
 inline const CapturePipelinePolicy& capturePipelinePolicy() {

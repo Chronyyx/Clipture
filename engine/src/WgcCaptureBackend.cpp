@@ -1,12 +1,10 @@
 #include "WgcCaptureBackend.hpp"
 #include "GameFrameProbe.hpp"
 #include "GameWindowCoverage.hpp"
-#include "MmcssCaptureRegistration.hpp"
 #include "OverlayWindowCapture.hpp"
 #include "WgcFramePreparation.hpp"
 #include "clipture/SourceTimestampGate.hpp"
 
-#include "clipture/DeadlineWait.hpp"
 #include "clipture/HeldFrame.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/Tonemapper.hpp"
@@ -21,9 +19,10 @@
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include <winrt/base.h>
 
-#include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -36,6 +35,24 @@ using winrt::Windows::Graphics::Capture::GraphicsCaptureItem;
 using winrt::Windows::Graphics::Capture::GraphicsCaptureSession;
 using winrt::Windows::Graphics::DirectX::DirectXPixelFormat;
 using winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
+
+// Fault injection for stress trials: CLIPTURE_TEST_PREPARE_STALL="<ms>,<onMs>,<offMs>"
+// delays every WGC frame preparation by <ms> for <onMs>, then none for <offMs>,
+// repeating: a driver queue that full GPU load suddenly backs up.
+void injectTestPrepareStall() {
+    static const auto config = [] {
+        struct { int ms = 0, onMs = 0, offMs = 0; } result;
+        if (const char* value = std::getenv("CLIPTURE_TEST_PREPARE_STALL")) {
+            std::sscanf(value, "%d,%d,%d", &result.ms, &result.onMs, &result.offMs);
+        }
+        return result;
+    }();
+    if (config.ms <= 0 || config.onMs <= 0) return;
+    static const int64_t start100ns = monotonicNow100ns();
+    const int64_t cycle100ns = int64_t {config.onMs + config.offMs} * 10'000;
+    if ((monotonicNow100ns() - start100ns) % cycle100ns >= int64_t {config.onMs} * 10'000) return;
+    std::this_thread::sleep_for(std::chrono::microseconds(config.ms * 1000));
+}
 
 }  // namespace
 
@@ -72,8 +89,9 @@ struct WgcCaptureBackend::Impl {
         bool fromGame = false;
     };
     HeldFrame<PendingFrame> heldFrame;  // guarded by callbackMutex
-    std::jthread leadWindowFlush;
-    static constexpr int64_t kFlushRecheck100ns = 10'000;  // 1 ms
+    // Set while the encoder flushes held frames at its ticks; frames are held
+    // only then.
+    FrameQueue* pullQueue = nullptr;
     bool apartmentInitialized = false;
     DWORD apartmentThreadId = 0;
 
@@ -148,6 +166,7 @@ struct WgcCaptureBackend::Impl {
             return;
         }
 
+        injectTestPrepareStall();
         std::string slotError;
         WgcOverlays overlays;
         if (pending.fromGame && overlayCapture) overlays = {overlayCompositor, overlayCapture->snapshot()};
@@ -177,30 +196,6 @@ struct WgcCaptureBackend::Impl {
         shared->frameProcessingLatency.record(
             frameProcessed100ns,
             frameProcessed100ns - frameProcessingStarted100ns);
-    }
-
-    // Prepares the held frame when the next encoder tick's lead window opens.
-    void runLeadWindowFlush(std::stop_token stop) {
-        MmcssCaptureRegistration mmcss(true, capturePipelinePolicy().highPriorityCapture);
-        DeadlineWait wait(0);
-        const auto running = [&] { return !stop.stop_requested(); };
-        while (running()) {
-            const auto* queue = shared->frameQueue.load(std::memory_order_acquire);
-            const int64_t deadline = queue ? queue->nextDeadline100ns() : 0;
-            const int64_t now = monotonicNow100ns();
-            const int64_t notBefore = tickAlignedAcquireNotBefore(now, deadline, kTickAlignedAcquireLead100ns);
-            if (notBefore > 0) {
-                wait.until(notBefore, running);
-                continue;
-            }
-            {
-                std::lock_guard callbackLock(callbackMutex);
-                heldFrame.flush([this](PendingFrame pending) { prepareAndPublish(std::move(pending)); });
-            }
-            // Until the encoder announces its next deadline, arrivals are
-            // prepared at once and nothing is held.
-            wait.until(std::max(deadline, now) + kFlushRecheck100ns, running);
-        }
     }
 
     void onFrames(Direct3D11CaptureFramePool const& sender, bool fromGame) {
@@ -282,8 +277,9 @@ struct WgcCaptureBackend::Impl {
                     prepare(std::move(pending));
                     continue;
                 }
-                const auto* queue = shared->frameQueue.load(std::memory_order_acquire);
-                heldFrame.arrive(std::move(pending), outputTimestamp100ns, monotonicNow100ns(),
+                // Without the encoder's flush nothing may be held.
+                const auto* queue = pullQueue;
+                heldFrame.arrive(std::move(pending), outputTimestamp100ns,
                     queue ? queue->nextDeadline100ns() : 0,
                     [queue](int64_t older, int64_t newer) { return queue && queue->wouldSupersede(older, newer); },
                     prepare, closePending);
@@ -562,7 +558,16 @@ BackendStartResult WgcCaptureBackend::start() {
         }
         state.started.store(true, std::memory_order_release);
         if (capturePipelinePolicy().holdUntilTick) {
-            state.leadWindowFlush = std::jthread([this](std::stop_token stop) { impl_->runLeadWindowFlush(stop); });
+            if (auto* queue = state.shared->frameQueue.load(std::memory_order_acquire)) {
+                queue->setBeforeSelect([impl = impl_.get()] {
+                    std::lock_guard callbackLock(impl->callbackMutex);
+                    impl->heldFrame.flush([impl](Impl::PendingFrame pending) {
+                        impl->prepareAndPublish(std::move(pending));
+                    });
+                });
+                std::lock_guard callbackLock(state.callbackMutex);
+                state.pullQueue = queue;
+            }
         }
         std::cerr << "[capture-pipeline] WGC holdUntilTick=" << capturePipelinePolicy().holdUntilTick << '\n';
         state.session.StartCapture();
@@ -603,7 +608,11 @@ BackendOutcome WgcCaptureBackend::run(std::stop_token stopToken) {
 void WgcCaptureBackend::stop() {
     auto& state = *impl_;
     state.started.store(false, std::memory_order_release);
-    state.leadWindowFlush = {};
+    if (auto* queue = state.pullQueue) {
+        queue->setBeforeSelect({});
+        std::lock_guard callbackLock(state.callbackMutex);
+        state.pullQueue = nullptr;
+    }
     state.closeGame();
     if (state.framePool) {
         try {

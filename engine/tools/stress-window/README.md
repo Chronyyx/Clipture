@@ -65,6 +65,10 @@ share of frames it held it per phase (`foregroundPct`). Treat phases far below
 `--env`) delays one encoder cadence wake by `<ms>` every `<periodMs>`. Busy
 games delay that wake in practice; this injects it deterministically.
 
+`CLIPTURE_TEST_PREPARE_STALL=<ms>,<onMs>,<offMs>` delays every WGC frame
+preparation (copy and tone map) by `<ms>` for `<onMs>`, then none for
+`<offMs>`, repeating: a driver queue that full GPU load suddenly backs up.
+
 ## Running a trial
 
 ```powershell

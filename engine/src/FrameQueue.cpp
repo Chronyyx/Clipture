@@ -53,6 +53,16 @@ bool FrameQueue::wouldSupersede(int64_t olderPts100ns, int64_t newerPts100ns) co
     return supersededBy(olderPts100ns, newerPts100ns);
 }
 
+void FrameQueue::setBeforeSelect(std::function<void()> hook) {
+    std::lock_guard lock(hookMutex_);
+    beforeSelect_ = std::move(hook);
+}
+
+void FrameQueue::beforeSelect() {
+    std::lock_guard lock(hookMutex_);
+    if (beforeSelect_) beforeSelect_();
+}
+
 bool FrameQueue::supersededBy(int64_t olderPts, int64_t newerPts) const {
     if (tickFps_ <= 0 || newerPts < olderPts) return false;
     constexpr int64_t kTimebase = 10'000'000;

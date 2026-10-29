@@ -3081,6 +3081,8 @@ void EncoderWorker::run() {
         wait.until(cadence.deadline100ns(), [this] { return running_.load(std::memory_order_relaxed); });
         if (!running_.load(std::memory_order_relaxed)) break;
         injectTestEncoderStall();
+        // Queue capture's held frame while this tick is still announced.
+        frames_.beforeSelect();
         const auto wokeAt100ns = monotonicNow100ns();
         const auto tick = cadence.advance(wokeAt100ns);
         recentSchedulerWakeLateness_.record(wokeAt100ns, tick.lateness100ns);

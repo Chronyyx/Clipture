@@ -66,10 +66,11 @@ void requireSupersededFramesNeverSelected() {
     }
 }
 
-// Holding the newest frame unprepared until the lead window, and releasing it
-// when a newer one supersedes it, must select exactly what preparing every
-// frame at arrival selects. Same capture, stalls and skips as above; the flush
-// runs when the tick's lead window opens, before the encoder wakes.
+// Holding the newest frame unprepared until the encoder flushes it at its
+// tick, and releasing it when a newer one supersedes it, must select exactly
+// what preparing every frame at arrival selects. The flush runs where the
+// encoder calls FrameQueue::beforeSelect: after it wakes, before it advances
+// and announces the next tick. Same capture, stalls and skips as above.
 void requireHeldFramesKeepSelections() {
     for (const int fps : {30, 60, 120, 144, 240}) {
         std::mt19937 random(static_cast<unsigned>(fps) + 7);
@@ -78,61 +79,66 @@ void requireHeldFramesKeepSelections() {
         clipture::FrameQueue held(64), reference(64);
         clipture::HeldFrame<clipture::CapturedFrame> hold;
         int64_t nextFrame = start - 30'000, lastPts = 0;
-        uint64_t sequence = 0, arrived = 0, prepared = 0;
+        uint64_t sequence = 0, arrived = 0, prepared = 0, ticks = 0;
         const auto superseded = [&](int64_t older, int64_t newer) { return held.wouldSupersede(older, newer); };
         const auto prepare = [&](clipture::CapturedFrame frame) { ++prepared; held.push(std::move(frame)); };
         const auto release = [](clipture::CapturedFrame) {};
+        held.setBeforeSelect([&] { hold.flush(prepare); });
         for (int iteration = 0; iteration < 4000; ++iteration) {
+            held.announceNextDeadline(cadence.deadline100ns());
             held.announceSelectionTicks(cadence.deadline100ns(), cadence.fps());
             const auto roll = random() % 100;
             const int64_t lateness = roll < 3 ? 400'000 + random() % 100'000
                 : roll < 4 ? 800'000 + random() % 400'000
                 : random() % 30'000;
-            const int64_t deadline = cadence.deadline100ns();
-            const int64_t wake = deadline + lateness;
-            const int64_t flushAt = deadline - clipture::kTickAlignedAcquireLead100ns;
-            bool flushed = false;
+            const int64_t wake = cadence.deadline100ns() + lateness;
             while (nextFrame <= wake) {
-                if (!flushed && nextFrame >= flushAt) {
-                    hold.flush(prepare);
-                    flushed = true;
-                }
                 const int64_t pts = std::max(lastPts, nextFrame - static_cast<int64_t>(random() % 20'000));
                 lastPts = pts;
                 ++arrived;
-                hold.arrive(frameAt(pts, ++sequence), pts, nextFrame, deadline, superseded, prepare, release);
+                hold.arrive(frameAt(pts, ++sequence), pts, held.nextDeadline100ns(), superseded, prepare, release);
                 reference.push(frameAt(pts, sequence));
                 nextFrame += 10'000 + random() % 60'000;
             }
-            if (!flushed) hold.flush(prepare);
+            held.beforeSelect();
             const auto tick = cadence.advance(wake);
+            ticks += 1 + tick.skipped;
+            held.announceNextDeadline(cadence.deadline100ns());
             held.announceSelectionTicks(cadence.deadline100ns(), cadence.fps());
             const bool byDeadline = clipture::selectByDeadline(cadence.deadline100ns() <= wake, tick.lateness100ns);
             const auto a = byDeadline ? held.consumeLatestAtOrBefore(tick.deadline100ns) : held.consumeAllAndGetLatest();
             const auto b = byDeadline ? reference.consumeLatestAtOrBefore(tick.deadline100ns) : reference.consumeAllAndGetLatest();
             require(a.has_value() == b.has_value() && (!a || a->sequence == b->sequence),
-                    "holding frames until the lead window changed a tick's selection");
+                    "holding frames until the encoder's tick changed a tick's selection");
         }
         require(prepared < arrived, "holding must skip preparing superseded frames");
-        std::cout << fps << " FPS: prepared " << prepared << " of " << arrived << " frames.\n";
+        std::cout << fps << " FPS: prepared " << prepared << " of " << arrived << " frames for "
+                  << ticks << " ticks.\n";
     }
 
-    // A frame arriving inside the lead window, past a late deadline or with no
-    // cadence is prepared at once; one before the window waits for the flush.
+    // With no announced deadline no encoder flushes, so frames are prepared at
+    // once; otherwise the newest is held until the flush or a newer frame.
     clipture::HeldFrame<int> hold;
-    int prepared = 0;
+    int prepared = 0, released = 0;
     const auto never = [](int64_t, int64_t) { return false; };
-    const auto count = [&](int) { ++prepared; };
-    hold.arrive(1, 1, 100'000, 166'667, never, count, count);
-    require(hold.holding() && prepared == 0, "frame before the lead window must be held");
-    hold.arrive(2, 2, 150'000, 166'667, never, count, count);
-    require(!hold.holding() && prepared == 2, "lead window must prepare the held and the new frame");
-    hold.arrive(3, 3, 200'000, 166'667, never, count, count);
-    hold.arrive(4, 4, 0, 0, never, count, count);
-    require(!hold.holding() && prepared == 4, "late or unknown deadline must prepare at once");
-    hold.arrive(5, 5, 0, 166'667, never, count, count);
-    hold.drop([&](int) { --prepared; });
-    require(!hold.holding() && prepared == 3, "drop must release the held frame");
+    const auto always = [](int64_t, int64_t) { return true; };
+    const auto prepare = [&](int) { ++prepared; };
+    const auto release = [&](int) { ++released; };
+    hold.arrive(1, 1, 0, never, prepare, release);
+    require(!hold.holding() && prepared == 1, "without a deadline a frame must be prepared at once");
+    hold.arrive(2, 2, 166'667, never, prepare, release);
+    require(hold.holding() && prepared == 1, "with a deadline the newest frame must be held");
+    hold.arrive(3, 3, 166'667, always, prepare, release);
+    require(hold.holding() && prepared == 1 && released == 1, "a superseded held frame must be released unprepared");
+    hold.arrive(4, 4, 166'667, never, prepare, release);
+    require(hold.holding() && prepared == 2, "a held frame a tick may still select must be prepared first");
+    hold.flush(prepare);
+    require(!hold.holding() && prepared == 3, "the encoder's flush must prepare the held frame");
+    hold.flush(prepare);
+    require(prepared == 3, "a flush with nothing held must do nothing");
+    hold.arrive(5, 5, 166'667, never, prepare, release);
+    hold.drop(release);
+    require(!hold.holding() && released == 2, "drop must release the held frame");
 }
 
 int main() {

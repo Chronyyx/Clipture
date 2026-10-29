@@ -25,44 +25,67 @@ The WGC callback holds the newest recorded-source frame unprepared
    `FrameQueue::wouldSupersede` says no remaining tick could select it, the
    rule `push()` uses for ADR 0018's early release. Otherwise it is prepared
    and queued first.
-2. A frame that arrives inside the next tick's 2 ms lead window, past a late
-   deadline, or with no announced cadence is prepared at once, as before.
-3. A flush thread (MMCSS, like DXGI acquisition) prepares the held frame when
-   the lead window opens.
+2. The encoder flushes the held frame itself. When it wakes for a tick it
+   calls `FrameQueue::beforeSelect`, which the WGC backend hooks to prepare and
+   queue the held frame, then selects. The flush runs before the encoder
+   advances its cadence: while the tick is still announced, `push()` keeps
+   every frame that tick may select.
+3. Frames are held only while that hook is installed and a deadline is
+   announced; otherwise they are prepared at arrival.
 4. Source switches that recreate a pool, stop and the game source closing drop
    the held frame.
 
-Selection is unchanged: a frame any tick could choose is still prepared and
-queued before that tick. `CatchUpSelectionTests` drives the hold and a queue
-that prepares every frame through the encoder loop over 4,000 jittered ticks
-at 30-240 FPS, with 40 ms stalls and skips past catch-up, and requires
-identical selections.
+Selection is unchanged: the frame is queued by the thread that consumes it,
+before it selects. `CatchUpSelectionTests` drives the hold and a queue that
+prepares every frame through the encoder loop over 4,000 jittered ticks at
+30-240 FPS, with 40 ms stalls and skips past catch-up, and requires identical
+selections; it prepares about 1.2 frames per tick.
+
+## Rejected: a flush thread at a lead window
+
+The first implementation flushed from a separate MMCSS thread 2 ms before
+each tick, mirroring ADR 0015. It passed the stress window, but a real CS2
+clip recorded with it repeated 13-26 of every 60 frames for four seconds in a
+smoke while the game ran at 131-165 FPS. Any delay of that thread past the
+tick leaves the tick without its frame. Fault injection reproduced it: with the
+flush 20 ms late for 3 s of every 6 s, a run had 202 stutter frames and 17%
+fewer fresh frames.
+
+Variants measured under the same faults (flush 8 and 20 ms late, every frame
+preparation 6 ms slower, encoder wakes 40 ms late):
+
+- Pause holding for 5 s after a late held frame: 3-5 stutter frames per run,
+  because the first late frame of each episode is already lost.
+- Safety net, the first frame after each tick prepared at arrival: 0-2
+  stutter frames, but 26-40% of frames prepared against 32-57% for preparing
+  everything, keeping only a fraction of the saving.
+- Wider lead windows: the same dependency on a timer, at a lower saving.
+
+Flushing from the encoder removes the second thread, so nothing can be late
+for a tick that 1.7.7 would have served.
 
 ## Evidence
 
 Stress window, ADR 0015 setup (`--as-game --compute-load --render-size
-1920x1440`, 12 games-priority CPU threads, game and daily audio,
-`CLIPTURE_TEST_ENCODER_STALL=40,700`), 60 FPS capture, HDR 2560x1440 at
-210 Hz, RTX 3080. Seven alternated runs; the means below use the four whose
-window kept focus (two each).
+1920x1440`, 12 games-priority CPU threads, game and daily audio), 60 FPS
+capture, HDR 2560x1440 at 210 Hz, RTX 3080, with load stepping 2x to 16x and
+the faults above. Per run (about 1,560 frames):
 
-| Means | Prepare every frame | Hold until tick |
+| | Prepare every frame | Encoder flush |
 | --- | ---: | ---: |
-| Prepared / delivered frames | 35% | 18% |
-| Engine CPU (cores) | 0.33 | 0.29 |
-| Stutter / missed frames | 0.5 / 2 | 0.5 / 0.5 |
-| Longest smoke freeze | 33, 17 ms | 17, 17 ms |
-| Fresh frames, all seven runs | 99.88% | 99.95% |
-| Window cost: clear / smoke / molly | 56 / 12.4 / 6.1% | 48 / 9.6 / 5.6% |
+| Stutter, no fault / slow preparation / late encoder | 1 / 2 / 0 | 1 / 0 / 0 |
+| Prepared / delivered frames | 41-57% | 19-24% |
+| Heavy phases (game window 45-63 FPS), missed frames, 3 runs | 100, 66, 29 | 40, 67, 35 |
+| Heavy phases, prepared frames | 29-37% | 18-21% |
 
-Smoke lag p50 fell from 10.2-15.4 ms to 9.1-10.1 ms. Clear-phase lag p99 rose
-from about 7.1 to 7.4-8.6 ms: a held frame is prepared 2 ms before its tick
-rather than at arrival.
+Engine CPU is unchanged at 0.28-0.36 cores. The encoder now starts the copy
+of its own frame; with every preparation slowed by 6 ms its lag p99 stayed
+within the range of preparing every frame. Window cost could not be compared
+reliably: most runs lost the foreground to the developer's own work.
 
 ## Limits
 
-Window cost varies between runs about as much as the measured difference;
-the GPU work removed is certain, the frame-rate gain needs confirming in a
-real game. A flush thread starved past the tick would let that tick take an
-older frame; it runs in the MMCSS class DXGI acquisition already relies on.
-The saving shrinks as the source rate approaches the recording rate.
+The stress window does not reproduce CS2; confirm on a smoke-heavy round. The
+encoder waits for the capture callback lock when a preparation is in
+progress. The saving shrinks as the source rate approaches the recording
+rate.

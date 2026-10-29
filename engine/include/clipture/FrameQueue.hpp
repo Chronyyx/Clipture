@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -79,6 +80,12 @@ public:
     // tick could select a frame at `olderPts` once one at `newerPts` exists.
     bool wouldSupersede(int64_t olderPts100ns, int64_t newerPts100ns) const;
 
+    // Capture may hold its newest frame unprepared (HeldFrame.hpp). The encoder
+    // calls beforeSelect() when it wakes for a tick, before announcing the next
+    // one, so that frame is queued for the tick that may select it.
+    void setBeforeSelect(std::function<void()> hook);
+    void beforeSelect();
+
 private:
     bool supersededBy(int64_t olderPts100ns, int64_t newerPts100ns) const;
 
@@ -92,6 +99,8 @@ private:
     std::atomic<int64_t> nextDeadline100ns_ = 0;
     int64_t nextTickPts100ns_ = 0;
     int tickFps_ = 0;
+    std::mutex hookMutex_;
+    std::function<void()> beforeSelect_;
 };
 
 }  // namespace clipture
