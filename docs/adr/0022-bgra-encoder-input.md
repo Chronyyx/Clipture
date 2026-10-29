@@ -80,7 +80,14 @@ weaker evidence than its drops. Lab trials of encoder input changes must use
 The remaining repeats, about 1.5 per second in every run whatever the input
 path, are intervals in which Windows delivered no game-window frame at all
 (187 of 190 in the BGRA block; 3 had frames whose timestamps were older than
-the interval). They are outside the capture pipeline and not addressed here.
+the interval). The same traces record the hybrid desktop source, which keeps
+running while the game window is recorded. In every one of 772 game-window
+gaps over 20 ms across three runs, the desktop source kept delivering, at a
+median of 80-86 distinct images per second (122-136 overall): CS2 presented
+and the monitor showed it, but Windows.Graphics.Capture of the game window
+skipped those frames. They are outside the capture pipeline and not addressed
+here. Hybrid capture receives those desktop frames and discards them; using the
+newest one for a tick that has no game-window frame would fill most of them.
 
 Known colours (pure RGB, grey 128, a skin tone, white) captured through both
 paths decode to identical 8-bit values. Desktop, headless, two runs each:
