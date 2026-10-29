@@ -72,8 +72,11 @@ ADR 0015 setup, 60 FPS, no encoder stall injected:
 | NV12 | on | 7, 31 | 43, 28 | 133, 67 ms |
 | BGRA | on | 0, 0 | 2, 1 | 50, 33 ms |
 | NV12 | off | 0 | 1 | 33 ms |
+| NV12, no holding (1.7.7) | on | 53, 57 | 43, 36 | 67, 50 ms |
 
-The first NV12 run with Reflex lost the foreground; its 58 stutter frames are
+Without ADR 0021's holding, NV12 drops more: every delivered frame takes a
+slot. Holding did not cause the drops; the conversion did. The first NV12 run
+with Reflex lost the foreground; its 58 stutter frames are
 weaker evidence than its drops. Lab trials of encoder input changes must use
 `--reflex` from now on.
 
