@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 
 /// Output may pause this long under realtime GPU priority before it is a hang.
 pub const BOOSTED_HANG_THRESHOLD: Duration = Duration::from_secs(3);
-/// At normal priority a saturated GPU alone can stall output for seconds, so
-/// only a much longer silence counts as a hang.
-pub const NORMAL_HANG_THRESHOLD: Duration = Duration::from_secs(15);
+/// Below realtime the engine shares the NORMAL band, under a focused game's
+/// FOCUS band: an uncapped game alone has starved NVENC for 16 s (one encode
+/// call took 13.7 s). Only a silence far longer than that counts as a hang.
+pub const NORMAL_HANG_THRESHOLD: Duration = Duration::from_secs(60);
 
 /// The engine diagnostics fields the watchdog reads; the rest are ignored.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -27,12 +28,6 @@ pub struct EncoderProgress {
     pub gpu_scheduling_class: String,
 }
 
-impl EncoderProgress {
-    pub fn boosted(&self) -> bool {
-        self.gpu_scheduling_class == "realtime"
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Verdict {
     Healthy,
@@ -43,7 +38,7 @@ pub enum Verdict {
 #[derive(Debug, Default)]
 pub struct EncoderWatchdog {
     last: Option<(u64, u64)>,
-    boosted: bool,
+    scheduling_class: String,
     stalled_since: Option<Instant>,
 }
 
@@ -53,7 +48,7 @@ impl EncoderWatchdog {
         let (progressed, work_expected) = match sample {
             None => (false, true),
             Some(sample) => {
-                self.boosted = sample.boosted();
+                self.scheduling_class.clone_from(&sample.gpu_scheduling_class);
                 let current = (sample.encoder_output_packets, sample.encoder_accepted_frames);
                 let previous = self.last.replace(current);
                 let progressed = previous.is_none_or(|(output, _)| current.0 > output);
@@ -70,7 +65,7 @@ impl EncoderWatchdog {
         }
         let since = *self.stalled_since.get_or_insert(now);
         let stalled = now.saturating_duration_since(since);
-        let threshold = if self.boosted {
+        let threshold = if self.boosted() {
             BOOSTED_HANG_THRESHOLD
         } else {
             NORMAL_HANG_THRESHOLD
@@ -83,7 +78,12 @@ impl EncoderWatchdog {
     }
 
     pub fn boosted(&self) -> bool {
-        self.boosted
+        self.scheduling_class == "realtime"
+    }
+
+    /// The engine's last reported GPU scheduling class ("unknown" before any).
+    pub fn scheduling_class(&self) -> &str {
+        if self.scheduling_class.is_empty() { "unknown" } else { &self.scheduling_class }
     }
 
     /// Forget the stall clock (a save or configure is holding the engine).
@@ -173,17 +173,24 @@ mod tests {
     }
 
     #[test]
-    fn normal_priority_tolerates_long_contention_stalls() {
-        let start = Instant::now();
-        let mut watchdog = EncoderWatchdog::default();
-        watchdog.observe(start, Some(&sample(100, 100, 16, "normal")));
-        let stuck = sample(100, 100, 16, "normal");
-        assert_eq!(watchdog.observe(start + Duration::from_secs(1), Some(&stuck)), Verdict::Stalling);
-        assert_eq!(watchdog.observe(start + Duration::from_secs(10), Some(&stuck)), Verdict::Stalling);
-        assert!(matches!(
-            watchdog.observe(start + Duration::from_secs(17), Some(&stuck)),
-            Verdict::Hung(_)
-        ));
+    fn below_realtime_tolerates_measured_contention_stalls() {
+        // A focused uncapped game starved a `high` engine for 16 s.
+        for class in ["normal", "high"] {
+            let start = Instant::now();
+            let mut watchdog = EncoderWatchdog::default();
+            watchdog.observe(start, Some(&sample(100, 100, 16, class)));
+            let stuck = sample(100, 100, 16, class);
+            // Samples each second, as the client polls; the stall starts at 1 s.
+            for second in 1..=60 {
+                let verdict = watchdog.observe(start + Duration::from_secs(second), Some(&stuck));
+                assert_eq!(verdict, Verdict::Stalling, "{class} at {second}s");
+            }
+            assert!(matches!(
+                watchdog.observe(start + Duration::from_secs(61), Some(&stuck)),
+                Verdict::Hung(_)
+            ));
+            assert_eq!(watchdog.scheduling_class(), class);
+        }
     }
 
     #[test]

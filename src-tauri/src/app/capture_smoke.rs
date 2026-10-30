@@ -21,7 +21,7 @@ pub fn install(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut report = json!({"ok": false, "checks": []});
-        match tokio::time::timeout(Duration::from_secs(260), run(&app, &mut report)).await {
+        match tokio::time::timeout(Duration::from_secs(330), run(&app, &mut report)).await {
             Ok(Ok(())) => report["ok"] = json!(true),
             Ok(Err(error)) => report["error"] = json!(error),
             Err(_) => report["error"] = json!("native capture test timed out"),

@@ -81,7 +81,8 @@ pub(super) async fn run(app: &AppHandle, settings: &ClipSettings, report: &mut V
 
     let hung_again = state.engine.hang_for_smoke().map_err(|error| error.to_string())?;
     let mut halted = false;
-    for _ in 0..60 {
+    // Below realtime the watchdog waits 60 s before calling it a hang.
+    for _ in 0..150 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         if state.engine.encoder_recovery().state == RecoveryState::Halted {
             halted = true;

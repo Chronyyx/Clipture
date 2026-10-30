@@ -28,7 +28,7 @@ const monitor = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypa
   path.join(__dirname, 'watch-tauri-resources.ps1'), '-AppProcessId', String(child.pid), '-Profile', profile],
   { windowsHide: true, stdio: 'inherit' });
 monitor.on('error', error => console.error('Resource monitor failed:', error));
-const timer = setTimeout(() => child.kill(), 280000);
+const timer = setTimeout(() => child.kill(), 350000);
 child.on('error', error => { clearTimeout(timer); monitor.kill(); throw error; });
 child.on('exit', async code => {
   clearTimeout(timer);

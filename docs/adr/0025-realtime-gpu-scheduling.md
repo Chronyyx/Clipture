@@ -2,7 +2,7 @@
 
 Date: 2026-10-30
 
-Status: implemented in 1.8.3; on by default, user setting "Prioritize recording on the GPU".
+Status: implemented in 1.8.3 (watchdog threshold below realtime raised to 60 s in 1.8.4); on by default, user setting "Prioritize recording on the GPU".
 
 ## Context
 
@@ -47,8 +47,10 @@ HAGS and VRAM close to full.
 - The host supervises the encoder from outside the engine
   (`engine/encoder_watchdog.rs`): it polls encoder counters each second and
   declares a hang when output stops while frames are pending, or when the
-  engine stops answering, for 3 s at realtime or 15 s at normal (contention
-  alone can pause output that long). Saves and configures pause the clock.
+  engine stops answering, for 3 s at realtime or 60 s below it. Saves and
+  configures pause the clock. 1.8.3 used 15 s below realtime; a focused,
+  uncapped game starved a `high` engine for 16 s (a single NVENC call took
+  13.7 s), which that threshold misread as a hang.
 - The first hang terminates the engine; the existing supervisor restarts it and
   the boost stays off for the session. A second hang halts recording until
   Clipture restarts; Clipture tells the player both times with a native notice.
@@ -56,6 +58,37 @@ HAGS and VRAM close to full.
 - Diagnostics record the requested and applied class, HAGS state, driver
   version, the process VRAM budget and usage, adapter-wide dedicated VRAM use
   (every process), and the session's recovery state.
+
+## Why only realtime: hardware scheduling bands
+
+A DxgKrnl ETW trace (`ChangePriority`, `ChangeHwContextPriority`) on the RTX
+3080 with HAGS on shows what each class becomes. The GPU scheduler orders
+contexts by band (`DXGK_SCHEDULING_PRIORITY_BAND`: IDLE, NORMAL, FOCUS,
+REALTIME) and a level inside the band:
+
+| Process | Public priority | Scheduling priority | Band | Level |
+|---|---|---|---|---|
+| Engine, `normal` class | 8 | 1 | 1 NORMAL | 0 |
+| Engine, `high` class, thread priority 7 | 15 | 1 | 1 NORMAL | 0 |
+| Engine, `realtime` class, thread priority 1 | 23 | 23 | 3 REALTIME | 1 |
+| Overwatch in the foreground | (default) | | 2 FOCUS | 0 |
+| Overwatch after alt-tab | | | 1 NORMAL | 0 |
+| dwm | 23 | 23 | 2 FOCUS | 0 |
+| nvcontainer (ShadowPlay) | 23 | 23 | 3 REALTIME | 0, 7 |
+
+`normal` and `high` both land in the NORMAL band at level 0;
+`high` changes only the legacy priority number, which the hardware scheduler
+does not use, and thread priority does not move the level there. The window
+with focus is lifted into the FOCUS band, so a background recorder below
+realtime always queues behind a focused game. Placing a context in FOCUS or
+REALTIME directly needs `SE_INC_BASE_PRIORITY_NAME`; the realtime process class
+reaches the REALTIME band without elevation. The earlier gap between `normal`
+and `high` sessions was session variance, not the class: both run in the
+same band.
+
+OBS's `high` under HAGS is therefore the NORMAL band too. Its game capture
+copies frames inside the game's own (focused) submission, so less of its work
+competes with the game.
 
 ## Consequences
 

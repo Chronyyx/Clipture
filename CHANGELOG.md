@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.8.4] - 2026-10-30
+
+### Recording
+
+- **No false alarms with GPU priority off:** With "Prioritize recording on the GPU" turned off, a game using the whole GPU can hold Clipture's work back for 15 seconds or more. Clipture mistook that for a frozen video encoder, restarted recording and lost the clip buffer, and a second time in one session stopped recording. It now waits a full minute before stepping in, which only a frozen driver reaches. With the setting on, as it is by default, nothing changes.
+
+### Diagnostics
+
+- **Clearer hang reports:** When Clipture does restart a frozen encoder, the report names the GPU priority it was running at.
+
 ## [1.8.3] - 2026-10-30
 
 ### Performance

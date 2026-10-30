@@ -103,10 +103,10 @@ impl EngineClient {
                 continue;
             }
             if let Verdict::Hung(stalled) = watchdog.observe(Instant::now(), sample.as_ref()) {
-                let priority = if watchdog.boosted() { "realtime" } else { "normal" };
                 let description = format!(
-                    "Encoder made no progress for {:.1}s at {priority} GPU priority{}.",
+                    "Encoder made no progress for {:.1}s at {} GPU priority{}.",
                     stalled.as_secs_f64(),
+                    watchdog.scheduling_class(),
                     if sample.is_none() { " (engine not answering)" } else { "" }
                 );
                 self.recover_from_encoder_hang(generation, description).await;
