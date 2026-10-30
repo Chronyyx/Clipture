@@ -5,6 +5,7 @@
 ### Saving
 
 - **Instant saves on hard drives:** Saving twice in a row on a hard drive could freeze Clipture for 15 seconds or more while it copied footage the two clips shared, and slowed down games installed on the same drive. Each save now starts where the previous one ended, so nothing is copied: on a hard drive, back-to-back saves of 2-minute clips went from 15 seconds to about 0.1 seconds, and a game loading from the same drive hitched 1 time instead of 82.
+- **No freezes from a slow drive:** On a busy hard drive, one slow write could make Clipture stop responding for a minute, after which recording restarted and the clip buffer was lost. Clipture now keeps answering while the drive catches up, so a slow disk is never mistaken for a stuck encoder.
 - **No more duplicate clips:** Two saves close together give you one full clip and one short clip with only what happened since, instead of two nearly identical files. The "Overlapping clips" setting is gone.
 
 ### Diagnostics

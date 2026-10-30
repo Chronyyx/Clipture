@@ -460,14 +460,30 @@ struct ReplaySegmentStore::Impl {
             result.rehomeBytesPerSecond = rehomeQueue.empty() ? 0 : rehomeBytesPerSecond;
         }
         {
-            std::lock_guard lock(segmentMutex);
-            result.healthy = healthy;
-            result.activeSegments = segments.size();
-            result.writeFailures = writeFailures;
-            result.maximumWriteBytes = maximumWriteSize;
-            for (const auto& segment : segments) {
-                result.diskBytes += segment->writtenBytes.load(std::memory_order_relaxed);
+            // Spill writes hold segmentMutex across disk I/O. Diagnostics must
+            // not wait on a stalled drive (that froze the engine's request loop
+            // and read as a hung encoder), so a busy mutex reports the last view.
+            SegmentView view;
+            std::unique_lock lock(segmentMutex, std::try_to_lock);
+            if (lock) {
+                view.healthy = healthy;
+                view.activeSegments = segments.size();
+                view.writeFailures = writeFailures;
+                view.maximumWriteBytes = maximumWriteSize;
+                for (const auto& segment : segments) {
+                    view.diskBytes += segment->writtenBytes.load(std::memory_order_relaxed);
+                }
+                std::lock_guard last(lastSegmentViewMutex);
+                lastSegmentView = view;
+            } else {
+                std::lock_guard last(lastSegmentViewMutex);
+                view = lastSegmentView;
             }
+            result.healthy = view.healthy;
+            result.activeSegments = view.activeSegments;
+            result.writeFailures = view.writeFailures;
+            result.maximumWriteBytes = view.maximumWriteBytes;
+            result.diskBytes = view.diskBytes;
         }
         result.readCacheBytes = readCache ? readCache->capacityBytes() : 0;
         result.ramFallbackBytes = result.healthy ? 0 : result.queuedBytes;
@@ -942,6 +958,16 @@ struct ReplaySegmentStore::Impl {
     std::atomic<bool> running { false };
     mutable std::mutex mutex;
     mutable std::mutex segmentMutex;
+    struct SegmentView {
+        bool healthy = false;
+        std::size_t activeSegments = 0;
+        uint64_t writeFailures = 0;
+        std::size_t maximumWriteBytes = 0;
+        uint64_t diskBytes = 0;
+    };
+    // Never held across I/O; taken after segmentMutex, never before it.
+    mutable std::mutex lastSegmentViewMutex;
+    mutable SegmentView lastSegmentView;
     mutable std::condition_variable idle;
     std::condition_variable wake;
     std::thread worker;

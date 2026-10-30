@@ -136,6 +136,9 @@ bool Range::read(uint64_t begin, std::span<std::byte> bytes) const {
 
 struct InPlacePacketArchive::Impl {
     mutable std::mutex mutex;
+    // diskBytes() as last measured, for readers that must not wait for the
+    // mutex while persist/rehome hold it across a disk write.
+    mutable std::atomic<uint64_t> lastDiskBytes{0};
     std::filesystem::path folder;
     bool enabled = false;
     uint64_t maximum = 0;
@@ -244,9 +247,13 @@ std::unique_ptr<InPlaceMediaBuffer> InPlacePacketArchive::takeForSave() {
     return std::make_unique<InPlaceMediaBuffer>(std::move(file));
 }
 uint64_t InPlacePacketArchive::diskBytes() const {
-    std::lock_guard lock(impl_->mutex);
+    // Diagnostics call this; a write stalled on a slow drive holds the mutex,
+    // and waiting for it made the engine look frozen. Report the last value.
+    std::unique_lock lock(impl_->mutex, std::try_to_lock);
+    if (!lock) return impl_->lastDiskBytes.load(std::memory_order_relaxed);
     uint64_t bytes = 0;
     for (const auto& weak : impl_->arenas) if (const auto arena = weak.lock()) bytes += arena->file->size();
+    impl_->lastDiskBytes.store(bytes, std::memory_order_relaxed);
     return bytes;
 }
 } // namespace clipture::replay
