@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.8.1: Your Shortcut in Admin Games",
+  "releaseTitle": "Clipture 1.8.2: Admin Shortcut, No Window",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

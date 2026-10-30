@@ -182,9 +182,27 @@ ComPtr<IRegisteredTask> findTask(const std::wstring& sid) {
     return task;
 }
 
-bool relayInstalled(const std::wstring& sid) {
+// The relay is a console program; Windows' headless console host runs it
+// without ever showing a console window (1.8.1 ran it directly and showed one).
+constexpr wchar_t kHeadlessMarker[] = L"--headless";
+
+std::wstring consoleHost() {
+    wchar_t system[MAX_PATH] {};
+    const UINT length = GetSystemDirectoryW(system, ARRAYSIZE(system));
+    return length ? std::wstring(system, length) + L"\\conhost.exe" : std::wstring();
+}
+
+enum class RelaySetup { Missing, Outdated, Current };
+
+RelaySetup relaySetup(const std::wstring& sid) {
     const auto executable = relayExecutable();
-    return !executable.empty() && GetFileAttributesW(executable.c_str()) != INVALID_FILE_ATTRIBUTES && findTask(sid);
+    if (executable.empty() || GetFileAttributesW(executable.c_str()) == INVALID_FILE_ATTRIBUTES) return RelaySetup::Missing;
+    auto task = findTask(sid);
+    if (!task) return RelaySetup::Missing;
+    BSTR xml = nullptr;
+    const bool headless = SUCCEEDED(task->get_Xml(&xml)) && xml && wcsstr(xml, kHeadlessMarker);
+    SysFreeString(xml);
+    return headless ? RelaySetup::Current : RelaySetup::Outdated;
 }
 
 bool runRelayTask(const std::wstring& sid) {
@@ -214,8 +232,9 @@ std::wstring taskXml(const std::wstring& sid, const std::wstring& executable) {
         L"<AllowHardTerminate>true</AllowHardTerminate><Priority>5</Priority><Enabled>true</Enabled>"
         L"<IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>"
         L"</Settings>"
-        L"<Actions Context=\"User\"><Exec><Command>" + xmlEscape(executable) + L"</Command>"
-        L"<Arguments>--hotkey-relay</Arguments></Exec></Actions>"
+        L"<Actions Context=\"User\"><Exec><Command>" + xmlEscape(consoleHost()) + L"</Command>"
+        L"<Arguments>" + std::wstring(kHeadlessMarker) + L" &quot;" + xmlEscape(executable) +
+        L"&quot; --hotkey-relay</Arguments></Exec></Actions>"
         L"</Task>";
 }
 
@@ -284,9 +303,13 @@ struct AdminHotkeyRelay::Impl {
     bool acceleratorChanged = false;
     std::string accelerator;
     std::string game;
+    bool gameInFront = false;
     ULONGLONG gameSeenMs = 0;
     ULONGLONG retryAfterMs = 0;
     std::string state = "off";
+    // missing, outdated or current: whether Allow must set it up again.
+    std::string setup = "missing";
+    ULONGLONG setupCheckedMs = 0;
     HANDLE signal = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     std::thread worker;
 
@@ -302,6 +325,7 @@ struct AdminHotkeyRelay::Impl {
         nameCurrentThread(L"admin-hotkey-relay");
         ComScope com;
         while (true) {
+            refreshSetup();
             bool wanted = false;
             {
                 std::lock_guard lock(mutex);
@@ -315,15 +339,29 @@ struct AdminHotkeyRelay::Impl {
                 continue;
             }
             const auto sid = currentUserSid();
-            if (sid.empty() || !relayInstalled(sid)) {
+            const auto current = sid.empty() ? RelaySetup::Missing : relaySetup(sid);
+            if (current != RelaySetup::Current) {
+                // An outdated setup would show a console window: never start it.
                 std::lock_guard lock(mutex);
-                state = "not-installed";
+                state = current == RelaySetup::Outdated ? "outdated" : "not-installed";
                 retryAfterMs = GetTickCount64() + 10'000;
                 continue;
             }
             setState("starting");
             session(sid);
         }
+    }
+
+    // Every 10 s, and at once after a change: Allow and removal happen in
+    // another process, behind Windows' prompt.
+    void refreshSetup(bool now = false) {
+        const ULONGLONG tick = GetTickCount64();
+        if (!now && setupCheckedMs && tick - setupCheckedMs < 10'000) return;
+        setupCheckedMs = tick;
+        const auto sid = currentUserSid();
+        const auto current = sid.empty() ? RelaySetup::Missing : relaySetup(sid);
+        std::lock_guard lock(mutex);
+        setup = current == RelaySetup::Current ? "current" : current == RelaySetup::Outdated ? "outdated" : "missing";
     }
 
     void fail(const char* next, ULONGLONG retryMs) {
@@ -429,6 +467,7 @@ void AdminHotkeyRelay::setEnabled(bool enabled) {
         impl_->enabled = enabled;
         // Allowing again (after an update or a refused shortcut) retries at once.
         impl_->retryAfterMs = 0;
+        impl_->setupCheckedMs = 0;
     }
     SetEvent(impl_->signal);
 }
@@ -447,6 +486,7 @@ void AdminHotkeyRelay::setAccelerator(const std::string& accelerator) {
 void AdminHotkeyRelay::observeForegroundGame(const std::string& elevatedGame) {
     std::lock_guard lock(impl_->mutex);
     const ULONGLONG now = GetTickCount64();
+    impl_->gameInFront = !elevatedGame.empty();
     if (!elevatedGame.empty()) {
         if (impl_->game != elevatedGame) SetEvent(impl_->signal);
         impl_->game = elevatedGame;
@@ -459,6 +499,16 @@ void AdminHotkeyRelay::observeForegroundGame(const std::string& elevatedGame) {
 std::string AdminHotkeyRelay::elevatedGame() const {
     std::lock_guard lock(impl_->mutex);
     return impl_->game;
+}
+
+bool AdminHotkeyRelay::gameInFront() const {
+    std::lock_guard lock(impl_->mutex);
+    return impl_->gameInFront;
+}
+
+std::string AdminHotkeyRelay::setup() const {
+    std::lock_guard lock(impl_->mutex);
+    return impl_->setup;
 }
 
 std::string AdminHotkeyRelay::status() const {
@@ -510,6 +560,8 @@ int uninstallAdminHotkeyRelay(const std::wstring& forUserSid) {
 }
 
 int runAdminHotkeyRelay() {
+    // Never a window, even when started without the headless console host.
+    FreeConsole();
     const auto sid = currentUserSid();
     if (sid.empty()) return 2;
     const auto name = pipeName(sid);

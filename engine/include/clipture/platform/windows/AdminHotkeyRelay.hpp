@@ -29,8 +29,12 @@ public:
 
     // The admin game seen most recently, kept for a minute after it closes.
     std::string elevatedGame() const;
+    // That game has focus right now (the in-game notice shows only then).
+    bool gameInFront() const;
     // off, not-installed, idle, starting, active, outdated, rejected or failed.
     std::string status() const;
+    // missing, outdated or current, whether or not it is turned on.
+    std::string setup() const;
 
 private:
     struct Impl;

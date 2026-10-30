@@ -60,10 +60,12 @@ pub struct AdminHotkeyService {
 
 impl AdminHotkeyService {
     pub fn snapshot(&self, settings: &ClipSettings, diagnostics: &EngineDiagnostics) -> AdminGameHotkey {
+        // An outdated setup (1.8.1 showed a console window) counts as not set up.
+        let outdated = detail(diagnostics, "adminHotkeySetup").as_deref() == Some("outdated");
         AdminGameHotkey {
             game: admin_game(diagnostics),
             enabled: settings.admin_game_hotkey,
-            installed: relay_installed(),
+            installed: relay_installed() && !outdated,
             relay: detail(diagnostics, "adminHotkeyRelay").unwrap_or_else(|| "off".into()),
             dismissed: self.dismissed.load(Ordering::Relaxed),
         }
@@ -74,8 +76,12 @@ impl AdminHotkeyService {
     }
 
     /// The admin game to tell the player about in game: once per game and
-    /// session, only while the hotkey cannot reach it.
+    /// session, while it has focus and the hotkey cannot reach it.
     pub fn notice_due(&self, settings: &ClipSettings, diagnostics: &EngineDiagnostics) -> Option<String> {
+        let in_front = diagnostics.details.get("adminGameInFront").and_then(|value| value.as_bool()) == Some(true);
+        if !in_front {
+            return None;
+        }
         let game = admin_game(diagnostics)?;
         let reaches = settings.admin_game_hotkey && relay_installed();
         if reaches || self.dismissed.load(Ordering::Relaxed) {
@@ -116,6 +122,7 @@ mod tests {
     fn diagnostics(game: &str) -> EngineDiagnostics {
         let mut diagnostics = EngineDiagnostics::unavailable("test");
         diagnostics.details.insert("adminGame".into(), json!(game));
+        diagnostics.details.insert("adminGameInFront".into(), json!(!game.is_empty()));
         diagnostics.details.insert("adminHotkeyRelay".into(), json!("off"));
         diagnostics
     }
@@ -128,6 +135,10 @@ mod tests {
         assert_eq!(service.notice_due(&settings, &diagnostics("Marvel Rivals")).as_deref(), Some("Marvel Rivals"));
         assert_eq!(service.notice_due(&settings, &diagnostics("Marvel Rivals")), None);
         assert_eq!(service.notice_due(&settings, &diagnostics("Other Game")).as_deref(), Some("Other Game"));
+        // Remembered after it closed, but not in front: no notice outside the game.
+        let mut closed = diagnostics("Fourth Game");
+        closed.details.insert("adminGameInFront".into(), json!(false));
+        assert_eq!(service.notice_due(&settings, &closed), None);
         service.dismiss();
         assert_eq!(service.notice_due(&settings, &diagnostics("Third Game")), None);
         assert!(service.snapshot(&settings, &diagnostics("Third Game")).dismissed);

@@ -62,3 +62,41 @@
   gap: 8px;
 }
 .admin-game-card-actions :is(.primary, .secondary-button) { height: 34px; white-space: nowrap; }
+
+/* Done: a close button and a draining bar that shows when it will go. */
+.admin-game-card.done { overflow: hidden; cursor: default; }
+.admin-game-card-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-subtle);
+  background: transparent;
+}
+.admin-game-card-close:hover { color: var(--text); background: var(--surface-hover); }
+.admin-game-card-close:active { transform: scale(0.94); }
+.admin-game-card-close:focus-visible { outline: 2px solid var(--selection-ring); outline-offset: 1px; }
+.admin-game-card.done .admin-game-card-copy { padding-right: 18px; }
+
+.admin-game-card-timer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--toggle-on);
+  transform-origin: left center;
+  animation: admin-game-card-countdown linear forwards;
+}
+.admin-game-card-timer[data-paused] { animation-play-state: paused; }
+
+@keyframes admin-game-card-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}

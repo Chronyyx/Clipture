@@ -1202,7 +1202,9 @@ const Diagnostics& Engine::diagnostics() {
     refreshPacketCounts();
     if (adminHotkeyRelay_) {
         diagnostics_.adminGame = adminHotkeyRelay_->elevatedGame();
+        diagnostics_.adminGameInFront = adminHotkeyRelay_->gameInFront();
         diagnostics_.adminHotkeyRelay = adminHotkeyRelay_->status();
+        diagnostics_.adminHotkeySetup = adminHotkeyRelay_->setup();
     }
     return diagnostics_;
 }

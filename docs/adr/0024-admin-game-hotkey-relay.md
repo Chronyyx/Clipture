@@ -2,7 +2,7 @@
 
 Date: 2026-10-29
 
-Status: implemented in 1.8.1; off until the user allows it.
+Status: implemented in 1.8.1, windowless since 1.8.2; off until the user allows it.
 
 ## Context
 
@@ -42,6 +42,13 @@ started elevated by a per-user scheduled task.
   only with Ctrl, Alt or Win, or a key that types nothing (F1-F24, Insert,
   Pause...), and changes at most every 5 s, so it cannot be turned into a way of
   reading what is typed in an admin window (`AdminHotkeyRelayProtocol.hpp`).
+- **No window.** The engine is a console program, so the task runs it through
+  `%SystemRoot%\System32\conhost.exe --headless`, and the relay also calls
+  `FreeConsole`. 1.8.1 ran it directly, which showed an empty console window
+  while the game was open (and a click into it could freeze the relay). The
+  engine reads the task before starting it and reports a setup without
+  `--headless` as `outdated` (`adminHotkeySetup`), so it is never started and
+  Allow registers it again.
 - **Short-lived.** The engine starts the task while an admin game is open and the
   setting is on, serves a named pipe, accepts only the relay copy as its client
   (by process image path), and tells it to quit two minutes after the game
@@ -50,6 +57,9 @@ started elevated by a per-user scheduled task.
 - **Versioned.** The pipe protocol starts with `clipture-hotkey-relay/1`. An
   installed relay is an older engine after updates; when the version no longer
   matches, the engine reports `outdated` and Allow installs the current copy.
+- **Quiet.** The in-game notice shows only while the admin game has focus
+  (`adminGameInFront`), once per game and session; turning the setting off
+  counts as "Not now" for the session.
 - **Off and removal.** Settings turn it off without a prompt (the relay stays set
   up, so on again is instant) or remove it behind the prompt. UI saves never
   change the setting; only the Allow, off and remove commands do, so a page
@@ -62,5 +72,5 @@ started elevated by a per-user scheduled task.
   refuses that case.
 - Uninstalling Clipture as a user does not remove the Program Files copy or the
   task; Settings > Remove from this PC does.
-- Not yet confirmed against a real elevated game end to end; the parts were
-  tested separately (protocol unit tests, build, UI states).
+- Confirmed end to end with an elevated stand-in window (first allow, saved
+  clip, reset, re-allow from a 1.8.1 setup); not yet with Marvel Rivals itself.

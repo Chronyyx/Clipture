@@ -171,7 +171,9 @@ struct Diagnostics {
     // The game in front running as administrator (kept for a minute after),
     // and the admin hotkey relay's state (ADR 0024).
     std::string adminGame;
+    bool adminGameInFront = false;
     std::string adminHotkeyRelay = "off";
+    std::string adminHotkeySetup = "missing";
     bool nvencAvailable = false;
     bool engineRunning = false;
     bool d3d11Ready = false;

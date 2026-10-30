@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.8.2] - 2026-10-29
+
+### Recording
+
+- **No console window:** In 1.8.1, allowing the save shortcut in admin games opened an empty console window while such a game ran, and clicking into it could stop the shortcut working. The helper now runs with no window at all. If you allowed it in 1.8.1, Clipture asks you to allow it once more, and it never opens that window.
+- **The notice shows only in the game:** The "Hotkey blocked" card appears while an admin game is actually in front, not after you have switched away, and turning the shortcut off in Settings no longer brings it back for the rest of the session.
+- **A success card that gets out of the way:** After you allow it, the confirmation shows a short countdown, pauses while your mouse is over it, and closes with a click.
+
 ## [1.8.1] - 2026-10-29
 
 ### Recording

@@ -22,11 +22,9 @@ pub fn dismiss_admin_game_hotkey(state: State<'_, AppState>) {
 /// outcome says what happened.
 #[tauri::command]
 pub async fn allow_admin_game_hotkey(app: AppHandle, state: State<'_, AppState>) -> Result<AdminGameHotkeyChange, ()> {
+    // Set up the current way: turning it on again needs no prompt.
     let current = state.engine.cached_diagnostics();
-    let relay = super::detail(&current, "adminHotkeyRelay");
-    // Set up and working last time it ran: turning it on again needs no prompt.
-    let reusable = super::relay_installed()
-        && !matches!(relay.as_deref(), Some("outdated" | "failed" | "not-installed"));
+    let reusable = super::relay_installed() && super::detail(&current, "adminHotkeySetup").as_deref() == Some("current");
     let installed = if reusable { Ok(Some(0)) } else { elevated(&state, "--install-hotkey-relay").await };
     let outcome = match installed {
         Ok(None) => declined(),
@@ -47,6 +45,8 @@ pub async fn allow_admin_game_hotkey(app: AppHandle, state: State<'_, AppState>)
 /// Clipture no longer starts it. It stays set up, so turning it on again is instant.
 #[tauri::command]
 pub async fn disable_admin_game_hotkey(app: AppHandle, state: State<'_, AppState>) -> Result<AdminGameHotkeyChange, ()> {
+    // Turned off on purpose: no card or in-game notice about it this session.
+    state.admin_hotkey.dismiss();
     Ok(match set_enabled(&app, &state, false).await {
         Ok(()) => change(AdminGameHotkeyOutcome::Disabled, None),
         Err(message) => failed(message),
