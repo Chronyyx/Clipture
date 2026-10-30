@@ -1,8 +1,10 @@
 #include "clipture/Engine.hpp"
 #include "clipture/platform/ThreadName.hpp"
+#include "clipture/platform/windows/AdminHotkeyRelay.hpp"
 
 #include <Windows.h>
 #include <mmsystem.h>
+#include <shellapi.h>
 
 #include "clipture/RawInputHotkey.hpp"
 #include "clipture/protocol/JsonFields.hpp"
@@ -11,6 +13,7 @@
 #include <exception>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -86,9 +89,24 @@ void respondError(int id, const std::string& error) {
     std::cout << "{\"id\":" << id << ",\"error\":\"" << jsonEscape(error) << "\"}" << std::endl;
 }
 
-void emitHotkeyEvent() {
+void emitHotkeyEvent(const char* source) {
     std::lock_guard lock(outputMutex);
-    std::cout << "{\"event\":\"hotkey\",\"source\":\"raw-input\"}" << std::endl;
+    std::cout << "{\"event\":\"hotkey\",\"source\":\"" << source << "\"}" << std::endl;
+}
+
+// Process modes for the admin game hotkey relay (ADR 0024); nullopt runs the
+// engine. The install modes run elevated from the app, the relay from its task.
+std::optional<int> runRelayMode() {
+    int count = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (!arguments) return std::nullopt;
+    const std::wstring mode = count > 1 ? arguments[1] : L"";
+    const std::wstring sid = count > 2 ? arguments[2] : L"";
+    LocalFree(arguments);
+    if (mode == L"--hotkey-relay") return clipture::platform::runAdminHotkeyRelay();
+    if (mode == L"--install-hotkey-relay") return clipture::platform::installAdminHotkeyRelay(sid);
+    if (mode == L"--uninstall-hotkey-relay") return clipture::platform::uninstallAdminHotkeyRelay(sid);
+    return std::nullopt;
 }
 
 class SavePriorityGuard {
@@ -128,6 +146,7 @@ private:
 }  // namespace
 
 int main() {
+    if (const auto relayExit = runRelayMode()) return *relayExit;
     clipture::nameCurrentThread(L"engine-main");
     timeBeginPeriod(1);
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
@@ -135,8 +154,10 @@ int main() {
         SetProcessDPIAware();
     }
 
-    clipture::RawInputHotkey hotkey(emitHotkeyEvent);
+    clipture::RawInputHotkey hotkey([] { emitHotkeyEvent("raw-input"); });
+    clipture::platform::AdminHotkeyRelay adminHotkeyRelay([] { emitHotkeyEvent("admin-relay"); });
     clipture::Engine engine;
+    engine.setAdminHotkeyRelay(&adminHotkeyRelay);
     std::string line;
 
     while (std::getline(std::cin, line)) {
@@ -157,7 +178,9 @@ int main() {
             }
 
             if (type == "configureHotkey") {
-                const bool armed = hotkey.configure(extractString(request, "hotkey"));
+                const auto accelerator = extractString(request, "hotkey");
+                const bool armed = hotkey.configure(accelerator);
+                adminHotkeyRelay.setAccelerator(accelerator);
                 std::ostringstream payload;
                 payload << "{\"ready\":" << (hotkey.ready() ? "true" : "false")
                         << ",\"armed\":" << (armed ? "true" : "false")
@@ -215,7 +238,8 @@ int main() {
                     splitList(extractString(request, "systemAudioProcesses")),
                     extractBool(request, "saveInPlace", true),
                     extractBool(request, "saveInPlaceOverlap", true),
-                    extractString(request, "saveFolder")
+                    extractString(request, "saveFolder"),
+                    extractBool(request, "adminGameHotkey", false)
                 };
                 respond(id, clipture::toJson(engine.configure(settings)));
                 continue;

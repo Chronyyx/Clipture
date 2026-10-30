@@ -62,6 +62,8 @@ add_executable(clipture_engine
   src/replay/ConsumedWindow.cpp
   src/replay/BackfillPace.cpp
   src/platform/windows/InPlaceFile.cpp
+  src/platform/windows/ProcessElevation.cpp
+  src/platform/windows/AdminHotkeyRelay.cpp
   src/RawInputHotkey.cpp
   src/Tonemapper.cpp
   src/GameFrameProbe.cpp
@@ -92,7 +94,7 @@ if(MSVC)
   target_compile_options(clipture_engine PRIVATE /W4 /permissive- /MP8)
 endif()
 
-target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 avrt mfplat mfreadwrite mfuuid winmm user32 dwmapi)
+target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 oleaut32 taskschd shell32 avrt mfplat mfreadwrite mfuuid winmm user32 dwmapi)
 
 if(BUILD_TESTING)
   add_executable(clipture_selection_trace_tests tests/FrameSelectionTraceTests.cpp)
@@ -133,6 +135,10 @@ if(BUILD_TESTING)
   target_include_directories(clipture_tone_curve_tests PRIVATE include)
   target_compile_features(clipture_tone_curve_tests PRIVATE cxx_std_20)
   add_test(NAME clipture_tone_curve COMMAND clipture_tone_curve_tests)
+  add_executable(clipture_admin_relay_tests tests/AdminHotkeyRelayProtocolTests.cpp)
+  target_include_directories(clipture_admin_relay_tests PRIVATE include)
+  target_compile_features(clipture_admin_relay_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_admin_relay_protocol COMMAND clipture_admin_relay_tests)
   add_executable(clipture_shared_reader_tests tests/SharedTextureReaderTests.cpp
     src/SharedTextureReader.cpp src/CaptureBackend.cpp src/FrameQueue.cpp)
   target_include_directories(clipture_shared_reader_tests PRIVATE src include)

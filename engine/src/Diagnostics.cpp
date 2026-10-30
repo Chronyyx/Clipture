@@ -672,6 +672,8 @@ std::string toJson(const Diagnostics& diagnostics) {
         << "\"nvencConvertedFrames\":" << diagnostics.nvencConvertedFrames << ","
         << "\"captureEpoch\":" << diagnostics.captureEpoch << ","
         << "\"capturePressure\":\"" << jsonEscape(diagnostics.capturePressure) << "\","
+        << "\"adminGame\":\"" << jsonEscape(diagnostics.adminGame) << "\","
+        << "\"adminHotkeyRelay\":\"" << jsonEscape(diagnostics.adminHotkeyRelay) << "\","
         << "\"nvencAvailable\":" << (diagnostics.nvencAvailable ? "true" : "false") << ","
         << "\"engineRunning\":" << (diagnostics.engineRunning ? "true" : "false") << ","
         << "\"d3d11Ready\":" << (diagnostics.d3d11Ready ? "true" : "false") << ","

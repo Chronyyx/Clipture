@@ -248,7 +248,7 @@ fn failed_result(mut result: SaveClipResult, message: &str) -> SaveClipResult {
     result
 }
 
-fn notification_placement(position: NotificationPosition) -> NotificationPlacement {
+pub(crate) fn notification_placement(position: NotificationPosition) -> NotificationPlacement {
     match position {
         NotificationPosition::TopLeft => NotificationPlacement::TopLeft,
         NotificationPosition::BottomRight => NotificationPlacement::BottomRight,

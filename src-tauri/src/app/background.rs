@@ -20,10 +20,23 @@ pub fn start(app: AppHandle) {
     let startup_settings = settings_store.get();
     if !test_mode {
         let diagnostics_engine = engine.clone();
+        let notice_settings = settings_store.clone();
+        let admin_hotkey = state.admin_hotkey.clone();
+        let notifications = state.notifications.clone();
         tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                let _ = diagnostics_engine.diagnostics().await;
+                let Ok(diagnostics) = diagnostics_engine.diagnostics().await else { continue };
+                // An admin game the hotkey cannot reach: tell the player once, in game.
+                let settings = notice_settings.get();
+                if let Some(game) = admin_hotkey.notice_due(&settings, &diagnostics) {
+                    if settings.show_notification {
+                        let placement = crate::save::notification_placement(settings.notification_position);
+                        if let Err(error) = notifications.admin_game(&game, placement) {
+                            tracing::warn!(%error, "could not show the admin game notice");
+                        }
+                    }
+                }
             }
         });
     }

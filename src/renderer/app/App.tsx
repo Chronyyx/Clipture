@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 // @ts-ignore
 import logoUrl from "../../../assets/clipture-logo-ui.png";
 import type { ClipRecord, ClipSettings } from "../../shared/types";
+import { AdminGameCard } from "../features/admin-hotkey";
 import { useCaptureActions } from "../features/capture";
 import { DiagnosticsView, RecorderStatus, useDiagnostics } from "../features/diagnostics";
 import { appVersion } from "./appVersion";
@@ -174,6 +175,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
             </motion.div>
           )}
         </AnimatePresence>
+        <AdminGameCard />
         <AnimatePresence mode="wait" initial={false}>
         <motion.div key={activeTab} className="view"
           initial={{ opacity: 0, transform: "translateY(4px)" }}

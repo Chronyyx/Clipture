@@ -174,47 +174,17 @@ fn confirm(machine: &Path) -> bool {
 fn confirm(_: &Path) -> bool { false }
 
 /// Ok(false) when the user declined the elevation prompt.
-#[cfg(windows)]
 fn elevate(helper: &Path, machine: &Path) -> Result<bool, UpdateError> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::{core::PCWSTR, Win32::{Foundation::{CloseHandle, WAIT_OBJECT_0}, System::Threading::{GetExitCodeProcess, WaitForSingleObject}, UI::{Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW}, WindowsAndMessaging::SW_HIDE}}};
-    let wide = |text: &std::ffi::OsStr| text.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
-    let arguments = format!("{CLEANUP_FLAG} \"{}\"", machine.display());
     if machine.to_string_lossy().contains('"') {
         return Err(invalid("Unexpected quote in an installation path"));
     }
-    let (verb, file, parameters) = (wide("runas".as_ref()), wide(helper.as_os_str()), wide(arguments.as_ref()));
-    let mut info = SHELLEXECUTEINFOW {
-        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOCLOSEPROCESS,
-        lpVerb: PCWSTR(verb.as_ptr()),
-        lpFile: PCWSTR(file.as_ptr()),
-        lpParameters: PCWSTR(parameters.as_ptr()),
-        nShow: SW_HIDE.0,
-        ..Default::default()
-    };
-    // SAFETY: every string outlives the call; the process handle is closed below.
-    if let Err(error) = unsafe { ShellExecuteExW(&mut info) } {
-        const CANCELLED: i32 = 1223;
-        return if error.code().0 & 0xFFFF == CANCELLED { Ok(false) } else { Err(invalid(error.to_string())) };
+    match crate::platform::run_elevated(helper, &format!("{CLEANUP_FLAG} \"{}\"", machine.display())) {
+        Ok(None) => Ok(false),
+        Ok(Some(0)) => Ok(true),
+        Ok(Some(code)) => Err(invalid(format!("Elevated cleanup ended with status {code}"))),
+        Err(error) => Err(invalid(error)),
     }
-    let process = info.hProcess;
-    let mut code = 1_u32;
-    // SAFETY: `process` is the owned handle ShellExecuteExW returned.
-    let finished = unsafe {
-        let waited = WaitForSingleObject(process, 5 * 60 * 1000) == WAIT_OBJECT_0;
-        let read = waited && GetExitCodeProcess(process, &mut code).is_ok();
-        let _ = CloseHandle(process);
-        read
-    };
-    if !finished || code != 0 {
-        return Err(invalid(format!("Elevated cleanup ended with status {code}")));
-    }
-    Ok(true)
 }
-
-#[cfg(not(windows))]
-fn elevate(_: &Path, _: &Path) -> Result<bool, UpdateError> { Ok(false) }
 
 #[cfg(test)]
 mod tests {

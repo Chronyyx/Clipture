@@ -84,11 +84,11 @@ unsafe fn paint(hwnd: HWND) {
     let _ = GetClientRect(hwnd, &mut rect);
     let mut text = [0u16; 512];
     let length = GetWindowTextW(hwnd, &mut text).max(0) as usize;
-    draw_card(dc, rect, &mut text[..length]);
+    draw_card(dc, rect, &text[..length]);
     let _ = EndPaint(hwnd, &paint);
 }
 
-unsafe fn draw_card(dc: HDC, rect: RECT, text: &mut [u16]) {
+unsafe fn draw_card(dc: HDC, rect: RECT, text: &[u16]) {
     let scale = (rect.right as f64 / WIDTH).max(0.1);
     let px = |value: f64| (value * scale).round() as i32;
     SetDCBrushColor(dc, BACKGROUND);
@@ -110,12 +110,39 @@ unsafe fn draw_card(dc: HDC, rect: RECT, text: &mut [u16]) {
     }
     SelectObject(dc, old_pen);
     SelectObject(dc, old_brush);
+    SetBkMode(dc, TRANSPARENT);
+    let left = px(92.0);
+    let right = rect.right - px(12.0);
+    let mut lines = text.split(|&unit| unit == u16::from(b'\n'));
+    let title = lines.next().unwrap_or_default();
+    let details: Vec<&[u16]> = lines.filter(|line| !line.is_empty()).collect();
+    if details.is_empty() {
+        // One bold line, centered: "Saving clip...", "Clip saved!".
+        let mut text_rect = RECT { left, top: 0, right, bottom: rect.bottom };
+        draw_line(dc, title, &mut text_rect, px(16.0), 700, 0x00ffffff, DT_VCENTER);
+        return;
+    }
+    // A notice: bold title, then quieter lines, centered as one block.
+    let (title_height, detail_height, gap) = (px(20.0), px(17.0), px(2.0));
+    let block = title_height + gap + detail_height * details.len() as i32;
+    let mut top = (rect.bottom - block) / 2;
+    let mut title_rect = RECT { left, top, right, bottom: top + title_height };
+    draw_line(dc, title, &mut title_rect, px(16.0), 700, 0x00ffffff, DT_TOP);
+    top += title_height + gap;
+    for line in details {
+        let mut line_rect = RECT { left, top, right, bottom: top + detail_height };
+        draw_line(dc, line, &mut line_rect, px(13.0), 400, 0x00c8c8c8, DT_TOP);
+        top += detail_height;
+    }
+}
+
+unsafe fn draw_line(dc: HDC, text: &[u16], rect: &mut RECT, height: i32, weight: i32, color: u32, vertical: DRAW_TEXT_FORMAT) {
     let font = CreateFontW(
-        -px(16.0),
+        -height,
         0,
         0,
         0,
-        700,
+        weight,
         0,
         0,
         0,
@@ -131,19 +158,13 @@ unsafe fn draw_card(dc: HDC, rect: RECT, text: &mut [u16]) {
     } else {
         None
     };
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, COLORREF(0x00ffffff));
-    let mut text_rect = RECT {
-        left: px(92.0),
-        top: 0,
-        right: rect.right - px(12.0),
-        bottom: rect.bottom,
-    };
+    SetTextColor(dc, COLORREF(color));
+    let mut owned = text.to_vec();
     DrawTextW(
         dc,
-        text,
-        &mut text_rect,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
+        &mut owned,
+        rect,
+        DT_LEFT | vertical | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
     );
     if let Some(old_font) = old_font {
         SelectObject(dc, old_font);

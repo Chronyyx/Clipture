@@ -397,6 +397,9 @@ export interface ClipSettings {
   saveInPlaceOverlap: boolean;
   /** Host-managed: default browser/Discord tracks were offered once. */
   defaultAppSourcesVersion?: number;
+  /** Host-managed: the save shortcut reaches games running as administrator.
+   * Changed only through the admin game hotkey methods. */
+  adminGameHotkey?: boolean;
   fps: import('./capture-fps').CaptureFps;
   bitrateMbps: number;
   autoBitrate: boolean;
@@ -587,6 +590,24 @@ export interface OldInstallation {
   folder: string;
 }
 
+/** Save shortcut in games that run as administrator (ADR 0024). */
+export interface AdminGameHotkey {
+  /** The game in front running as administrator, kept a minute after it closes. */
+  game: string | null;
+  enabled: boolean;
+  /** Set up on this PC (Windows' prompt was allowed). */
+  installed: boolean;
+  relay: 'off' | 'not-installed' | 'idle' | 'starting' | 'active' | 'outdated' | 'rejected' | 'failed';
+  /** "Not now" was chosen this session. */
+  dismissed: boolean;
+}
+
+export interface AdminGameHotkeyChange {
+  /** `declined`: Windows' administrator prompt was declined. */
+  outcome: 'allowed' | 'disabled' | 'removed' | 'declined' | 'failed';
+  message?: string;
+}
+
 export interface OldInstallationRemoval {
   /** `declined`: Windows' administrator prompt was declined. */
   outcome: 'removed' | 'declined' | 'failed';
@@ -659,6 +680,15 @@ export interface CliptureApi {
   getOldInstallation(): Promise<OldInstallation | null>;
   /** Removes it after Windows' administrator prompt. Never throws. */
   removeOldInstallation(): Promise<OldInstallationRemoval>;
+  getAdminGameHotkey(): Promise<AdminGameHotkey>;
+  /** Sets the relay up behind Windows' administrator prompt (once) and turns it on. */
+  allowAdminGameHotkey(): Promise<AdminGameHotkeyChange>;
+  /** Turns it off without a prompt; it stays set up. */
+  disableAdminGameHotkey(): Promise<AdminGameHotkeyChange>;
+  /** Turns it off and removes it from the PC behind Windows' prompt. */
+  removeAdminGameHotkey(): Promise<AdminGameHotkeyChange>;
+  /** "Not now": no card or in-game notice for the rest of this session. */
+  dismissAdminGameHotkey(): Promise<void>;
   openThemeFontDownload(theme: ThemeFontId): Promise<void>;
   onLibraryChanged: (callback: (addedClip?: ClipRecord) => void) => () => void;
   onUpdateStateChanged: (callback: (state: UpdateState) => void) => () => void;

@@ -11,6 +11,18 @@ pub use windows::HostSystemInfo;
 pub(crate) use windows::replace_file;
 #[cfg(windows)]
 pub(crate) use windows::detect_default_audio_apps;
+#[cfg(windows)]
+pub(crate) use windows::{current_user_sid, run_elevated};
+
+#[cfg(not(windows))]
+pub(crate) fn run_elevated(_: &std::path::Path, _: &str) -> Result<Option<u32>, String> {
+    Ok(None)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn current_user_sid() -> Option<String> {
+    None
+}
 
 #[cfg(not(windows))]
 pub(crate) fn detect_default_audio_apps() -> Vec<crate::settings::DetectedAudioApp> {

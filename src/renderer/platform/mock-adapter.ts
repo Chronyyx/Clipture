@@ -1,5 +1,6 @@
 import type {
   ActiveProcess,
+  AdminGameHotkey,
   AudioInputDevice,
   ClipRecord,
   ClipSettings,
@@ -104,6 +105,8 @@ export function createMockCliptureController(seed: MockCliptureState = {}): Mock
   const updateChanged = new MockEvent<UpdateState>();
   const playSound = new MockEvent<string>();
   const showNotification = new MockEvent<{ thumbnailUrl: string; position: string; message?: string }>();
+  const previewGame = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('adminGame');
+  const adminGameHotkey: AdminGameHotkey = { game: previewGame || null, enabled: false, installed: false, relay: 'off', dismissed: false };
 
   const client: CliptureApi = {
     getDiagnostics: async () => mergeDiagnostics(seed.diagnostics ?? defaultDiagnostics),
@@ -200,6 +203,23 @@ export function createMockCliptureController(seed: MockCliptureState = {}): Mock
     // A browser or the web demo never has a Program Files copy to remove.
     getOldInstallation: async () => null,
     removeOldInstallation: async () => ({ outcome: 'failed', message: 'There is no old copy to remove.' }),
+    // No admin game unless a preview asks for one (`?adminGame=Marvel Rivals`).
+    getAdminGameHotkey: async () => ({ ...adminGameHotkey }),
+    allowAdminGameHotkey: async () => {
+      await delay(900);
+      Object.assign(adminGameHotkey, { enabled: true, installed: true, relay: adminGameHotkey.game ? 'active' : 'idle' });
+      return { outcome: 'allowed' };
+    },
+    disableAdminGameHotkey: async () => {
+      Object.assign(adminGameHotkey, { enabled: false, relay: 'off' });
+      return { outcome: 'disabled' };
+    },
+    removeAdminGameHotkey: async () => {
+      await delay(900);
+      Object.assign(adminGameHotkey, { enabled: false, installed: false, relay: 'off' });
+      return { outcome: 'removed' };
+    },
+    dismissAdminGameHotkey: async () => { adminGameHotkey.dismissed = true; },
     openThemeFontDownload: async () => unavailable('openThemeFontDownload'),
     onLibraryChanged: (callback) => libraryChanged.subscribe(callback),
     onUpdateStateChanged: (callback) => updateChanged.subscribe(callback),

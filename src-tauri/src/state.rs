@@ -42,6 +42,7 @@ pub struct AppState {
     pub diagnostics: Arc<DiagnosticsBuilder>,
     pub save_io: Arc<SaveIoAnalyzer>,
     pub sharing: Arc<SharingService>,
+    pub admin_hotkey: Arc<crate::admin_hotkey::AdminHotkeyService>,
     exiting: AtomicBool,
 }
 
@@ -170,6 +171,7 @@ impl AppState {
             diagnostics,
             save_io,
             sharing,
+            admin_hotkey: Arc::default(),
             exiting: AtomicBool::new(false),
         }
     }
@@ -203,6 +205,11 @@ impl AppState {
                 "install_update",
                 "get_old_installation",
                 "remove_old_installation",
+                "get_admin_game_hotkey",
+                "allow_admin_game_hotkey",
+                "disable_admin_game_hotkey",
+                "remove_admin_game_hotkey",
+                "dismiss_admin_game_hotkey",
                 "updates://state-changed",
                 "capture-aware-updates",
                 "lazy-disposable-webview",

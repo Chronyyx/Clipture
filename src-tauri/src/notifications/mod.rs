@@ -23,6 +23,7 @@ pub enum NotificationKind {
     Saving,
     Saved,
     Failed,
+    Notice,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +94,17 @@ impl NotificationService {
             message: "Clip failed".into(),
             placement,
             visible_for: Duration::from_secs(5),
+        })
+    }
+
+    /// The save hotkey cannot reach a game running as administrator. Click-through
+    /// like every card: the fix waits until the player is out of the game.
+    pub fn admin_game(&self, game: &str, placement: NotificationPlacement) -> AppResult<()> {
+        self.show(NotificationRequest {
+            kind: NotificationKind::Notice,
+            message: format!("Hotkey blocked\n{game} runs as admin\nOpen Clipture to fix it once"),
+            placement,
+            visible_for: Duration::from_secs(8),
         })
     }
 

@@ -155,4 +155,19 @@ mod tests {
         );
         assert!(book.is_online("a"));
     }
+
+    #[test]
+    fn a_request_they_sent_before_their_goodbye_cannot_bring_them_back() {
+        // Their streams arrive in order but are handled concurrently: the
+        // goodbye can finish first. The earlier stream is dated by its accept.
+        let book = PresenceBook::default();
+        book.saw("a");
+        let earlier_stream_accepted = Instant::now();
+        std::thread::sleep(Duration::from_millis(2));
+        book.gone("a");
+        assert!(!book.saw_since("a", earlier_stream_accepted));
+        assert!(!book.is_online("a"), "they left; they stay offline");
+        let later_stream_accepted = Instant::now();
+        assert!(book.saw_since("a", later_stream_accepted), "a stream opened after the goodbye is a real return");
+    }
 }

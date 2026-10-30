@@ -1,6 +1,6 @@
 //! Thin private transport adapter. Existing commands and domain services remain
 //! the only owners of business rules and persistent effects.
-use crate::{commands, state::AppState, updates};
+use crate::{admin_hotkey, commands, state::AppState, updates};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
@@ -195,6 +195,23 @@ pub async fn invoke(
         ),
         "get_old_installation" => encode(updates::commands::get_old_installation()),
         "remove_old_installation" => encode(updates::commands::remove_old_installation().await),
+        "get_admin_game_hotkey" => encode(admin_hotkey::commands::get_admin_game_hotkey(state)),
+        "allow_admin_game_hotkey" => encode(
+            admin_hotkey::commands::allow_admin_game_hotkey(app.clone(), state)
+                .await
+                .map_err(|()| String::from("Admin game hotkey setup failed"))?,
+        ),
+        "disable_admin_game_hotkey" => encode(
+            admin_hotkey::commands::disable_admin_game_hotkey(app.clone(), state)
+                .await
+                .map_err(|()| String::from("Admin game hotkey change failed"))?,
+        ),
+        "remove_admin_game_hotkey" => encode(
+            admin_hotkey::commands::remove_admin_game_hotkey(app.clone(), state)
+                .await
+                .map_err(|()| String::from("Admin game hotkey removal failed"))?,
+        ),
+        "dismiss_admin_game_hotkey" => encode(admin_hotkey::commands::dismiss_admin_game_hotkey(state)),
         "open_main_window" => encode(commands::open_main_window(app.clone())?),
         "close_main_window" => encode(commands::close_main_window(app.clone())?),
         "exit_app" => {

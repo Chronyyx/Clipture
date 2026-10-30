@@ -1,6 +1,7 @@
 mod audio_apps;
 mod caption;
 mod child_job;
+mod elevate;
 mod icon_extract;
 mod icons;
 mod installed_games;
@@ -24,6 +25,7 @@ pub(crate) use sparse_file::make_sparse;
 pub(crate) use reveal::reveal_file;
 pub(crate) use legacy_startup::remove_legacy_login_items;
 pub(crate) use child_job::ChildJob;
+pub(crate) use elevate::{current_user_sid, run_elevated};
 pub use icons::WindowsIconSource;
 pub use notification::NativeNotificationSink;
 pub use system_info::HostSystemInfo;

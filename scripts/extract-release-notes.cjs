@@ -31,7 +31,20 @@ const nextHeading = following.search(/^## /m);
 const body = `${match[0]}${nextHeading >= 0 ? following.slice(0, nextHeading) : following}`.trim();
 if (!body) throw new Error(`The changelog section for ${version} is empty.`);
 
-writeFileSync(resolve(outputPath), `${body}\n`, "utf8");
+// The release page lists every updater file; the installer is the only one
+// a person needs, so the notes open with it.
+const installer = `https://github.com/Chronyyx/Clipture/releases/download/${tag}/Clipture_${version}_x64-setup.exe`;
+const download = [
+  `### [Download Clipture ${version} for Windows](${installer})`,
+  "",
+  "Run the installer once; Clipture updates itself after that. The other files on this page are for those automatic updates, so there is nothing else to download.",
+  "",
+  "---",
+  "",
+  "",
+].join("\n");
+
+writeFileSync(resolve(outputPath), `${download}${body}\n`, "utf8");
 if (process.env.GITHUB_OUTPUT) {
   appendFileSync(process.env.GITHUB_OUTPUT, `release_title=${releaseTitle}\n`, "utf8");
 }

@@ -3870,6 +3870,12 @@ ipcMain.handle("updates:install", () => installDownloadedUpdate());
 // Program Files copy (ADR 0020), so it has nothing to offer.
 ipcMain.handle("updates:getOldInstallation", () => null);
 ipcMain.handle("updates:removeOldInstallation", () => ({ outcome: "failed", message: "Only the Tauri host removes old copies." }));
+// Admin game hotkey relay (ADR 0024) exists only in the Tauri host.
+ipcMain.handle("hotkeys:getAdminGameHotkey", () => ({ game: null, enabled: false, installed: false, relay: "off", dismissed: false }));
+for (const channel of ["allowAdminGameHotkey", "disableAdminGameHotkey", "removeAdminGameHotkey"]) {
+  ipcMain.handle(`hotkeys:${channel}`, () => ({ outcome: "failed", message: "Only the Tauri host runs the admin game hotkey." }));
+}
+ipcMain.handle("hotkeys:dismissAdminGameHotkey", () => undefined);
 const themeFontDownloadUrls: Record<ThemeFontId, string> = {
   glitten: "https://www.dafont.com/glitten.font"
 };

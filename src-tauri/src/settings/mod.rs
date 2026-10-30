@@ -61,6 +61,9 @@ impl SettingsStore {
         let current = self.get();
         incoming.imported_video_directories = current.imported_video_directories.clone();
         incoming.imported_video_titles = current.imported_video_titles.clone();
+        // The admin game hotkey changes only through its own commands: on after
+        // Windows' prompt, off from its setting (ADR 0024).
+        incoming.admin_game_hotkey = current.admin_game_hotkey;
         if !same_folder(&incoming.save_folder, &current.save_folder) {
             let granted = self.granted_save_folder.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
             if !granted.is_some_and(|folder| same_folder(&folder, &incoming.save_folder)) {
@@ -160,6 +163,26 @@ mod tests {
         assert_eq!(saved.imported_video_titles, original.imported_video_titles);
         assert_eq!(saved.save_folder, original.save_folder, "an unpicked folder is refused");
         assert_eq!(saved.clip_length_seconds, 90, "ordinary settings still save");
+    }
+
+    #[test]
+    fn ui_saves_never_change_the_admin_game_hotkey() {
+        let root = tempfile::tempdir().unwrap();
+        let store = SettingsStore::load(AppPaths::test_fixture(root.path())).unwrap();
+        let mut forged = store.get();
+        forged.admin_game_hotkey = true;
+        assert!(!store.save_from_ui(forged).unwrap().admin_game_hotkey, "only Allow turns it on");
+
+        let mut allowed = store.get();
+        allowed.admin_game_hotkey = true;
+        store.save(allowed).unwrap();
+        // A settings page loaded before Allow saves its older copy.
+        let mut stale = store.get();
+        stale.admin_game_hotkey = false;
+        stale.clip_length_seconds = 45;
+        let saved = store.save_from_ui(stale).unwrap();
+        assert!(saved.admin_game_hotkey);
+        assert_eq!(saved.clip_length_seconds, 45);
     }
 
     #[test]

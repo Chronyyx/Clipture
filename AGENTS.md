@@ -33,6 +33,7 @@ src-tauri/src/
   notifications/        native overlay
   sounds/               native playback and sound library
   sharing/              friend-to-friend P2P clip sharing (iroh; ADR 0011)
+  admin_hotkey/         save hotkey in admin games via the elevated relay (ADR 0024)
   platform/windows/     narrow Windows-specific implementations
 
 engine/                 native C++ capture/encode/mux engine

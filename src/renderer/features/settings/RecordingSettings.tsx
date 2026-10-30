@@ -1,4 +1,5 @@
 import type { ClipSettings } from '../../../shared/types';
+import { AdminGameHotkeySetting } from './AdminGameHotkeySetting';
 import { DraftNumberInput } from './DraftNumberInput';
 import { HotkeyField } from './HotkeyField';
 import { SettingRow, SettingsSection, Toggle } from './SettingsSection';
@@ -23,6 +24,7 @@ export function RecordingSettings({ settings, onChange }: RecordingSettingsProps
         description='Press it in any game to save a clip. Click, then press new keys to change it.'
         control={(id) => <HotkeyField id={id} value={settings.hotkey} onChange={(hotkey) => onChange({ hotkey })} />}
       />
+      <AdminGameHotkeySetting />
       <SettingRow
         title='Clip length'
         description='How far back each save reaches, from 5 seconds to 10 minutes.'

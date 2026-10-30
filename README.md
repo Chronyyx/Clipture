@@ -1,5 +1,10 @@
 # Clipture
 
+<p align="center">
+  <a href="https://github.com/Chronyyx/Clipture/releases/latest"><img alt="Download Clipture for Windows" src="https://img.shields.io/badge/Download%20for%20Windows-latest%20release-2ea043?style=for-the-badge&logo=windows&logoColor=white" height="44"></a>
+</p>
+<p align="center">On the release page, run <b>Clipture_<i>version</i>_x64-setup.exe</b>. Clipture updates itself after that; the other files there are for those updates.</p>
+
 Clipture is a Windows replay-buffer application built around low-latency NVIDIA NVENC capture. It continuously persists compressed video and audio into a rolling replay archive in the save folder, then finalizes the selected time window as an MP4 in place when a clip is saved. Clips can be shared directly with friends, peer to peer.
 
 Website, download and live demo: [clipture.app](https://clipture.app/).

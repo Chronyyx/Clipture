@@ -143,6 +143,9 @@ pub struct ClipSettings {
     pub audio_sources: Vec<AudioSourceRule>,
     /// One-time default app tracks (browser, Discord) have been offered.
     pub default_app_sources_version: u32,
+    /// The save hotkey reaches games that run as administrator, through the
+    /// relay allowed at Windows' prompt (ADR 0024). Host-owned when turning on.
+    pub admin_game_hotkey: bool,
     #[serde(flatten)]
     pub compatibility_fields: BTreeMap<String, Value>,
 }
@@ -181,6 +184,7 @@ impl ClipSettings {
             imported_video_titles: BTreeMap::new(),
             audio_sources: default_audio_sources(),
             default_app_sources_version: 0,
+            admin_game_hotkey: false,
             compatibility_fields: BTreeMap::new(),
         }
     }

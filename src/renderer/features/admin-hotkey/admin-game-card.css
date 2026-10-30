@@ -1,0 +1,64 @@
+/* Asks once, out of the game, to let the save shortcut reach admin games.
+   Floats in the window's corner like a system notification, so nothing in the
+   page moves when it comes or goes. */
+.admin-game-card {
+  position: fixed;
+  z-index: 40;
+  right: 24px;
+  bottom: 24px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px 14px;
+  width: min(400px, calc(100vw - 48px));
+  padding: 16px;
+  border: 1px solid var(--accent-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
+  box-shadow: 0 24px 48px -16px var(--shadow), 0 2px 6px -2px var(--shadow), inset 0 1px 0 var(--inset-highlight);
+}
+
+.admin-game-card-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--accent-border);
+  border-radius: 9px;
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.admin-game-card.done { border-color: color-mix(in srgb, var(--toggle-on) 45%, var(--border)); }
+.admin-game-card.done .admin-game-card-icon {
+  border-color: color-mix(in srgb, var(--toggle-on) 45%, var(--border));
+  color: var(--toggle-on);
+  background: color-mix(in srgb, var(--toggle-on) 14%, transparent);
+}
+
+.admin-game-card-copy h2 {
+  margin: 1px 0 0;
+  color: var(--text-strong);
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.admin-game-card-copy p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.admin-game-card-copy .admin-game-card-note { margin-top: 8px; color: var(--text-subtle); font-size: 12px; }
+
+.admin-game-card-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.admin-game-card-actions :is(.primary, .secondary-button) { height: 34px; white-space: nowrap; }

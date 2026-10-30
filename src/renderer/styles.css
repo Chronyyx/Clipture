@@ -19,6 +19,7 @@
 @import './shared/ambient.css';
 @import './shared/field.css';
 @import './features/settings/settings-layout.css';
+@import './features/admin-hotkey/admin-game-card.css';
 @import './features/diagnostics/recorder-status.css';
 @import './app/shell-motion.css';
 @import './features/player/transport.css';

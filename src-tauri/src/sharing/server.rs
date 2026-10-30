@@ -58,14 +58,10 @@ pub struct PeerContext {
 }
 
 impl PeerContext {
-    /// Any request from an accepted friend proves they are online.
-    pub(super) fn contact_if_friend(&self, peer: &str) {
-        self.contact_if_friend_since(peer, Instant::now());
-    }
-
-    /// `evidence` is when the proof of life was requested: for our own
-    /// requests, when we sent them, so an answer that raced a goodbye is
-    /// not mistaken for the friend coming back.
+    /// Any request from an accepted friend proves they are online. `evidence`
+    /// is when the proof of life was requested: for our own requests, when we
+    /// sent them; for theirs, when we accepted the stream. Either way, one that
+    /// raced a goodbye is not mistaken for the friend coming back.
     pub(super) fn contact_if_friend_since(&self, peer: &str, evidence: Instant) {
         if !self.core.read(|state| state.is_accepted(peer)) {
             return;
@@ -121,9 +117,14 @@ impl ProtocolHandler for ShareProtocol {
             let Ok(Ok((send, recv))) = timeout(IDLE_TIMEOUT, connection.accept_bi()).await else {
                 break;
             };
+            // Streams are accepted in the order the friend opened them, but
+            // handled concurrently: a request opened before their goodbye can
+            // finish after it. Dating its proof of life from here keeps it
+            // from bringing them back online (PresenceBook::saw_since).
+            let accepted = Instant::now();
             if !self.context.core.read(|state| state.is_accepted(&peer)) {
                 // Anyone who is not a friend yet gets exactly one request.
-                handle_stream(self.context.clone(), &connection, peer.clone(), send, recv, true).await;
+                handle_stream(self.context.clone(), &connection, peer.clone(), accepted, send, recv, true).await;
                 break;
             }
             let Ok(permit) = streams.clone().try_acquire_owned() else {
@@ -135,7 +136,7 @@ impl ProtocolHandler for ShareProtocol {
             let connection = connection.clone();
             tokio::spawn(async move {
                 let _permit = permit;
-                handle_stream(context, &connection, peer, send, recv, false).await;
+                handle_stream(context, &connection, peer, accepted, send, recv, false).await;
             });
         }
         connection.close(0u32.into(), b"idle");
@@ -147,6 +148,7 @@ async fn handle_stream(
     context: Arc<PeerContext>,
     connection: &Connection,
     peer: String,
+    accepted: Instant,
     mut send: SendStream,
     mut recv: RecvStream,
     // The connection closes right after this reply, so wait for it to arrive.
@@ -174,7 +176,7 @@ async fn handle_stream(
             sparse,
             purpose,
         } => {
-            context.contact_if_friend(&peer);
+            context.contact_if_friend_since(&peer, accepted);
             let read = Read {
                 share_id: &share_id,
                 range: start..start.saturating_add(length),
@@ -192,7 +194,7 @@ async fn handle_stream(
         other => {
             let response = answer(&context, &peer, other);
             // After answering, so a hello that completes a friendship counts.
-            context.contact_if_friend(&peer);
+            context.contact_if_friend_since(&peer, accepted);
             wire::write_message(&mut send, &response)
                 .await
                 .map_err(|error| error.to_string())

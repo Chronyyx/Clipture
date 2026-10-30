@@ -1,5 +1,7 @@
 #include "clipture/Engine.hpp"
 #include "clipture/platform/ThreadName.hpp"
+#include "clipture/platform/windows/AdminHotkeyRelay.hpp"
+#include "clipture/platform/windows/ProcessElevation.hpp"
 #include "clipture/AudioProcessSpec.hpp"
 #include "clipture/CapturePipelinePolicy.hpp"
 #include "clipture/CaptureSession.hpp"
@@ -833,6 +835,27 @@ void Engine::refreshAudioRouting() {
     audioReplayCoordinator_->updateRouting(std::move(routes));
 }
 
+// The foreground game's name when it runs as administrator, which keeps this
+// engine's hotkey from seeing its keys. A full-screen window this engine may
+// not even query (anti-cheat) counts too, named by its title.
+static std::string foregroundAdminGame(const std::string& name, bool isGame) {
+    const HWND window = GetForegroundWindow();
+    DWORD processId = 0;
+    if (!window || !GetWindowThreadProcessId(window, &processId) || !platform::runsAboveCurrentProcess(processId)) return {};
+    if (isGame) return name;
+    RECT bounds {};
+    MONITORINFO monitor { sizeof(monitor) };
+    if (!GetWindowRect(window, &bounds) || !GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor) ||
+        bounds.left > monitor.rcMonitor.left || bounds.top > monitor.rcMonitor.top ||
+        bounds.right < monitor.rcMonitor.right || bounds.bottom < monitor.rcMonitor.bottom) {
+        return {};
+    }
+    wchar_t title[128] {};
+    GetWindowTextW(window, title, ARRAYSIZE(title));
+    const auto text = narrowWide(title);
+    return text.empty() ? std::string("A game") : text;
+}
+
 void Engine::gameDetectionLoop() {
     nameCurrentThread(L"game-detection");
     {
@@ -850,6 +873,7 @@ void Engine::gameDetectionLoop() {
         {
             HMONITOR activeMonitor = captureSession_ ? static_cast<HMONITOR>(captureSession_->activeMonitor()) : nullptr;
             auto [fgApp, fgIsGame] = detectForegroundAppInfo(activeMonitor);
+            if (adminHotkeyRelay_) adminHotkeyRelay_->observeForegroundGame(foregroundAdminGame(fgApp, fgIsGame));
             if (experimentalGameWindowCaptureEnabled()) {
                 const auto gameCaptureTarget = detectForegroundGameCaptureTarget(activeMonitor);
                 if (captureSession_ && gameCaptureTarget.window) {
@@ -1176,6 +1200,10 @@ void Engine::gameDetectionLoop() {
 
 const Diagnostics& Engine::diagnostics() {
     refreshPacketCounts();
+    if (adminHotkeyRelay_) {
+        diagnostics_.adminGame = adminHotkeyRelay_->elevatedGame();
+        diagnostics_.adminHotkeyRelay = adminHotkeyRelay_->status();
+    }
     return diagnostics_;
 }
 
@@ -1206,6 +1234,7 @@ std::string Engine::processExecutablePathJson(uint32_t processId) const {
 }
 
 const Diagnostics& Engine::configure(const EngineSettings& settings) {
+    if (adminHotkeyRelay_) adminHotkeyRelay_->setEnabled(settings.adminGameHotkey);
     const auto previousMonitorId = settings_.monitorId;
     const auto previousTargetWidth = settings_.targetWidth;
     const auto previousTargetHeight = settings_.targetHeight;

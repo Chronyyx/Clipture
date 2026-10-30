@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.8.1] - 2026-10-29
+
+### Recording
+
+- **Your save shortcut in admin games:** Some games, like Marvel Rivals, run as administrator, and Windows then blocks other apps' shortcuts while you play them, Discord's included. Clipture now notices, tells you once in a small corner card, and asks when you are back in the app. Allow it at Windows' prompt once, and your save shortcut works in those games from then on.
+- **Your call, anytime:** Turn it off in Settings > Recording without any prompt, or remove it from your PC completely. Only a tiny helper runs as administrator, only while such a game is open, and it watches for your save shortcut alone, never anything you type.
+
+### Friends
+
+- **Friends go offline right away:** A friend who closed Clipture could keep showing as online for up to two and a half minutes when their last message and their goodbye arrived out of order. Their goodbye now always wins.
+
+### Downloads
+
+- **One clear download:** The project page and every release now open with a single download button for the installer, and say that the other files are only for automatic updates.
+
 ## [1.8.0] - 2026-10-29
 
 ### Performance

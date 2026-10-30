@@ -59,6 +59,9 @@ struct EngineSettings {
     bool saveInPlace = true;
     bool saveInPlaceOverlap = true;
     std::string saveFolder;
+    // Save hotkey in games that run as administrator, through the relay the
+    // user allowed (ADR 0024).
+    bool adminGameHotkey = false;
 };
 
 struct SaveClipResult {
@@ -68,10 +71,15 @@ struct SaveClipResult {
     std::string ioAnalysisJson;
 };
 
+namespace platform { class AdminHotkeyRelay; }
+
 class Engine {
 public:
     Engine();
     ~Engine();
+
+    // Game detection reports admin games to the relay; set before configure().
+    void setAdminHotkeyRelay(platform::AdminHotkeyRelay* relay) { adminHotkeyRelay_ = relay; }
 
     const Diagnostics& diagnostics();
     const Diagnostics& configure(const EngineSettings& settings);
@@ -89,6 +97,7 @@ private:
 
     EngineSettings settings_;
     Diagnostics diagnostics_;
+    platform::AdminHotkeyRelay* adminHotkeyRelay_ = nullptr;
     CaptureTickGate captureTickGate_;
     FrameQueue frameQueue_;
     PacketRingBuffer videoPackets_;

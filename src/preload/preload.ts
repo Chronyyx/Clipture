@@ -37,6 +37,11 @@ const api: CliptureApi = {
   installUpdate: () => ipcRenderer.invoke("updates:install"),
   getOldInstallation: () => ipcRenderer.invoke("updates:getOldInstallation"),
   removeOldInstallation: () => ipcRenderer.invoke("updates:removeOldInstallation"),
+  getAdminGameHotkey: () => ipcRenderer.invoke("hotkeys:getAdminGameHotkey"),
+  allowAdminGameHotkey: () => ipcRenderer.invoke("hotkeys:allowAdminGameHotkey"),
+  disableAdminGameHotkey: () => ipcRenderer.invoke("hotkeys:disableAdminGameHotkey"),
+  removeAdminGameHotkey: () => ipcRenderer.invoke("hotkeys:removeAdminGameHotkey"),
+  dismissAdminGameHotkey: () => ipcRenderer.invoke("hotkeys:dismissAdminGameHotkey"),
   openThemeFontDownload: (theme: ThemeFontId) => ipcRenderer.invoke("theme:openFontDownload", theme),
   onLibraryChanged: (callback: (addedClip?: ClipRecord) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, addedClip?: ClipRecord) => callback(addedClip);

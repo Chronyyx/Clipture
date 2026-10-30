@@ -1,3 +1,4 @@
+mod admin_hotkey;
 mod app;
 mod clips;
 mod commands;
@@ -139,6 +140,11 @@ pub fn run() {
             updates::commands::install_update,
             updates::commands::get_old_installation,
             updates::commands::remove_old_installation,
+            admin_hotkey::commands::get_admin_game_hotkey,
+            admin_hotkey::commands::allow_admin_game_hotkey,
+            admin_hotkey::commands::disable_admin_game_hotkey,
+            admin_hotkey::commands::remove_admin_game_hotkey,
+            admin_hotkey::commands::dismiss_admin_game_hotkey,
             commands::open_theme_font_download,
             commands::hide_notification,
             commands::select_folder,

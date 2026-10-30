@@ -168,6 +168,10 @@ struct Diagnostics {
     uint64_t nvencConvertedFrames = 0;
     uint64_t captureEpoch = 0;
     std::string capturePressure = "healthy";
+    // The game in front running as administrator (kept for a minute after),
+    // and the admin hotkey relay's state (ADR 0024).
+    std::string adminGame;
+    std::string adminHotkeyRelay = "off";
     bool nvencAvailable = false;
     bool engineRunning = false;
     bool d3d11Ready = false;

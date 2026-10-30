@@ -130,6 +130,8 @@ pub struct EngineConfigure {
     pub save_in_place_overlap: bool,
     #[serde(default)]
     pub save_folder: String,
+    #[serde(default)]
+    pub admin_game_hotkey: bool,
     pub monitor_id: String,
     pub target_width: u32,
     pub target_height: u32,
@@ -197,6 +199,7 @@ impl EngineConfigure {
             save_in_place: settings.save_in_place,
             save_in_place_overlap: settings.save_in_place_overlap,
             save_folder: settings.save_folder.clone(),
+            admin_game_hotkey: settings.admin_game_hotkey,
             monitor_id: settings.monitor_id.clone(),
             target_width,
             target_height,
