@@ -40,9 +40,17 @@ pub async fn export_diagnostics(
         .authorize_write_path(&destination)
         .map_err(|error| error.to_string())?;
 
-    let mut engine = state.engine.diagnostics().await.unwrap_or_else(|error| {
-        crate::contracts::EngineDiagnostics::unavailable(error.to_string())
-    });
+    // A busy (saving) or frozen engine does not answer; export its last
+    // snapshot, marked as such, rather than an empty report.
+    let mut engine = match state.engine.diagnostics().await {
+        Ok(diagnostics) => diagnostics,
+        Err(error) => {
+            let mut snapshot = state.engine.cached_diagnostics();
+            snapshot.details.insert("liveError".into(), error.to_string().into());
+            snapshot.details.insert("lastSnapshot".into(), true.into());
+            snapshot
+        }
+    };
     if let Ok(recovery) = serde_json::to_value(state.engine.encoder_recovery()) {
         engine.details.insert("encoderRecovery".into(), recovery);
     }

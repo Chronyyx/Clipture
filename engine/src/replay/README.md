@@ -16,29 +16,26 @@ no Tauri, frontend, user-library or installer dependencies belong here.
   and appends missing/resident/foreign decoder-preroll samples one at a time. The
   path constructor and append API remain useful for standalone fixtures.
 - `ConsumedWindow.cpp`: pure visible-window selection and success-only consumption.
-  Keeps necessary keyframe preroll without showing already-saved footage. Active
-  only when `saveInPlaceOverlap` is off. After such a save the stores drop the
-  consumed footage (`ReplaySegmentStore::discardBefore`) and copy back only the
-  preroll at the top backfill pace, so the saved clip is closed at once rather
-  than when its footage expires.
-- Overlap backfill (`InPlacePacketArchive::rehome`, `ReplaySegmentStore` rehome
-  queue): after an in-place save, retained packets still leased from the saved
-  file are copied back into the new arena by the spill worker, only while no
-  live spill is pending, at background I/O priority. Chunks of about half a
+  Keeps necessary keyframe preroll without showing already-saved footage. Always
+  active with Save in place (ADR 0026: overlapping in-place saves were removed).
+  After a save the stores drop the consumed footage
+  (`ReplaySegmentStore::discardBefore`) and copy back only the preroll at the
+  top backfill pace, so the saved clip is closed at once rather than when its
+  footage expires.
+- Backfill (`InPlacePacketArchive::rehome`, `ReplaySegmentStore` rehome
+  queue): after an in-place save, the retained preroll packets still leased
+  from the saved file are copied back into the new arena by the spill worker,
+  only while no live spill is pending, at background I/O priority. Chunks of about half a
   second of pace (256 KiB-4 MiB) are taken newest-first, then read/written in
   presentation order as one contiguous arena range. Expired entries are dropped
   without I/O. A save that arrives before backfill finishes copies only the
   remaining samples through the existing foreign-sample path; a full arena
   leaves samples for that path too.
-- `BackfillPace.cpp`: backfill speed as a multiple of the measured incoming
-  footage rate. No drive-type detection: it starts at 1.1x (a passive trickle)
-  and, from the gap between recent saves, rises just enough to finish a window
-  W before 80% of the expected gap (W / (k + 1) when the oldest footage expires
-  meanwhile), capped at 8x.
+- `BackfillPace.hpp`: preroll backfill and save-copy speeds as multiples of the
+  incoming footage rate.
 
 `saveInPlace` defaults to true. OFF restores the existing hybrid RAM policy
-(always overlapping). `saveInPlaceOverlap` defaults to true; OFF consumes each
-saved window so the next save starts where the last one ended. ON spills video/AAC promptly into the configured save folder's
+(always overlapping). With it on, each save starts where the last one ended. ON spills video/AAC promptly into the configured save folder's
 `.clipture-replay` directory; PCM recovery remains separate. Unsupported/full/error
 storage uses the legacy spill fallback. See [milestone 6](../../../docs/replay-storage-progress.md)
 for lifecycle, copy/padding costs and verification limits.

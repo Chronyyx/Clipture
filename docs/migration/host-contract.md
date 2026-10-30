@@ -80,14 +80,12 @@ pins the dropdown, normalization and Rust engine-config serialization; isolated
 settings-store tests verify higher values survive disk save/reload.
 
 `ClipSettings.saveInPlace` is additive and defaults to true when absent; explicit
-false restores the legacy RAM/spill replay path. `ClipSettings.saveInPlaceOverlap`
-is additive, defaults to true and only matters while `saveInPlace` is on: true
-keeps overlapping windows (retained footage is backfilled from the saved clip
-into the live arena in the background); explicit false consumes the window, so
-each save starts where the last successful engine save ended. Both renderer
-adapters normalize both fields. Engine `configure` carries `saveInPlace`,
-`saveInPlaceOverlap` and `saveFolder`, so native background recording chooses
-storage without depending on a WebView. With overlap off, the engine consumes
+false restores the legacy RAM/spill replay path. While `saveInPlace` is on, each
+save consumes the window, so it starts where the last successful engine save
+ended (ADR 0026 removed the former `saveInPlaceOverlap` field; old profiles that
+still carry it are normalized without it). Both renderer adapters normalize
+`saveInPlace`. Engine `configure` carries `saveInPlace` and `saveFolder`, so
+native background recording chooses storage without depending on a WebView. The engine consumes
 the visible window only after engine save success; subsequent host processing
 failure preserves its source MP4 but does not roll that boundary back. Settings
 defaults and opt-outs are pinned in the host fixture, adapter tests and Rust DTO

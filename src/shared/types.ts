@@ -393,8 +393,6 @@ export interface ClipSettings {
   customAccentColor: string;
   clipLengthSeconds: number;
   saveInPlace: boolean;
-  /** In-place saves keep overlapping replay windows; false starts each clip after the last save. */
-  saveInPlaceOverlap: boolean;
   /** Schedules capture/encode GPU work ahead of the game (realtime class).
    * The host turns it off for the session after an encoder hang. */
   gpuPriorityBoost: boolean;

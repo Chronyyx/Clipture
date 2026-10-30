@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.8.4: No False Encoder Restarts",
+  "releaseTitle": "Clipture 1.8.5: Instant Saves on Hard Drives",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

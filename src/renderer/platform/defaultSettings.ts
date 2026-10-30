@@ -6,7 +6,6 @@ export const defaultSettings: ClipSettings = {
   customAccentColor: "#c8a6ff",
   clipLengthSeconds: 60,
   saveInPlace: true,
-  saveInPlaceOverlap: true,
   gpuPriorityBoost: true,
   fps: 60,
   bitrateMbps: 40,

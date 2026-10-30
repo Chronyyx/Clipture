@@ -89,6 +89,9 @@ impl EngineClient {
                 watchdog.pause();
                 continue;
             }
+            if let Some(class) = self.cached_diagnostics().details.get("gpuSchedulingClass").and_then(|v| v.as_str()) {
+                watchdog.seed_scheduling_class(class);
+            }
             let started = self.long_requests.started();
             let sample = self
                 .call::<EncoderProgress>("getDiagnostics", &(), WATCHDOG_REQUEST_TIMEOUT)

@@ -11,7 +11,6 @@
 #include "clipture/PacketRingBuffer.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/replay/ConsumedWindow.hpp"
-#include "clipture/replay/BackfillPace.hpp"
 #include "clipture/replay/InPlacePacketArchive.hpp"
 
 #include <cstdint>
@@ -58,7 +57,6 @@ struct EngineSettings {
     std::vector<std::string> appAudioProcesses;
     std::vector<std::string> systemAudioProcesses;
     bool saveInPlace = true;
-    bool saveInPlaceOverlap = true;
     std::string saveFolder;
     // Save hotkey in games that run as administrator, through the relay the
     // user allowed (ADR 0024).
@@ -112,7 +110,6 @@ private:
     std::unique_ptr<ReplaySegmentStore> pcmRecoveryStore_;
     std::shared_ptr<replay::InPlacePacketArchive> inPlaceArchive_ = std::make_shared<replay::InPlacePacketArchive>();
     replay::ConsumedWindow consumedWindow_;
-    replay::BackfillPace backfillPace_;
     // Save writer rate learned by the last paced save into this folder.
     std::string learnedSaveWriteFolder_;
     uint64_t learnedSaveWriteBytesPerSecond_ = 0;

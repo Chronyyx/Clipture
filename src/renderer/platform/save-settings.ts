@@ -7,6 +7,5 @@ export function normalizeSaveSettings(settings: ClipSettings): ClipSettings {
     ...settings,
     fps: normalizeCaptureFps(settings.fps),
     saveInPlace: settings.saveInPlace !== false,
-    saveInPlaceOverlap: settings.saveInPlaceOverlap !== false,
   };
 }

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "settingsDefaults": { "saveInPlace": true, "saveInPlaceOverlap": true },
+  "settingsDefaults": { "saveInPlace": true },
   "captureFpsOptions": [24, 30, 60, 120],
   "source": "src/shared/types.ts#CliptureApi",
   "operations": [

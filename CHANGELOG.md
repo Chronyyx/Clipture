@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.8.5] - 2026-10-30
+
+### Saving
+
+- **Instant saves on hard drives:** Saving twice in a row on a hard drive could freeze Clipture for 15 seconds or more while it copied footage the two clips shared, and slowed down games installed on the same drive. Each save now starts where the previous one ended, so nothing is copied: on a hard drive, back-to-back saves of 2-minute clips went from 15 seconds to about 0.1 seconds, and a game loading from the same drive hitched 1 time instead of 82.
+- **No more duplicate clips:** Two saves close together give you one full clip and one short clip with only what happened since, instead of two nearly identical files. The "Overlapping clips" setting is gone.
+
+### Diagnostics
+
+- **Reports while Clipture is busy:** Exporting diagnostics during a save, or while recording is stuck, now includes the last known details (GPU, driver, video memory and recording priority) instead of an empty report.
+- **Faster recovery from a stuck encoder:** If the video encoder stops responding right after Clipture starts, recording restarts within seconds instead of a minute.
+
 ## [1.8.4] - 2026-10-30
 
 ### Recording

@@ -19,10 +19,8 @@ new Function('exports', 'require', compiled)(moduleExports, name => {
 const normalize = moduleExports.normalizeSaveSettings;
 assert.equal(normalize({}).saveInPlace, fixture.settingsDefaults.saveInPlace);
 assert.equal(normalize({ saveInPlace: false }).saveInPlace, false);
-assert.equal(normalize({}).saveInPlaceOverlap, fixture.settingsDefaults.saveInPlaceOverlap);
-assert.equal(normalize({ saveInPlaceOverlap: false }).saveInPlaceOverlap, false);
 assert.deepEqual(normalize({ saveInPlace: true, hotkey: 'fixture' }),
-  { saveInPlace: true, saveInPlaceOverlap: true, hotkey: 'fixture', fps: 30 });
+  { saveInPlace: true, hotkey: 'fixture', fps: 30 });
 assert.deepEqual(fpsExports.CAPTURE_FPS_OPTIONS, fixture.captureFpsOptions);
 for (const fps of fixture.captureFpsOptions) {
   assert.equal(normalize({ fps }).fps, fps);
@@ -39,8 +37,10 @@ for (const adapter of ['electron-adapter.ts', 'tauri-adapter.ts']) {
   assert.match(text, /saveSettings:.*normalizeSaveSettings/);
 }
 assert.match(read('engine/src/main.cpp'), /extractBool\(request, "saveInPlace", true\)/);
-assert.match(read('engine/src/main.cpp'), /extractBool\(request, "saveInPlaceOverlap", true\)/);
+// Overlapping in-place saves were removed (ADR 0026): no layer carries the field.
+for (const file of ['engine/src/main.cpp', 'src/main/main.ts', 'src/shared/types.ts']) {
+  assert.doesNotMatch(read(file), /saveInPlaceOverlap/, file);
+}
+assert.doesNotMatch(read('src-tauri/src/contracts/engine.rs'), /save_in_place_overlap/);
 assert.match(read('src-tauri/src/contracts/engine.rs'), /save_in_place: settings.save_in_place/);
-assert.match(read('src-tauri/src/contracts/engine.rs'), /save_in_place_overlap: settings.save_in_place_overlap/);
-assert.match(read('src/main/main.ts'), /saveInPlaceOverlap: settings.saveInPlaceOverlap !== false/);
-console.log('Save settings: default-on in-place and overlap, explicit opt-outs and both host adapters passed.');
+console.log('Save settings: default-on in-place, explicit opt-out, no overlap field, both host adapters passed.');

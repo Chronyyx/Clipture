@@ -60,7 +60,6 @@ add_executable(clipture_engine
   src/replay/InPlaceMediaBuffer.cpp
   src/replay/InPlacePacketArchive.cpp
   src/replay/ConsumedWindow.cpp
-  src/replay/BackfillPace.cpp
   src/platform/windows/InPlaceFile.cpp
   src/platform/windows/ProcessElevation.cpp
   src/platform/windows/GpuSchedulingPriority.cpp
@@ -215,7 +214,6 @@ if(BUILD_TESTING)
     src/replay/InPlaceMediaBuffer.cpp
     src/replay/InPlacePacketArchive.cpp
     src/replay/ConsumedWindow.cpp
-    src/replay/BackfillPace.cpp
     src/platform/windows/InPlaceFile.cpp
   )
   target_include_directories(clipture_packet_tests PRIVATE include)

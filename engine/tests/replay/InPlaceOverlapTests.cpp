@@ -42,27 +42,9 @@ void requireSameBytes(const std::vector<EncodedPacket>& actual, const std::vecto
             "backfill preserves packet metadata");
     }
 }
-
-void testBackfillPace() {
-    using namespace std::chrono_literals;
-    replay::BackfillPace pace;
-    const auto start = replay::BackfillPace::Clock::time_point{} + 1h;
-    require(pace.multiplier(125) == replay::BackfillPace::baseMultiplier, "first save trickles at 1.1x live");
-    pace.recordSave(start);
-    require(pace.multiplier(125) == replay::BackfillPace::baseMultiplier, "one save gives no cadence yet");
-    pace.recordSave(start + 30s);
-    const auto quick = pace.multiplier(125);
-    require(quick > 4.0 && quick < 4.5, "a 30 s re-save finishes a 125 s window before 80% of the gap");
-    pace.recordSave(start + 33s);
-    require(pace.multiplier(125) == replay::BackfillPace::maximumMultiplier, "rapid re-saves stay capped, never unlimited");
-    pace.recordSave(start + 33s + 30min);
-    pace.recordSave(start + 33s + 60min);
-    require(pace.multiplier(125) == replay::BackfillPace::baseMultiplier, "long pauses return to the passive trickle");
-}
 }
 
 void testInPlaceOverlap() {
-    testBackfillPace();
     ScratchDirectory scratch;
     auto archive = std::make_shared<replay::InPlacePacketArchive>();
     archive->configure(scratch.path, true, 64u * 1024u * 1024u);

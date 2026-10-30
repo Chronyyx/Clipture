@@ -40,7 +40,7 @@ const request = (type, fields = {}) => new Promise((resolve, reject) => {
 });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const config = { fps: 30, bitrateMbps: 4, clipLengthSeconds: 5, targetWidth: 640, targetHeight: 360,
-  saveFolder: clips, saveInPlace: true, saveInPlaceOverlap: false, includeMixedAudio: false, includeSystemAudio: false,
+  saveFolder: clips, saveInPlace: true, includeMixedAudio: false, includeSystemAudio: false,
   includeMicrophoneAudio: false, captureGameAudio: false, captureForegroundSystemAudio: false };
 const results = [];
 const watchdog = setTimeout(() => child.kill(), 90000);

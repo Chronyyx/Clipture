@@ -1,4 +1,5 @@
 #include "clipture/Engine.hpp"
+#include "clipture/replay/BackfillPace.hpp"
 #include "clipture/platform/ThreadName.hpp"
 #include "clipture/platform/windows/AdminHotkeyRelay.hpp"
 #include "clipture/platform/windows/ProcessElevation.hpp"
@@ -45,6 +46,7 @@
 
 namespace clipture {
 namespace {
+
 
 std::mutex g_exeToGameNameMutex;
 std::map<std::string, std::string> g_exeToGameName;
@@ -1261,13 +1263,12 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     settings_.nvencPreset = std::clamp(settings.nvencPreset, 1, 5);
     settings_.clipLengthSeconds = std::clamp(settings.clipLengthSeconds, 5, 600);
     settings_.saveInPlace = settings.saveInPlace;
-    settings_.saveInPlaceOverlap = settings.saveInPlaceOverlap;
     settings_.saveFolder = settings.saveFolder;
     settings_.gpuPriorityBoost = settings.gpuPriorityBoost;
     gpuPriority_.apply(settings_.gpuPriorityBoost, diagnostics_);
-    // Overlap presents the full window again; its bytes are backfilled from the
-    // previous clip after each save. Consumption only applies when opted out.
-    consumedWindow_.enable(settings_.saveInPlace && !settings_.saveInPlaceOverlap);
+    // Each in-place save starts where the previous one ended (ADR 0026), so no
+    // saved footage has to be copied back into the live buffer.
+    consumedWindow_.enable(settings_.saveInPlace);
     settings_.monitorId = settings.monitorId.empty() ? "primary" : settings.monitorId;
     settings_.targetWidth = std::max(0, settings.targetWidth);
     settings_.targetHeight = std::max(0, settings.targetHeight);
@@ -2176,18 +2177,6 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             logEngineSaveTiming("in_place_copy", muxStartedAt,
                 "copiedBytes=" + std::to_string(inPlaceSave->copiedBytes()));
         }
-        if (inPlaceSave && settings_.saveInPlaceOverlap) {
-            // Retained packets now live in the detached file (published or kept
-            // for recovery). Copy them back just above the live rate, faster only
-            // for people who re-save quickly, so the next save stays instant.
-            backfillPace_.recordSave(std::chrono::steady_clock::now());
-            const auto multiplier = backfillPace_.multiplier(settings_.clipLengthSeconds + 5.0);
-            if (videoReplayStore_) videoReplayStore_->scheduleInPlaceRehome(multiplier);
-            if (aacReplayStore_) aacReplayStore_->scheduleInPlaceRehome(multiplier);
-            logEngineSaveTiming("backfill_schedule", SaveTimingClock::now(),
-                "multiplier=" + std::to_string(multiplier) + " expectedIntervalMs=" +
-                    std::to_string(static_cast<int64_t>(backfillPace_.expectedIntervalSeconds().value_or(0) * 1000)));
-        }
         logEngineSaveTiming(
             "mux",
             muxStartedAt,
@@ -2312,7 +2301,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
 
     result.ok = true;
     consumedWindow_.commit(clipEnd);
-    if (settings_.saveInPlace && !settings_.saveInPlaceOverlap) {
+    if (settings_.saveInPlace) {
         // No later save shows this footage again, so stop holding the saved
         // clip open for it (until now it stayed open, and could not be
         // trimmed, until the footage expired). Only the keyframe preroll and

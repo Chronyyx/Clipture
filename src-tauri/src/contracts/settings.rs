@@ -123,7 +123,6 @@ pub struct ClipSettings {
     pub custom_accent_color: String,
     pub clip_length_seconds: u32,
     pub save_in_place: bool,
-    pub save_in_place_overlap: bool,
     pub fps: u32,
     pub bitrate_mbps: u32,
     pub auto_bitrate: bool,
@@ -167,7 +166,6 @@ impl ClipSettings {
             // Fresh installs only; saved profiles keep every field they store.
             clip_length_seconds: 60,
             save_in_place: true,
-            save_in_place_overlap: true,
             fps: 60,
             bitrate_mbps: 40,
             auto_bitrate: true,
@@ -193,6 +191,8 @@ impl ClipSettings {
     }
 
     pub fn normalize(mut self, default_save_folder: &str) -> Self {
+        // Overlapping in-place saves were removed (ADR 0026); drop the old key.
+        self.compatibility_fields.remove("saveInPlaceOverlap");
         if self.ui_theme == UiTheme::Unknown {
             self.ui_theme = UiTheme::Graphite;
         }
@@ -358,17 +358,12 @@ mod tests {
     }
 
     #[test]
-    fn in_place_overlap_defaults_on_but_explicit_opt_out_survives() {
-        let old: ClipSettings = serde_json::from_str(r#"{"saveInPlace":true}"#).unwrap();
-        assert!(old.save_in_place_overlap);
-        let opted_out: ClipSettings =
-            serde_json::from_str(r#"{"saveInPlaceOverlap":false}"#).unwrap();
-        let normalized = opted_out.normalize(r"C:ixture\clips");
-        assert!(!normalized.save_in_place_overlap);
-        assert_eq!(
-            serde_json::to_value(normalized).unwrap()["saveInPlaceOverlap"],
-            false
-        );
+    fn removed_overlap_setting_is_dropped_from_old_profiles() {
+        for old in [r#"{"saveInPlaceOverlap":true}"#, r#"{"saveInPlaceOverlap":false}"#] {
+            let settings: ClipSettings = serde_json::from_str(old).unwrap();
+            let normalized = settings.normalize(r"C:\fixture\clips");
+            assert!(serde_json::to_value(normalized).unwrap().get("saveInPlaceOverlap").is_none());
+        }
     }
 
     #[test]

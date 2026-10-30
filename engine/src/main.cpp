@@ -237,7 +237,6 @@ int main() {
                     splitList(extractString(request, "appAudioProcesses")),
                     splitList(extractString(request, "systemAudioProcesses")),
                     extractBool(request, "saveInPlace", true),
-                    extractBool(request, "saveInPlaceOverlap", true),
                     extractString(request, "saveFolder"),
                     extractBool(request, "adminGameHotkey", false),
                     extractBool(request, "gpuPriorityBoost", true)

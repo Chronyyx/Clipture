@@ -81,6 +81,15 @@ impl EncoderWatchdog {
         self.scheduling_class == "realtime"
     }
 
+    /// The class from the engine's configure answer, until a poll reports one.
+    /// A freeze before the first poll answer is then judged at the right
+    /// threshold instead of the slow one.
+    pub fn seed_scheduling_class(&mut self, class: &str) {
+        if self.scheduling_class.is_empty() {
+            self.scheduling_class = class.to_owned();
+        }
+    }
+
     /// The engine's last reported GPU scheduling class ("unknown" before any).
     pub fn scheduling_class(&self) -> &str {
         if self.scheduling_class.is_empty() { "unknown" } else { &self.scheduling_class }
@@ -211,6 +220,16 @@ mod tests {
         watchdog.observe(start, Some(&sample(100, 100, 1, "realtime")));
         assert_eq!(watchdog.observe(start + Duration::from_secs(2), None), Verdict::Stalling);
         assert!(matches!(watchdog.observe(start + Duration::from_secs(5), None), Verdict::Hung(_)));
+    }
+
+    #[test]
+    fn seeded_realtime_catches_a_freeze_before_any_answer() {
+        let start = Instant::now();
+        let mut watchdog = EncoderWatchdog::default();
+        watchdog.seed_scheduling_class("realtime");
+        assert_eq!(watchdog.observe(start, None), Verdict::Stalling);
+        assert!(matches!(watchdog.observe(start + Duration::from_secs(3), None), Verdict::Hung(_)));
+        assert_eq!(watchdog.scheduling_class(), "realtime");
     }
 
     #[test]

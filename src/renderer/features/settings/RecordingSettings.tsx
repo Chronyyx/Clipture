@@ -9,13 +9,6 @@ interface RecordingSettingsProps {
   onChange: (patch: Partial<ClipSettings>) => void;
 }
 
-function overlapDescription(settings: ClipSettings) {
-  if (!settings.saveInPlace) return 'Always on while Save in place is off.';
-  return settings.saveInPlaceOverlap
-    ? 'Every save covers the full clip length, even right after another save.'
-    : 'Each save starts where the previous one ended.';
-}
-
 export function RecordingSettings({ settings, onChange }: RecordingSettingsProps) {
   return (
     <SettingsSection title='Recording' description='Clipture keeps the last moments of your screen ready to save.'>
@@ -42,17 +35,8 @@ export function RecordingSettings({ settings, onChange }: RecordingSettingsProps
       />
       <SettingRow
         title='Save in place'
-        description="Records to the save folder's drive so saving is instant and uses little memory."
+        description="Records to the save folder's drive so saving is instant and uses little memory. Each save starts where the previous one ended."
         control={(id) => <Toggle id={id} checked={settings.saveInPlace} onChange={(saveInPlace) => onChange({ saveInPlace })} />}
-      />
-      <SettingRow
-        title='Overlapping clips'
-        description={overlapDescription(settings)}
-        disabled={!settings.saveInPlace}
-        control={(id) => (
-          <Toggle id={id} checked={settings.saveInPlaceOverlap} disabled={!settings.saveInPlace}
-            onChange={(saveInPlaceOverlap) => onChange({ saveInPlaceOverlap })} />
-        )}
       />
     </SettingsSection>
   );
