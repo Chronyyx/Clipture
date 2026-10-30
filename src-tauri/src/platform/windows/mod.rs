@@ -14,6 +14,7 @@ mod shortcut;
 mod sparse_file;
 mod reveal;
 mod system_info;
+mod terminate;
 mod wave_sound;
 
 pub(crate) use audio_apps::detect_default_audio_apps;
@@ -25,6 +26,9 @@ pub(crate) use sparse_file::make_sparse;
 pub(crate) use reveal::reveal_file;
 pub(crate) use legacy_startup::remove_legacy_login_items;
 pub(crate) use child_job::ChildJob;
+pub(crate) use terminate::terminate_process;
+#[cfg(debug_assertions)]
+pub(crate) use terminate::suspend_process_for_smoke;
 pub(crate) use elevate::{current_user_sid, run_elevated};
 pub use icons::WindowsIconSource;
 pub use notification::NativeNotificationSink;

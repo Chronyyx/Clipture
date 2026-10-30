@@ -1,6 +1,10 @@
 #pragma once
 
+#include <wrl/client.h>
+
 #include <string>
+
+struct IDXGIAdapter1;
 
 namespace clipture {
 
@@ -15,5 +19,8 @@ struct NativeRuntimeState {
 };
 
 NativeRuntimeState initializeNativeRuntime(bool requireNvenc);
+
+// The NVIDIA adapter if present, else the first hardware adapter.
+Microsoft::WRL::ComPtr<IDXGIAdapter1> findPreferredAdapter(std::string& adapterName);
 
 }  // namespace clipture

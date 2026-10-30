@@ -239,7 +239,8 @@ int main() {
                     extractBool(request, "saveInPlace", true),
                     extractBool(request, "saveInPlaceOverlap", true),
                     extractString(request, "saveFolder"),
-                    extractBool(request, "adminGameHotkey", false)
+                    extractBool(request, "adminGameHotkey", false),
+                    extractBool(request, "gpuPriorityBoost", true)
                 };
                 respond(id, clipture::toJson(engine.configure(settings)));
                 continue;

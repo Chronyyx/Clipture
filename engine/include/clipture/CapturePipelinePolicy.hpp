@@ -19,6 +19,9 @@ struct CapturePipelinePolicy {
     bool directFreshConversion = false;
     bool tickAlignedAcquire = true;
     bool raisedGpuPriority = true;
+    // D3D11 GPU thread priority of the capture and encoder devices while raised
+    // (-7..7; CLIPTURE_GPU_THREAD_PRIORITY).
+    int gpuThreadPriority = 1;
     bool highPriorityCapture = true;
     bool timedCatchUp = true;
     bool hybridGameCapture = true;
@@ -61,6 +64,14 @@ inline const CapturePipelinePolicy& capturePipelinePolicy() {
         result.directFreshConversion = flag(L"CLIPTURE_DIRECT_FRESH_CONVERSION", result.directFreshConversion);
         result.tickAlignedAcquire = flag(L"CLIPTURE_TICK_ALIGNED_ACQUIRE", result.tickAlignedAcquire);
         result.raisedGpuPriority = flag(L"CLIPTURE_RAISED_GPU_PRIORITY", result.raisedGpuPriority);
+        {
+            wchar_t value[8] {};
+            const auto count = GetEnvironmentVariableW(L"CLIPTURE_GPU_THREAD_PRIORITY", value, 8);
+            if (count > 0 && count < 8) {
+                const int parsed = _wtoi(value);
+                if (parsed >= -7 && parsed <= 7) result.gpuThreadPriority = parsed;
+            }
+        }
         result.highPriorityCapture = flag(L"CLIPTURE_HIGH_PRIORITY_CAPTURE", result.highPriorityCapture);
         result.timedCatchUp = flag(L"CLIPTURE_TIMED_CATCH_UP", result.timedCatchUp);
         result.hybridGameCapture = flag(L"CLIPTURE_HYBRID_GAME_CAPTURE", result.hybridGameCapture);

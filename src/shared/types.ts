@@ -395,6 +395,9 @@ export interface ClipSettings {
   saveInPlace: boolean;
   /** In-place saves keep overlapping replay windows; false starts each clip after the last save. */
   saveInPlaceOverlap: boolean;
+  /** Schedules capture/encode GPU work ahead of the game (realtime class).
+   * The host turns it off for the session after an encoder hang. */
+  gpuPriorityBoost: boolean;
   /** Host-managed: default browser/Discord tracks were offered once. */
   defaultAppSourcesVersion?: number;
   /** Host-managed: the save shortcut reaches games running as administrator.

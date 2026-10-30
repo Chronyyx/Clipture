@@ -9,6 +9,7 @@ pub fn start(app: AppHandle) {
     let save_coordinator = state.saves.clone();
     let test_mode = state.paths.test_mode;
     let mut hotkeys = engine.subscribe_hotkeys();
+    let mut recoveries = engine.subscribe_encoder_recovery();
 
     if !test_mode && !state.paths.isolated_profile {
         if let Err(error) = super::autostart::apply(&app, settings_store.get().start_on_login) {
@@ -40,6 +41,31 @@ pub fn start(app: AppHandle) {
             }
         });
     }
+    let recovery_settings = settings_store.clone();
+    let recovery_notices = state.notifications.clone();
+    tauri::async_runtime::spawn(async move {
+        use tokio::sync::broadcast::error::RecvError;
+        loop {
+            let recovery = match recoveries.recv().await {
+                Ok(recovery) => recovery,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return,
+            };
+            let settings = recovery_settings.get();
+            let placement = crate::save::notification_placement(settings.notification_position);
+            // A halt always reaches the player: recording is off until restart.
+            let shown = match recovery {
+                crate::engine::RecoveryState::Recovered if settings.show_notification => {
+                    recovery_notices.encoder_recovered(placement)
+                }
+                crate::engine::RecoveryState::Halted => recovery_notices.recording_stopped(placement),
+                _ => Ok(()),
+            };
+            if let Err(error) = shown {
+                tracing::warn!(%error, "could not show the encoder recovery notice");
+            }
+        }
+    });
     let health_app = app.clone();
     tauri::async_runtime::spawn(async move {
         let diagnostics = match configure_engine.configure_settings(&startup_settings).await {

@@ -1,5 +1,6 @@
 mod control;
 mod supervision;
+mod watchdog;
 
 use std::{
     sync::{
@@ -60,11 +61,15 @@ pub struct EngineClient {
     desired_hotkey: Mutex<String>,
     hotkey_state: super::hotkey_state::HotkeyState,
     hotkey_events: broadcast::Sender<HotkeyEvent>,
+    recovery: Mutex<super::encoder_watchdog::EncoderRecovery>,
+    recovery_events: broadcast::Sender<super::encoder_watchdog::RecoveryState>,
+    long_requests: watchdog::LongRequests,
 }
 
 impl EngineClient {
     pub fn new(app: AppHandle, paths: AppPaths) -> Arc<Self> {
         let (hotkey_events, _) = broadcast::channel(8);
+        let (recovery_events, _) = broadcast::channel(4);
         Arc::new(Self {
             app,
             paths,
@@ -83,6 +88,9 @@ impl EngineClient {
             desired_hotkey: Mutex::new(String::new()),
             hotkey_state: super::hotkey_state::HotkeyState::default(),
             hotkey_events,
+            recovery: Mutex::default(),
+            recovery_events,
+            long_requests: watchdog::LongRequests::default(),
         })
     }
 
@@ -92,10 +100,6 @@ impl EngineClient {
 
     #[cfg(all(debug_assertions, windows))]
     pub fn crash_for_smoke(&self) -> AppResult<u64> {
-        use windows::Win32::{
-            Foundation::CloseHandle,
-            System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE},
-        };
         if !self.paths.isolated_profile || self.paths.test_mode {
             return Err(AppError::Engine(
                 "crash test requires an isolated hardware profile".into(),
@@ -107,13 +111,25 @@ impl EngineClient {
             .ok_or_else(|| AppError::Engine("no owned engine to crash".into()))?;
         // Keep ownership locked; this is the exact live child, never a process
         // found by executable name or an arbitrary renderer-supplied PID.
-        unsafe {
-            let handle = OpenProcess(PROCESS_TERMINATE, false, running.pid)
-                .map_err(|error| AppError::Engine(error.to_string()))?;
-            let result = TerminateProcess(handle, 91);
-            let _ = CloseHandle(handle);
-            result.map_err(|error| AppError::Engine(error.to_string()))?;
+        crate::platform::windows::terminate_process(running.pid, 91)
+            .map_err(|error| AppError::Engine(error.to_string()))?;
+        Ok(running.generation)
+    }
+
+    /// Freezes the live engine so the encoder watchdog sees a real hang.
+    #[cfg(all(debug_assertions, windows))]
+    pub fn hang_for_smoke(&self) -> AppResult<u64> {
+        if !self.paths.isolated_profile || self.paths.test_mode {
+            return Err(AppError::Engine(
+                "hang test requires an isolated hardware profile".into(),
+            ));
         }
+        let process = self.process.lock().unwrap_or_else(|p| p.into_inner());
+        let running = process
+            .as_ref()
+            .ok_or_else(|| AppError::Engine("no owned engine to hang".into()))?;
+        crate::platform::windows::suspend_process_for_smoke(running.pid)
+            .map_err(|error| AppError::Engine(error.to_string()))?;
         Ok(running.generation)
     }
 
@@ -140,6 +156,9 @@ impl EngineClient {
         }
         if let Some(generation) = self.running_generation() {
             return Ok(generation);
+        }
+        if self.recording_halted() {
+            return Err(AppError::Engine(watchdog::HALTED_MESSAGE.into()));
         }
         let _start = self
             .start_guard
@@ -190,6 +209,7 @@ impl EngineClient {
         tauri::async_runtime::spawn(async move {
             client.read_process_events(generation, pid, receiver).await;
         });
+        self.spawn_encoder_watchdog(generation);
         Ok(generation)
     }
 
@@ -240,6 +260,7 @@ impl EngineClient {
         timeout: Duration,
     ) -> AppResult<T> {
         self.ensure_started()?;
+        let _long_request = self.long_requests.enter(command);
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let message = encode_request(id, command, payload)?;
         let receiver = self.pending.register(id);

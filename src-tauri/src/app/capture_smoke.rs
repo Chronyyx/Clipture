@@ -21,7 +21,7 @@ pub fn install(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut report = json!({"ok": false, "checks": []});
-        match tokio::time::timeout(Duration::from_secs(180), run(&app, &mut report)).await {
+        match tokio::time::timeout(Duration::from_secs(260), run(&app, &mut report)).await {
             Ok(Ok(())) => report["ok"] = json!(true),
             Ok(Err(error)) => report["error"] = json!(error),
             Err(_) => report["error"] = json!("native capture test timed out"),
@@ -36,7 +36,7 @@ pub fn install(app: &AppHandle) {
     });
 }
 
-fn check(report: &mut Value, condition: bool, message: &str) -> Result<(), String> {
+pub(super) fn check(report: &mut Value, condition: bool, message: &str) -> Result<(), String> {
     if !condition {
         return Err(message.into());
     }
@@ -349,17 +349,18 @@ async fn run(app: &AppHandle, report: &mut Value) -> Result<(), String> {
         report["recoveredResources"]["ok"] == true,
         "recovery did not create a WebView",
     )?;
+    super::capture_smoke_hang::run(app, &settings, report).await?;
     let clips = state
         .clips
         .list_saved(Path::new(&settings.save_folder))
         .map_err(|error| error.to_string())?;
     check(
         report,
-        clips.len() == 3
+        clips.len() == 4
             && clips
                 .iter()
                 .all(|clip| Path::new(&clip.file_path).is_file()),
-        "all three clips persisted to the isolated library",
+        "all four clips persisted to the isolated library",
     )?;
     report["clips"] = serde_json::to_value(clips).unwrap();
     Ok(())

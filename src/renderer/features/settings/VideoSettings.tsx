@@ -110,6 +110,11 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
           </select>
         )}
       />
+      <SettingRow
+        title='Prioritize recording on the GPU'
+        description='Keeps clips smooth when your game uses the whole GPU, such as with uncapped FPS. Turn off if your game runs worse while recording.'
+        control={(id) => <Toggle id={id} checked={settings.gpuPriorityBoost} onChange={(gpuPriorityBoost) => onChange({ gpuPriorityBoost })} />}
+      />
     </SettingsSection>
   );
 }

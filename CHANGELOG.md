@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.8.3] - 2026-10-30
+
+### Performance
+
+- **Smooth clips at full GPU:** Clips no longer freeze when your game uses the whole GPU, as it does with uncapped FPS. Clipture's small amount of GPU work used to wait in line behind the game's frames, and capture stalled while it waited; Windows now runs it first. In Overwatch at 97-98% GPU, every frame of every clip came out fresh, where before clips froze for up to a few seconds.
+- **Your call:** Turn it off in Settings > Video with "Prioritize recording on the GPU" if your game ever runs worse while recording.
+- **Safe if the driver hangs:** Some NVIDIA drivers can freeze the video encoder in rare cases with this on. Clipture watches for that, restarts recording at normal priority and tells you; if it happens again it stops recording instead of retrying forever.
+
+### Diagnostics
+
+- **More detail in reports:** Exported diagnostics now include your GPU driver version, whether hardware GPU scheduling is on, video memory use and the recording's GPU priority.
+
 ## [1.8.2] - 2026-10-29
 
 ### Recording

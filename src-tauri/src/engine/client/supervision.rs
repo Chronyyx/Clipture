@@ -73,7 +73,7 @@ impl EngineClient {
         );
     }
 
-    fn mark_stopped(self: &Arc<Self>, generation: u64, pid: u32, message: String) {
+    pub(super) fn mark_stopped(self: &Arc<Self>, generation: u64, pid: u32, message: String) {
         let was_current = {
             let mut process = self
                 .process
@@ -100,6 +100,10 @@ impl EngineClient {
         if self.shutting_down.load(Ordering::Acquire) || self.paths.test_mode {
             return;
         }
+        if self.recording_halted() {
+            self.emit_status(false, super::watchdog::HALTED_MESSAGE.into());
+            return;
+        }
 
         let client = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
@@ -115,7 +119,8 @@ impl EngineClient {
             .last_configure
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
+            .clone()
+            .map(|configure| self.effective_configure(configure));
         if let Some(configure) = configure {
             if let Ok(diagnostics) = self
                 .call::<EngineDiagnostics>("configure", &configure, CONFIGURE_TIMEOUT)

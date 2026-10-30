@@ -67,7 +67,6 @@ constexpr bool kPreferObsStyleBufferedSyncNvenc = false;
 
 constexpr bool kEnableEncoderGpuSchedulingHeadroom = true;
 constexpr bool kEnableRoundTransitionOutputHeadroom = true;
-constexpr INT kEncoderGpuPriority = 1;
 constexpr UINT kEncoderMaximumFrameLatency = 16;
 
 // Fault injection for stress trials: CLIPTURE_TEST_ENCODER_STALL="<ms>,<periodMs>"
@@ -1097,7 +1096,7 @@ private:
         }
 
         if constexpr (kEnableEncoderGpuSchedulingHeadroom) {
-            const INT encoderGpuPriority = capturePipelinePolicy().raisedGpuPriority ? kEncoderGpuPriority : 0;
+            const INT encoderGpuPriority = capturePipelinePolicy().raisedGpuPriority ? capturePipelinePolicy().gpuThreadPriority : 0;
             Microsoft::WRL::ComPtr<IDXGIDevice> encoderDxgiDevice;
             const HRESULT dxgiDeviceHr = device_.As(&encoderDxgiDevice);
             INT previousGpuPriority = 0;

@@ -108,6 +108,28 @@ impl NotificationService {
         })
     }
 
+    pub fn encoder_recovered(&self, placement: NotificationPlacement) -> AppResult<()> {
+        self.show(NotificationRequest {
+            kind: NotificationKind::Notice,
+            message: "Recording restarted
+The GPU encoder stopped responding
+GPU priority lowered for this session".into(),
+            placement,
+            visible_for: Duration::from_secs(8),
+        })
+    }
+
+    pub fn recording_stopped(&self, placement: NotificationPlacement) -> AppResult<()> {
+        self.show(NotificationRequest {
+            kind: NotificationKind::Failed,
+            message: "Recording stopped
+The GPU encoder stopped responding again
+Restart Clipture to record".into(),
+            placement,
+            visible_for: Duration::from_secs(15),
+        })
+    }
+
     pub fn show(&self, request: NotificationRequest) -> AppResult<()> {
         self.sink.show(&request)?;
         *self

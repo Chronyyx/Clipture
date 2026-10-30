@@ -146,6 +146,8 @@ pub struct ClipSettings {
     /// The save hotkey reaches games that run as administrator, through the
     /// relay allowed at Windows' prompt (ADR 0024). Host-owned when turning on.
     pub admin_game_hotkey: bool,
+    /// Schedules capture/encode GPU work ahead of the game (realtime class).
+    pub gpu_priority_boost: bool,
     #[serde(flatten)]
     pub compatibility_fields: BTreeMap<String, Value>,
 }
@@ -185,6 +187,7 @@ impl ClipSettings {
             audio_sources: default_audio_sources(),
             default_app_sources_version: 0,
             admin_game_hotkey: false,
+            gpu_priority_boost: true,
             compatibility_fields: BTreeMap::new(),
         }
     }

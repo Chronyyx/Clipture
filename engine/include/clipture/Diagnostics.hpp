@@ -174,6 +174,20 @@ struct Diagnostics {
     bool adminGameInFront = false;
     std::string adminHotkeyRelay = "off";
     std::string adminHotkeySetup = "missing";
+    // GPU scheduling class of the engine's work (realtime with the boost on),
+    // and the adapter facts a contention report needs.
+    bool gpuPriorityBoost = false;
+    std::string gpuSchedulingRequested = "default";
+    bool gpuSchedulingOverride = false;
+    std::string gpuSchedulingClass = "default";
+    int64_t gpuSchedulingStatus = 0;
+    std::string hardwareGpuScheduling = "unknown";
+    std::string gpuDriverVersion = "unknown";
+    uint64_t vramDedicatedMb = 0;
+    uint64_t vramBudgetMb = 0;
+    uint64_t vramProcessUsageMb = 0;
+    // Every process on the adapter, the game included.
+    uint64_t vramAdapterUsageMb = 0;
     bool nvencAvailable = false;
     bool engineRunning = false;
     bool d3d11Ready = false;

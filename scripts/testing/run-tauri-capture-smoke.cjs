@@ -13,6 +13,8 @@ fs.writeFileSync(path.join(profile, 'settings.json'), JSON.stringify({
   saveFolder: clips, startOnLogin: false, hotkey: 'Ctrl+Alt+Shift+F24',
   fps: 30, resolutionPreset: '360p', autoBitrate: false, bitrateMbps: 4,
   clipLengthSeconds: 10, clipSound: 'none', showNotification: true,
+  // Already offered: keeps the default browser/Discord tracks out of the test.
+  defaultAppSourcesVersion: 1,
   audioSources: ['system', 'mic', 'game'].map(id => ({ id, label: id,
     kind: id === 'mic' ? 'microphone' : id, enabled: false }))
 }));
@@ -26,7 +28,7 @@ const monitor = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypa
   path.join(__dirname, 'watch-tauri-resources.ps1'), '-AppProcessId', String(child.pid), '-Profile', profile],
   { windowsHide: true, stdio: 'inherit' });
 monitor.on('error', error => console.error('Resource monitor failed:', error));
-const timer = setTimeout(() => child.kill(), 200000);
+const timer = setTimeout(() => child.kill(), 280000);
 child.on('error', error => { clearTimeout(timer); monitor.kill(); throw error; });
 child.on('exit', async code => {
   clearTimeout(timer);
@@ -40,9 +42,13 @@ child.on('exit', async code => {
     report.decodedClips = (report.clips || []).map(clip => {
       const decoded = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', clip.filePath,
         '-frames:v', '5', '-f', 'null', '-'], { windowsHide: true, encoding: 'utf8' });
-      return { id: clip.id, ok: decoded.status === 0, error: decoded.stderr };
+      // Clips recorded with audio must decode their first audio track too.
+      const audio = (clip.audioTracks || []).length === 0 ? { status: 0, stderr: '' }
+        : spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', clip.filePath, '-map', '0:a:0',
+          '-t', '2', '-f', 'null', '-'], { windowsHide: true, encoding: 'utf8' });
+      return { id: clip.id, ok: decoded.status === 0 && audio.status === 0, error: decoded.stderr + audio.stderr };
     });
-    report.ok = report.decodedClips.length === 3 && report.decodedClips.every(clip => clip.ok);
+    report.ok = report.decodedClips.length === 4 && report.decodedClips.every(clip => clip.ok);
     fs.writeFileSync(reportFile, JSON.stringify(report, null, 2));
   }
   fs.writeFileSync(reportFile, JSON.stringify(report, null, 2));

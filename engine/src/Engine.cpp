@@ -1200,6 +1200,7 @@ void Engine::gameDetectionLoop() {
 
 const Diagnostics& Engine::diagnostics() {
     refreshPacketCounts();
+    gpuPriority_.refreshMemory(diagnostics_);
     if (adminHotkeyRelay_) {
         diagnostics_.adminGame = adminHotkeyRelay_->elevatedGame();
         diagnostics_.adminGameInFront = adminHotkeyRelay_->gameInFront();
@@ -1262,6 +1263,8 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     settings_.saveInPlace = settings.saveInPlace;
     settings_.saveInPlaceOverlap = settings.saveInPlaceOverlap;
     settings_.saveFolder = settings.saveFolder;
+    settings_.gpuPriorityBoost = settings.gpuPriorityBoost;
+    gpuPriority_.apply(settings_.gpuPriorityBoost, diagnostics_);
     // Overlap presents the full window again; its bytes are backfilled from the
     // previous clip after each save. Consumption only applies when opted out.
     consumedWindow_.enable(settings_.saveInPlace && !settings_.saveInPlaceOverlap);

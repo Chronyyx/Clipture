@@ -132,6 +132,9 @@ pub struct EngineConfigure {
     pub save_folder: String,
     #[serde(default)]
     pub admin_game_hotkey: bool,
+    /// Off after an encoder hang for the rest of the session, whatever the setting.
+    #[serde(default = "default_gpu_priority_boost")]
+    pub gpu_priority_boost: bool,
     pub monitor_id: String,
     pub target_width: u32,
     pub target_height: u32,
@@ -155,6 +158,10 @@ pub struct EngineConfigure {
 }
 
 fn default_save_in_place() -> bool {
+    true
+}
+
+fn default_gpu_priority_boost() -> bool {
     true
 }
 
@@ -200,6 +207,7 @@ impl EngineConfigure {
             save_in_place_overlap: settings.save_in_place_overlap,
             save_folder: settings.save_folder.clone(),
             admin_game_hotkey: settings.admin_game_hotkey,
+            gpu_priority_boost: settings.gpu_priority_boost,
             monitor_id: settings.monitor_id.clone(),
             target_width,
             target_height,

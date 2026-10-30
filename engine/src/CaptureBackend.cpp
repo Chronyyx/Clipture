@@ -297,7 +297,7 @@ HRESULT createD3dDeviceForOutput(
 
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
     if (SUCCEEDED(device.As(&dxgiDevice)) && dxgiDevice) {
-        const INT requestedGpuPriority = capturePipelinePolicy().raisedGpuPriority ? 1 : 0;
+        const INT requestedGpuPriority = capturePipelinePolicy().raisedGpuPriority ? capturePipelinePolicy().gpuThreadPriority : 0;
         INT previousGpuPriority = 0;
         const HRESULT getBeforeHr = dxgiDevice->GetGPUThreadPriority(&previousGpuPriority);
         const HRESULT setHr = dxgiDevice->SetGPUThreadPriority(requestedGpuPriority);

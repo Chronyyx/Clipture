@@ -40,9 +40,12 @@ pub async fn export_diagnostics(
         .authorize_write_path(&destination)
         .map_err(|error| error.to_string())?;
 
-    let engine = state.engine.diagnostics().await.unwrap_or_else(|error| {
+    let mut engine = state.engine.diagnostics().await.unwrap_or_else(|error| {
         crate::contracts::EngineDiagnostics::unavailable(error.to_string())
     });
+    if let Ok(recovery) = serde_json::to_value(state.engine.encoder_recovery()) {
+        engine.details.insert("encoderRecovery".into(), recovery);
+    }
     let hotkey = state.engine.hotkey_diagnostics();
     let builder = state.diagnostics.clone();
     let save_io_analysis = state.save_io.diagnostics_value();

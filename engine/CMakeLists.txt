@@ -63,6 +63,9 @@ add_executable(clipture_engine
   src/replay/BackfillPace.cpp
   src/platform/windows/InPlaceFile.cpp
   src/platform/windows/ProcessElevation.cpp
+  src/platform/windows/GpuSchedulingPriority.cpp
+  src/platform/windows/GpuAdapterFacts.cpp
+  src/GpuPriorityControl.cpp
   src/platform/windows/AdminHotkeyRelay.cpp
   src/RawInputHotkey.cpp
   src/Tonemapper.cpp
@@ -94,7 +97,7 @@ if(MSVC)
   target_compile_options(clipture_engine PRIVATE /W4 /permissive- /MP8)
 endif()
 
-target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject ole32 oleaut32 taskschd shell32 avrt mfplat mfreadwrite mfuuid winmm user32 dwmapi)
+target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject pdh ole32 oleaut32 taskschd shell32 avrt mfplat mfreadwrite mfuuid winmm user32 dwmapi)
 
 if(BUILD_TESTING)
   add_executable(clipture_selection_trace_tests tests/FrameSelectionTraceTests.cpp)

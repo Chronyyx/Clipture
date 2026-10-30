@@ -7,6 +7,7 @@
 #include "clipture/Diagnostics.hpp"
 #include "clipture/EncoderWorker.hpp"
 #include "clipture/FrameQueue.hpp"
+#include "clipture/GpuPriorityControl.hpp"
 #include "clipture/PacketRingBuffer.hpp"
 #include "clipture/ReplaySegmentStore.hpp"
 #include "clipture/replay/ConsumedWindow.hpp"
@@ -62,6 +63,8 @@ struct EngineSettings {
     // Save hotkey in games that run as administrator, through the relay the
     // user allowed (ADR 0024).
     bool adminGameHotkey = false;
+    // Schedule the engine's GPU work ahead of the game (GpuPriorityControl).
+    bool gpuPriorityBoost = true;
 };
 
 struct SaveClipResult {
@@ -97,6 +100,7 @@ private:
 
     EngineSettings settings_;
     Diagnostics diagnostics_;
+    GpuPriorityControl gpuPriority_;
     platform::AdminHotkeyRelay* adminHotkeyRelay_ = nullptr;
     CaptureTickGate captureTickGate_;
     FrameQueue frameQueue_;

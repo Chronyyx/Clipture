@@ -55,7 +55,7 @@ impl EngineClient {
             ));
         }
         let displays = self.list_display_devices().await.unwrap_or_default();
-        let configure = EngineConfigure::from_settings(settings, &displays);
+        let configure = self.effective_configure(EngineConfigure::from_settings(settings, &displays));
         let generation = self.ensure_started()?;
         let unchanged = self
             .last_configure

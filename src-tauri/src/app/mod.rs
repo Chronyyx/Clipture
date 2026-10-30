@@ -4,6 +4,8 @@ pub(crate) mod installer_startup;
 mod background;
 #[cfg(all(debug_assertions, windows))]
 mod capture_smoke;
+#[cfg(all(debug_assertions, windows))]
+mod capture_smoke_hang;
 mod hotkeys;
 mod sharing_events;
 #[cfg(debug_assertions)]

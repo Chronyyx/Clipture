@@ -19,6 +19,28 @@ std::string narrow(const wchar_t* value) {
     return result;
 }
 
+std::string primaryOutputResolution(IDXGIAdapter1* adapter) {
+    if (!adapter) return "Native monitor";
+
+    Microsoft::WRL::ComPtr<IDXGIOutput> output;
+    if (FAILED(adapter->EnumOutputs(0, &output))) {
+        return "Native monitor";
+    }
+
+    DXGI_OUTPUT_DESC desc {};
+    if (FAILED(output->GetDesc(&desc))) {
+        return "Native monitor";
+    }
+
+    const auto width = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
+    const auto height = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
+    std::ostringstream resolution;
+    resolution << width << "x" << height;
+    return resolution.str();
+}
+
+}  // namespace
+
 Microsoft::WRL::ComPtr<IDXGIAdapter1> findPreferredAdapter(std::string& adapterName) {
     Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
@@ -49,28 +71,6 @@ Microsoft::WRL::ComPtr<IDXGIAdapter1> findPreferredAdapter(std::string& adapterN
 
     return firstHardware;
 }
-
-std::string primaryOutputResolution(IDXGIAdapter1* adapter) {
-    if (!adapter) return "Native monitor";
-
-    Microsoft::WRL::ComPtr<IDXGIOutput> output;
-    if (FAILED(adapter->EnumOutputs(0, &output))) {
-        return "Native monitor";
-    }
-
-    DXGI_OUTPUT_DESC desc {};
-    if (FAILED(output->GetDesc(&desc))) {
-        return "Native monitor";
-    }
-
-    const auto width = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
-    const auto height = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
-    std::ostringstream resolution;
-    resolution << width << "x" << height;
-    return resolution.str();
-}
-
-}  // namespace
 
 NativeRuntimeState initializeNativeRuntime(bool requireNvenc) {
     NativeRuntimeState state;
