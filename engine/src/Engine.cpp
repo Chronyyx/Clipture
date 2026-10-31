@@ -915,6 +915,9 @@ void Engine::gameDetectionLoop() {
             }
         }
 
+        // The game in front and every running game, for GPU priority.
+        std::string foregroundGameExe;
+        std::vector<std::string> runningGameExes;
         if ((settings_.captureGameAudio || settings_.captureForegroundSystemAudio) && audioCaptureWorker_) {
             const auto detectionStartedAt = std::chrono::steady_clock::now();
             const auto processSnapshot = RunningProcessSnapshot::captureNameOnly();
@@ -991,6 +994,7 @@ void Engine::gameDetectionLoop() {
 
                         if (!isIgnoredForegroundProcess(fgExeName)) {
                             const bool isGame = isKnownGameProcess(fgExeName, narrowPath, fgPid, foreground);
+                            if (isGame) foregroundGameExe = fgExeName;
                             if (settings_.captureGameAudio && isGame &&
                                 !containsProcessName(settings_.appAudioProcesses, fgExeName) &&
                                 !containsProcessName(settings_.systemAudioProcesses, fgExeName) &&
@@ -1074,6 +1078,7 @@ void Engine::gameDetectionLoop() {
                     }
                 }
 
+                for (const auto& candidate : gameCandidates) runningGameExes.push_back(candidate.exeName);
                 std::map<std::string, std::vector<const GameCaptureCandidate*>> candidatesByGame;
                 for (const auto& candidate : gameCandidates) {
                     candidatesByGame[lowerAscii(candidate.gameName)].push_back(&candidate);
@@ -1242,7 +1247,9 @@ void Engine::gameDetectionLoop() {
                           << std::endl;
             }
         }
-        
+        // Raises the engine's GPU class only on PCs where a game starves it.
+        gpuPriority_.observe(foregroundGameExe, runningGameExes, videoDropTotal(), monotonicNow100ns(), settings_.fps);
+
         std::unique_lock lock(gameDetectionWaitMutex_);
         gameDetectionWaitCv_.wait_for(lock, std::chrono::seconds(2), [this] {
             return !gameDetectionRunning_.load();
@@ -1252,6 +1259,7 @@ void Engine::gameDetectionLoop() {
 
 const Diagnostics& Engine::diagnostics() {
     refreshPacketCounts();
+    gpuPriority_.publish(diagnostics_);
     gpuPriority_.refreshMemory(diagnostics_);
     if (adminHotkeyRelay_) {
         diagnostics_.adminGame = adminHotkeyRelay_->elevatedGame();
@@ -1315,7 +1323,8 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     settings_.saveInPlace = settings.saveInPlace;
     settings_.saveFolder = settings.saveFolder;
     settings_.gpuPriorityBoost = settings.gpuPriorityBoost;
-    gpuPriority_.apply(settings_.gpuPriorityBoost, diagnostics_);
+    settings_.gpuPriorityMemoryPath = settings.gpuPriorityMemoryPath;
+    gpuPriority_.apply(settings_.gpuPriorityBoost, settings_.gpuPriorityMemoryPath, diagnostics_);
     // Each in-place save starts where the previous one ended (ADR 0026), so no
     // saved footage has to be copied back into the live buffer.
     consumedWindow_.enable(settings_.saveInPlace);
@@ -1638,19 +1647,23 @@ std::vector<EncodedPacket> mixPcmPackets(
     return mixed;
 }
 
+uint64_t Engine::videoDropTotal() const {
+    uint64_t total = frameQueue_.stats().overflowDrops;
+    if (captureSession_) total += captureSession_->ownedSlotDrops();
+    if (encoderWorker_) {
+        total += static_cast<uint64_t>(std::max(0, encoderWorker_->schedulerDroppedFrames()));
+        total += static_cast<uint64_t>(std::max(0, encoderWorker_->encoderBackpressureDrops()));
+    }
+    return total;
+}
+
 SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     SaveClipResult result;
     diagnostics_.lastClipCadence = {};
     const auto totalStartedAt = SaveTimingClock::now();
     logEngineSaveTiming("start", totalStartedAt, "durationSeconds=" + std::to_string(request.durationSeconds));
     auto currentVideoDropCount = [this]() {
-        uint64_t total = frameQueue_.stats().overflowDrops;
-        if (captureSession_) total += captureSession_->ownedSlotDrops();
-        if (encoderWorker_) {
-            total += static_cast<uint64_t>(std::max(0, encoderWorker_->schedulerDroppedFrames()));
-            total += static_cast<uint64_t>(std::max(0, encoderWorker_->encoderBackpressureDrops()));
-        }
-        return static_cast<int>(std::min<uint64_t>(total, static_cast<uint64_t>(std::numeric_limits<int>::max())));
+        return static_cast<int>(std::min<uint64_t>(videoDropTotal(), static_cast<uint64_t>(std::numeric_limits<int>::max())));
     };
     const int saveStartDroppedFrames = currentVideoDropCount();
     const auto saveStartFrameQueueStats = frameQueue_.stats();

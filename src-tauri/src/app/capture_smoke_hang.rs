@@ -33,7 +33,7 @@ pub(super) async fn run(app: &AppHandle, settings: &ClipSettings, report: &mut V
     check(
         report,
         detail(&before, "gpuSchedulingClass") == "realtime",
-        "GPU priority boost applies the realtime scheduling class by default",
+        "raised GPU priority applies the realtime scheduling class",
     )?;
     tokio::time::sleep(Duration::from_secs(3)).await;
 

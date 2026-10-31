@@ -174,9 +174,22 @@ struct Diagnostics {
     bool adminGameInFront = false;
     std::string adminHotkeyRelay = "off";
     std::string adminHotkeySetup = "missing";
-    // GPU scheduling class of the engine's work (realtime with the boost on),
-    // and the adapter facts a contention report needs.
+    // GPU scheduling class of the engine's work (raised to realtime once frame
+    // drops show starvation, with the boost on), and the adapter facts a
+    // contention report needs.
     bool gpuPriorityBoost = false;
+    bool gpuPriorityRaised = false;
+    // Why it is raised ("queued drops", "steady drops", "remembered", "start
+    // raised"), how many
+    // games the per-game memory holds, and how many of the last 15 detection
+    // windows lost frames.
+    std::string gpuPriorityReason;
+    int gpuPriorityRememberedGames = 0;
+    int gpuStarvationLossyWindows = 0;
+    // Adapter 3D busy percent and mean work packets in flight on the adapter
+    // at the last detection pass (-1 unknown).
+    double gpuBusyPercent = -1.0;
+    double gpuPacketsInFlight = -1.0;
     std::string gpuSchedulingRequested = "default";
     bool gpuSchedulingOverride = false;
     std::string gpuSchedulingClass = "default";

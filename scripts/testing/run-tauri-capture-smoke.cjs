@@ -23,7 +23,9 @@ const executable = path.resolve(process.argv[2] || path.join(root, 'src-tauri/ta
 const child = spawn(executable, ['--capture-smoke', '--hidden'], { cwd: root, windowsHide: true,
   env: { ...process.env, CLIPTURE_TEST_MODE: '0', CLIPTURE_DATA_DIR: profile,
     CLIPTURE_SMOKE_RESOURCES: '1', CLIPTURE_ENGINE_PATH: path.join(root, 'build/engine/Release/clipture_engine.exe'),
-    CLIPTURE_FFMPEG_PATH: ffmpeg }, stdio: 'inherit' });
+    CLIPTURE_FFMPEG_PATH: ffmpeg,
+    // The hang step needs realtime, which a smooth test PC never reaches by itself.
+    CLIPTURE_GPU_PRIORITY_START_RAISED: '1' }, stdio: 'inherit' });
 const monitor = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
   path.join(__dirname, 'watch-tauri-resources.ps1'), '-AppProcessId', String(child.pid), '-Profile', profile],
   { windowsHide: true, stdio: 'inherit' });

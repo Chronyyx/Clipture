@@ -8,6 +8,7 @@
 #include <pdhmsg.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <sstream>
 #include <vector>
@@ -127,6 +128,101 @@ std::optional<uint64_t> AdapterMemoryCounter::dedicatedUsageBytes() {
     }
     if (!matched) return std::nullopt;
     return total;
+}
+
+std::optional<double> meanPacketsInFlight(IDXGIAdapter1* adapter, int samples, int intervalMs) {
+    using QueryStatisticsFn = NTSTATUS(APIENTRY*)(const D3DKMT_QUERYSTATISTICS*);
+    static const auto queryStatistics = [] {
+        const HMODULE gdi = LoadLibraryW(L"gdi32.dll");
+        return gdi ? reinterpret_cast<QueryStatisticsFn>(GetProcAddress(gdi, "D3DKMTQueryStatistics")) : nullptr;
+    }();
+    DXGI_ADAPTER_DESC1 desc {};
+    if (!queryStatistics || !adapter || FAILED(adapter->GetDesc1(&desc)) || samples <= 0) return std::nullopt;
+    D3DKMT_QUERYSTATISTICS adapterQuery {};
+    adapterQuery.Type = D3DKMT_QUERYSTATISTICS_ADAPTER;
+    adapterQuery.AdapterLuid = desc.AdapterLuid;
+    if (queryStatistics(&adapterQuery) != 0) return std::nullopt;
+    const ULONG nodes = adapterQuery.QueryResult.AdapterInformation.NodeCount;
+
+    double total = 0.0;
+    int read = 0;
+    for (int sample = 0; sample < samples; ++sample) {
+        if (sample > 0) Sleep(static_cast<DWORD>(intervalMs));
+        int64_t inFlight = 0;
+        bool ok = true;
+        for (ULONG node = 0; node < nodes && ok; ++node) {
+            D3DKMT_QUERYSTATISTICS query {};
+            query.Type = D3DKMT_QUERYSTATISTICS_NODE;
+            query.AdapterLuid = desc.AdapterLuid;
+            query.QueryNode.NodeId = node;
+            ok = queryStatistics(&query) == 0;
+            if (!ok) break;
+            const auto& packets = query.QueryResult.NodeInformation.GlobalInformation.PacketStatistics;
+            for (const auto& type : packets.QueuePacket) {
+                inFlight += static_cast<int64_t>(type.PacketSubmited) - static_cast<int64_t>(type.PacketCompleted);
+            }
+        }
+        if (!ok) continue;
+        total += static_cast<double>(std::max<int64_t>(0, inFlight));
+        ++read;
+    }
+    if (read == 0) return std::nullopt;
+    return total / read;
+}
+
+struct AdapterBusyCounter::State {
+    PDH_HQUERY query = nullptr;
+    PDH_HCOUNTER counter = nullptr;
+    wchar_t luidTag[40] {};
+    bool primed = false;
+};
+
+AdapterBusyCounter::AdapterBusyCounter(IDXGIAdapter1* adapter) : state_(std::make_unique<State>()) {
+    DXGI_ADAPTER_DESC1 desc {};
+    if (!adapter || FAILED(adapter->GetDesc1(&desc))) return;
+    // Instances are named "pid_<n>_luid_0x<high>_0x<low>_phys_<n>_eng_<n>_engtype_<type>".
+    swprintf_s(state_->luidTag, L"luid_0x%08X_0x%08X",
+        static_cast<unsigned>(desc.AdapterLuid.HighPart), static_cast<unsigned>(desc.AdapterLuid.LowPart));
+    if (PdhOpenQueryW(nullptr, 0, &state_->query) != ERROR_SUCCESS) {
+        state_->query = nullptr;
+        return;
+    }
+    if (PdhAddEnglishCounterW(state_->query, L"\\GPU Engine(*engtype_3D)\\Utilization Percentage", 0, &state_->counter) != ERROR_SUCCESS) {
+        PdhCloseQuery(state_->query);
+        state_->query = nullptr;
+    }
+}
+
+AdapterBusyCounter::~AdapterBusyCounter() {
+    if (state_ && state_->query) PdhCloseQuery(state_->query);
+}
+
+std::optional<double> AdapterBusyCounter::busyPercent() {
+    if (!state_->query || PdhCollectQueryData(state_->query) != ERROR_SUCCESS) return std::nullopt;
+    if (!state_->primed) {
+        state_->primed = true;
+        return std::nullopt;
+    }
+    DWORD bytes = 0;
+    DWORD count = 0;
+    if (PdhGetFormattedCounterArrayW(state_->counter, PDH_FMT_DOUBLE, &bytes, &count, nullptr) != PDH_MORE_DATA) {
+        return std::nullopt;
+    }
+    std::vector<unsigned char> buffer(bytes);
+    auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
+    if (PdhGetFormattedCounterArrayW(state_->counter, PDH_FMT_DOUBLE, &bytes, &count, items) != ERROR_SUCCESS) {
+        return std::nullopt;
+    }
+    double total = 0.0;
+    bool matched = false;
+    for (DWORD index = 0; index < count; ++index) {
+        if (!wcsstr(items[index].szName, state_->luidTag)) continue;
+        if (items[index].FmtValue.CStatus != ERROR_SUCCESS && items[index].FmtValue.CStatus != PDH_CSTATUS_NEW_DATA) continue;
+        total += items[index].FmtValue.doubleValue;
+        matched = true;
+    }
+    if (!matched) return std::nullopt;
+    return std::min(total, 100.0);
 }
 
 }  // namespace clipture::platform

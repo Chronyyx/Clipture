@@ -141,6 +141,12 @@ impl AppPaths {
         Ok(())
     }
 
+    /// Games that needed the engine's raised GPU priority, keyed hashes only
+    /// (written by the engine; ADR 0029).
+    pub fn gpu_priority_memory_file(&self) -> PathBuf {
+        self.data_dir.join("gpu-priority-games.txt")
+    }
+
     pub fn development_engine(&self) -> Option<PathBuf> {
         if !cfg!(debug_assertions) {
             return None;

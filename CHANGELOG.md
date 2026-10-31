@@ -1,6 +1,16 @@
 # Changelog
 
-## [1.8.6] - 2026-10-30
+## [1.8.7] - 2026-10-31
+
+### Recording
+
+- **Realtime only when your game needs it:** "Prioritize recording on the GPU" no longer puts recording ahead of your game all the time. Clipture records at normal priority and moves ahead only when your game keeps the GPU queue full and clips start dropping frames, usually within 4 to 6 seconds. PCs that record smoothly at normal priority keep their full game performance.
+- **Remembers games that need it:** Once a game has needed priority for 2 minutes of play, Clipture remembers it and starts every later session of that game at full priority, so its clips are smooth from the first second. A cutscene or one heavy moment is not remembered. Only unreadable keys are stored, never game names, and a new graphics card starts fresh.
+- **Gives the GPU back:** Recording returns to normal priority when the game closes, or when you cap your frame rate and the GPU queue stays short for a minute.
+
+### Diagnostics
+
+- **GPU queue in reports:** Diagnostics now include GPU busy, the GPU queue depth, and why recording priority was raised, so stutter reports show what the GPU was doing.
 
 ### Audio
 

@@ -26,6 +26,8 @@ const USAGE = `Usage: node scripts/performance/run-stress-trial.cjs [options]
   --gpu-priority <n>    window D3D11 GPU thread priority -7..7 (games may raise theirs)
   --cpu-games-priority  register CPU threads as MMCSS "Games" (high), like game engine threads
   --vram-mb <n>         hold n MiB of VRAM in the window, like a VRAM-hungry game
+  --gpu-memory <file>   engine's per-game GPU priority memory file (default: none; reuse a file across runs)
+  --max-latency <n>     frames the window may queue ahead on the GPU (default 1; uncapped games without Reflex queue 2-3)
   --no-solo             skip the window-alone pass (no windowCost; needs --layer-ms or --baseline)
   --compute-load        issue GPU load as compute dispatches (volumetric smoke style)
   --audio               play soft noise from the window during GPU-loaded phases
@@ -58,6 +60,8 @@ function parseArgs(argv) {
     else if (arg === '--cpu-games-priority') options.cpuGamesPriority = true;
     else if (arg === '--gpu-priority') options.gpuPriority = Number(value());
     else if (arg === '--vram-mb') options.vramMb = Number(value());
+    else if (arg === '--max-latency') options.maxLatency = Number(value());
+    else if (arg === '--gpu-memory') options.gpuMemory = path.resolve(value());
     else if (arg === '--no-solo') options.noSolo = true;
     else if (arg === '--env') { const [key, ...rest] = value().split('='); options.env[key] = rest.join('='); }
     else if (arg === '--layer-ms') options.layerMs = Number(value());
@@ -151,7 +155,8 @@ async function main() {
     ...(options.patches ? ['--patches'] : []),
     ...(options.cpuGamesPriority ? ['--cpu-games-priority'] : []),
     ...(options.gpuPriority ? ['--gpu-priority', String(options.gpuPriority)] : []),
-    ...(options.vramMb ? ['--vram-mb', String(options.vramMb)] : [])];
+    ...(options.vramMb ? ['--vram-mb', String(options.vramMb)] : []),
+    ...(options.maxLatency ? ['--max-latency', String(options.maxLatency)] : [])];
 
   let soloSummary = null;
   if (!options.noSolo) {
@@ -169,7 +174,8 @@ async function main() {
     await trialWindow.waitFor('ready');
     const seconds = Math.ceil(timelineSeconds(options.timeline)) + 1;
     engine = await probe(options.engine, options.fps, path.join(directory, 'engine'), seconds, options.env,
-      options.dailyAudio ? dailyAudioConfiguration() : {},
+      { ...(options.dailyAudio ? dailyAudioConfiguration() : {}),
+        ...(options.gpuMemory ? { gpuPriorityMemoryPath: options.gpuMemory } : {}) },
       { onMeasureStart: () => trialWindow.child.stdin.write('start\n'), saveSeconds: seconds + 2 });
   } finally {
     trialWindow.child.stdin.end();

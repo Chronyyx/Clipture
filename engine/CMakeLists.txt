@@ -65,6 +65,7 @@ add_executable(clipture_engine
   src/platform/windows/GpuSchedulingPriority.cpp
   src/platform/windows/GpuAdapterFacts.cpp
   src/GpuPriorityControl.cpp
+  src/GpuPriorityMemory.cpp
   src/platform/windows/AdminHotkeyRelay.cpp
   src/RawInputHotkey.cpp
   src/Tonemapper.cpp
@@ -96,7 +97,7 @@ if(MSVC)
   target_compile_options(clipture_engine PRIVATE /W4 /permissive- /MP8)
 endif()
 
-target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject pdh ole32 oleaut32 taskschd shell32 avrt mfplat mfreadwrite mfuuid winmm user32 dwmapi)
+target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject pdh ole32 oleaut32 taskschd shell32 avrt mfplat mfreadwrite mfuuid winmm user32 dwmapi bcrypt)
 
 if(BUILD_TESTING)
   add_executable(clipture_selection_trace_tests tests/FrameSelectionTraceTests.cpp)
@@ -110,6 +111,15 @@ if(BUILD_TESTING)
   target_include_directories(clipture_encoded_frontier_tests PRIVATE include)
   target_compile_features(clipture_encoded_frontier_tests PRIVATE cxx_std_20)
   add_test(NAME clipture_encoded_frontier COMMAND clipture_encoded_frontier_tests)
+  add_executable(clipture_gpu_starvation_tests tests/GpuStarvationDetectorTests.cpp)
+  target_include_directories(clipture_gpu_starvation_tests PRIVATE include)
+  target_compile_features(clipture_gpu_starvation_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_gpu_starvation COMMAND clipture_gpu_starvation_tests)
+  add_executable(clipture_gpu_priority_memory_tests tests/GpuPriorityMemoryTests.cpp src/GpuPriorityMemory.cpp)
+  target_include_directories(clipture_gpu_priority_memory_tests PRIVATE include)
+  target_compile_features(clipture_gpu_priority_memory_tests PRIVATE cxx_std_20)
+  target_link_libraries(clipture_gpu_priority_memory_tests PRIVATE bcrypt)
+  add_test(NAME clipture_gpu_priority_memory COMMAND clipture_gpu_priority_memory_tests)
   add_executable(clipture_json_fields_tests tests/JsonFieldsTests.cpp)
   target_link_libraries(clipture_json_fields_tests PRIVATE clipture_json_fields)
   add_test(NAME clipture_json_fields COMMAND clipture_json_fields_tests)

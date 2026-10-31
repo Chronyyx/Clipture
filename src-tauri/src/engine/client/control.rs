@@ -55,7 +55,10 @@ impl EngineClient {
             ));
         }
         let displays = self.list_display_devices().await.unwrap_or_default();
-        let configure = self.effective_configure(EngineConfigure::from_settings(settings, &displays));
+        let mut configure = EngineConfigure::from_settings(settings, &displays);
+        configure.gpu_priority_memory_path =
+            self.paths.gpu_priority_memory_file().to_string_lossy().into_owned();
+        let configure = self.effective_configure(configure);
         let generation = self.ensure_started()?;
         let unchanged = self
             .last_configure

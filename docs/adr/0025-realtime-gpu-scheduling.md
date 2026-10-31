@@ -2,7 +2,7 @@
 
 Date: 2026-10-30
 
-Status: implemented in 1.8.3 (watchdog threshold below realtime raised to 60 s in 1.8.4); on by default, user setting "Prioritize recording on the GPU".
+Status: implemented in 1.8.3 (watchdog threshold below realtime raised to 60 s in 1.8.4); on by default, user setting "Prioritize recording on the GPU". Realtime is applied only after frame drops show starvation since ADR 0029.
 
 ## Context
 

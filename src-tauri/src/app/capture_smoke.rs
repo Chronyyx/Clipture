@@ -1,6 +1,9 @@
 //! Explicit debug-only hardware integration test. Unlike the media smoke test,
 //! this records the selected display; it requires an isolated profile and CLI opt-in.
-use crate::{contracts::SaveSource, state::AppState};
+use crate::{
+    contracts::{AudioSourceKind, SaveSource},
+    state::AppState,
+};
 use serde_json::{json, Value};
 use std::{
     path::Path,
@@ -57,8 +60,11 @@ async fn run(app: &AppHandle, report: &mut Value) -> Result<(), String> {
     )?;
     check(
         report,
-        settings.audio_sources.iter().all(|source| !source.enabled),
-        "all audio capture disabled",
+        settings
+            .audio_sources
+            .iter()
+            .all(|source| !source.enabled || source.kind != AudioSourceKind::Microphone),
+        "microphone capture disabled (game and app tracks are always on, ADR 0028)",
     )?;
     check(
         report,

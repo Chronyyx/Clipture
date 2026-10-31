@@ -783,6 +783,7 @@ class EngineClient {
       clipLengthSeconds: settings.clipLengthSeconds,
       saveInPlace: settings.saveInPlace,
       gpuPriorityBoost: settings.gpuPriorityBoost,
+      gpuPriorityMemoryPath: appDataPath("gpu-priority-games.txt"),
       saveFolder: settings.saveFolder,
       monitorId: settings.monitorId,
       targetWidth: targetResolution.width,

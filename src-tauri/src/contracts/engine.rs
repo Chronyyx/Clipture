@@ -133,6 +133,10 @@ pub struct EngineConfigure {
     /// Off after an encoder hang for the rest of the session, whatever the setting.
     #[serde(default = "default_gpu_priority_boost")]
     pub gpu_priority_boost: bool,
+    /// Where the engine keeps the games that needed the raised class; the
+    /// client fills it from the data folder.
+    #[serde(default)]
+    pub gpu_priority_memory_path: String,
     pub monitor_id: String,
     pub target_width: u32,
     pub target_height: u32,
@@ -201,6 +205,7 @@ impl EngineConfigure {
             save_folder: settings.save_folder.clone(),
             admin_game_hotkey: settings.admin_game_hotkey,
             gpu_priority_boost: settings.gpu_priority_boost,
+            gpu_priority_memory_path: String::new(),
             monitor_id: settings.monitor_id.clone(),
             target_width,
             target_height,
@@ -325,6 +330,29 @@ mod tests {
         assert!(!configured.save_in_place);
         assert_eq!(configured.save_folder, settings.save_folder);
         assert!(value.get("noiseGateDebounceMs").is_some());
+    }
+
+    #[test]
+    fn configure_sends_every_fixture_field() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../scripts/migration/fixtures/engine-protocol.v1.json"
+        ))
+        .unwrap();
+        let configure = fixture["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|command| command["type"] == "configure")
+            .unwrap();
+        let value = serde_json::to_value(EngineConfigure::from_settings(
+            &ClipSettings::default(),
+            &[],
+        ))
+        .unwrap();
+        for field in configure["fields"].as_array().unwrap() {
+            let field = field.as_str().unwrap();
+            assert!(value.get(field).is_some(), "configure omits {field}");
+        }
     }
 
     #[test]

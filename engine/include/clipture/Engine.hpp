@@ -63,6 +63,9 @@ struct EngineSettings {
     bool adminGameHotkey = false;
     // Schedule the engine's GPU work ahead of the game (GpuPriorityControl).
     bool gpuPriorityBoost = true;
+    // File of games that needed the raised class (GpuPriorityMemory); empty
+    // keeps no memory.
+    std::string gpuPriorityMemoryPath;
 };
 
 struct SaveClipResult {
@@ -91,6 +94,8 @@ public:
 private:
     void arm();
     void refreshPacketCounts();
+    // Video frames dropped anywhere between capture and the encoder.
+    uint64_t videoDropTotal() const;
     void maybeResetAutoVideoResolution();
     void refreshAudioRouting();
 
