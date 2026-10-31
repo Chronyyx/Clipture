@@ -165,10 +165,6 @@ fn default_gpu_priority_boost() -> bool {
 
 impl EngineConfigure {
     pub fn from_settings(settings: &ClipSettings, displays: &[DisplayDevice]) -> Self {
-        let system = settings
-            .audio_sources
-            .iter()
-            .find(|source| source.id == "system");
         let microphone = settings
             .audio_sources
             .iter()
@@ -209,30 +205,15 @@ impl EngineConfigure {
             target_width,
             target_height,
             include_mixed_audio: false,
-            include_system_audio: system
-                .is_some_and(|source| source.enabled && source.capture_all_system.unwrap_or(true)),
+            // System audio was removed (ADR 0027). The engine still defaults these
+            // fields to on when absent, so they are sent explicitly off.
+            include_system_audio: false,
             include_microphone_audio: microphone.is_some_and(|source| source.enabled),
-            capture_game_audio: settings
-                .audio_sources
-                .iter()
-                .any(|source| source.id == "game" && source.enabled),
-            capture_foreground_system_audio: system
-                .is_some_and(|source| source.enabled && !source.capture_all_system.unwrap_or(true)),
-            app_audio_processes: joined_processes(
-                settings
-                    .audio_sources
-                    .iter()
-                    .filter(|source| source.kind == AudioSourceKind::App && source.enabled)
-                    .filter_map(|source| source.process_name.as_deref()),
-            ),
-            system_audio_processes: joined_processes(
-                system
-                    .filter(|source| source.enabled && !source.capture_all_system.unwrap_or(true))
-                    .and_then(|source| source.process_names.as_deref())
-                    .unwrap_or_default()
-                    .iter()
-                    .map(String::as_str),
-            ),
+            // Always on: the game and every app playing sound (ADR 0028).
+            capture_game_audio: true,
+            capture_foreground_system_audio: false,
+            app_audio_processes: String::new(),
+            system_audio_processes: String::new(),
             mic_volume: microphone.and_then(|source| source.volume).unwrap_or(1.0),
             mic_isolation: microphone
                 .and_then(|source| source.voice_isolation)
@@ -269,17 +250,6 @@ fn automatic_bitrate((width, height): (u32, u32), fps: u32, maximum: u32) -> u32
     let pixels = f64::from(width.max(1)) * f64::from(height.max(1));
     let suggested = (24.0 * pixels / (1920.0 * 1080.0) * f64::from(fps.max(1)) / 30.0).round();
     (suggested as u32).min(maximum).clamp(4, 120)
-}
-
-fn joined_processes<'a>(values: impl Iterator<Item = &'a str>) -> String {
-    let mut processes: Vec<_> = values
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .collect();
-    processes.sort_unstable();
-    processes.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
-    processes.join("|")
 }
 
 #[derive(Clone, Debug, Serialize)]

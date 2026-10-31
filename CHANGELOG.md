@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.8.6] - 2026-10-30
+
+### Audio
+
+- **Every app on its own track:** Your game and every app playing sound, like Spotify, YouTube or Discord, now get their own track automatically, even when they are in the background. Mute any of them later in the editor. Apps that make no sound are not recorded at all.
+- **No more system audio track:** The mixed "System audio" track is gone, along with the duplicate game sound and stray notification sounds it picked up. Existing setups switch over on their own, and your game sound keeps recording.
+- **Simpler audio settings:** Game and apps are recorded automatically, so the only choice left is your microphone. Manual app tracks and the "Add source" button are gone.
+
+### Recording
+
+- **Recovers from a stuck engine:** If Clipture's recording engine stopped responding mid-request, the safety restart could get stuck waiting for it, leaving recording off until you restarted Clipture. It now always recovers within seconds.
+- **No needless restarts:** A slow sound driver taking a few seconds to list your devices no longer looks like a frozen encoder, so it no longer restarts recording and loses your clip buffer.
+
+### Notifications
+
+- **"Clip saved" stays on top:** The save notice now always appears above games running in borderless or windowed mode. Games in exclusive fullscreen still cover it, as they do every other window; the save sound confirms your clip there.
+
 ## [1.8.5] - 2026-10-30
 
 ### Saving

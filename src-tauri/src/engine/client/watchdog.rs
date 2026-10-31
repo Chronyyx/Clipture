@@ -10,8 +10,10 @@ const WATCHDOG_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// A process stuck inside the driver may not exit at once; after this the
 /// host stops waiting for it and moves on.
 const TERMINATION_GRACE: Duration = Duration::from_secs(5);
-/// Requests the engine answers only after long work; their wait is not a hang.
-const LONG_REQUESTS: [&str; 2] = ["saveClip", "configure"];
+/// The watchdog's own probe. Every other request (saves, configure, device
+/// lists that a slow driver can hold for seconds) delays the engine's single
+/// request loop by design, so while one is in flight silence is not a hang.
+const PROBE_REQUEST: &str = "getDiagnostics";
 
 pub(super) const HALTED_MESSAGE: &str =
     "Recording stopped: the GPU encoder stopped responding twice. Restart Clipture to record again.";
@@ -27,7 +29,7 @@ pub(super) struct LongRequestGuard<'a>(&'a LongRequests);
 
 impl LongRequests {
     pub(super) fn enter(&self, command: &str) -> Option<LongRequestGuard<'_>> {
-        if !LONG_REQUESTS.contains(&command) {
+        if command == PROBE_REQUEST {
             return None;
         }
         self.started.fetch_add(1, Ordering::AcqRel);
@@ -133,13 +135,35 @@ impl EngineClient {
     }
 
     /// Ends the live engine of this generation; never a process found by name.
+    /// Reads `live`, not `process`: a request write stuck on this very engine
+    /// can hold `process` indefinitely.
     fn terminate_generation(&self, generation: u64) -> Option<u32> {
-        let process = self.process.lock().unwrap_or_else(|p| p.into_inner());
-        let running = process.as_ref().filter(|running| running.generation == generation)?;
-        let pid = running.pid;
+        let (live_generation, pid) = (*self.live.lock().unwrap_or_else(|p| p.into_inner()))?;
+        if live_generation != generation {
+            return None;
+        }
         if let Err(error) = crate::platform::windows::terminate_process(pid, 92) {
             tracing::error!(%error, pid, "could not stop the hung native engine");
         }
         Some(pid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_request_but_the_probe_marks_the_engine_busy() {
+        let requests = LongRequests::default();
+        assert!(requests.enter(PROBE_REQUEST).is_none());
+        for command in ["saveClip", "configure", "listAudioInputDevices", "listRunningProcesses", "configureHotkey"] {
+            let started = requests.started();
+            let guard = requests.enter(command);
+            assert!(guard.is_some() && requests.active(), "{command}");
+            assert_eq!(requests.started(), started + 1);
+            drop(guard);
+            assert!(!requests.active(), "{command} released");
+        }
     }
 }

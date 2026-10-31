@@ -9,6 +9,7 @@ pub use engine::{
     EngineDiagnostics, EngineStatusEvent, HostInfo, HotkeyEvent, HotkeyStatus, SaveClipResult,
     SaveLifecycleEvent, SavePhase, SaveSource,
 };
-pub use settings::{
-    AudioSourceKind, AudioSourceRule, ClipSettings, NotificationPosition, UiTheme,
-};
+pub use settings::{AudioSourceKind, ClipSettings, NotificationPosition, UiTheme};
+// Audio sources are built only by tests now; settings normalization owns them.
+#[cfg(test)]
+pub use settings::AudioSourceRule;

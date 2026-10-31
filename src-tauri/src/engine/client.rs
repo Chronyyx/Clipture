@@ -49,6 +49,11 @@ pub struct EngineClient {
     app: AppHandle,
     paths: AppPaths,
     process: Mutex<Option<RunningEngine>>,
+    /// Generation and PID of the live engine. `call` holds `process` while it
+    /// writes to the engine's stdin, which blocks once a stuck engine stops
+    /// reading; this record is never held across I/O, so the watchdog can
+    /// still kill that engine (which also unblocks the write).
+    live: Mutex<Option<(u64, u32)>>,
     start_guard: Mutex<()>,
     pending: PendingResponses,
     frame_diagnostics: Mutex<crate::diagnostics::FrameDropRecorder>,
@@ -74,6 +79,7 @@ impl EngineClient {
             app,
             paths,
             process: Mutex::new(None),
+            live: Mutex::new(None),
             start_guard: Mutex::new(()),
             pending: PendingResponses::default(),
             frame_diagnostics: Mutex::new(crate::diagnostics::FrameDropRecorder::default()),
@@ -203,6 +209,7 @@ impl EngineClient {
             child,
             _job: job,
         });
+        *self.live.lock().unwrap_or_else(|p| p.into_inner()) = Some((generation, pid));
         self.emit_status(true, format!("Native engine started (pid {pid})."));
 
         let client = Arc::clone(self);
@@ -220,6 +227,10 @@ impl EngineClient {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.shutting_down.store(true, Ordering::Release);
+        // Kill by PID first: a write blocked on a stuck engine holds `process`.
+        if let Some((_, pid)) = self.live.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            let _ = crate::platform::windows::terminate_process(pid, 0);
+        }
         if let Some(running) = self
             .process
             .lock()
@@ -285,11 +296,10 @@ impl EngineClient {
     }
 
     fn running_generation(&self) -> Option<u64> {
-        self.process
+        self.live
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-            .map(|running| running.generation)
+            .map(|(generation, _)| generation)
     }
 
     pub fn frame_drop_analysis(&self) -> Value {

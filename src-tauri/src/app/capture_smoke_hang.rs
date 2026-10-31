@@ -1,6 +1,6 @@
 //! Capture smoke, encoder hang: freezes the engine so the host watchdog sees
 //! a silent, live process. One hang must restart recording at normal GPU
-//! priority with video and audio; a second must halt recording.
+//! priority; a second must halt recording.
 use std::time::Duration;
 
 use serde_json::Value;
@@ -24,12 +24,7 @@ async fn encoder_output(app: &AppHandle) -> Option<u64> {
 
 pub(super) async fn run(app: &AppHandle, settings: &ClipSettings, report: &mut Value) -> Result<(), String> {
     let state = app.state::<AppState>();
-    // System audio on, so the recovered clip proves audio came back too.
-    let mut settings = settings.clone();
-    for source in settings.audio_sources.iter_mut().filter(|source| source.id == "system") {
-        source.enabled = true;
-        source.capture_all_system = Some(true);
-    }
+    let settings = settings.clone();
     let before = state
         .engine
         .configure_settings(&settings)
@@ -75,8 +70,8 @@ pub(super) async fn run(app: &AppHandle, settings: &ClipSettings, report: &mut V
     check(report, saved.ok, &format!("save after a hang recovery: {}", saved.message))?;
     check(
         report,
-        saved.clip.as_ref().is_some_and(|clip| clip.duration_seconds >= 4 && !clip.audio_tracks.is_empty()),
-        "clip after a hang recovery has the requested duration and an audio track",
+        saved.clip.as_ref().is_some_and(|clip| clip.duration_seconds >= 4),
+        "clip after a hang recovery has the requested duration",
     )?;
 
     let hung_again = state.engine.hang_for_smoke().map_err(|error| error.to_string())?;

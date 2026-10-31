@@ -47,6 +47,9 @@
 namespace clipture {
 namespace {
 
+// How long an app keeps its track capture after its audio session goes quiet.
+constexpr auto kAutoAppGrace = std::chrono::seconds(30);
+
 
 std::mutex g_exeToGameNameMutex;
 std::map<std::string, std::string> g_exeToGameName;
@@ -919,6 +922,7 @@ void Engine::gameDetectionLoop() {
             std::vector<std::string> dynamicSources;
             std::vector<std::string> detectedGames;
             std::vector<std::string> foregroundSystemApps;
+            std::vector<std::string> autoApps;
             std::map<std::string, std::string> dynamicTrackAliases;
             struct GameCaptureCandidate {
                 DWORD processId = 0;
@@ -994,7 +998,7 @@ void Engine::gameDetectionLoop() {
                                     return candidate.processId == fgPid;
                                 })) {
                                 rememberGameCandidate(fgPid, fgExeName);
-                            } else if ((settings_.captureForegroundSystemAudio || settings_.captureGameAudio) && !isGame &&
+                            } else if (settings_.captureForegroundSystemAudio && !isGame &&
                                 !containsProcessName(settings_.appAudioProcesses, fgExeName) &&
                                 !containsProcessName(settings_.systemAudioProcesses, fgExeName)) {
                                 const auto foregroundSpec = appPidSourceSpec(fgPid, fgExeName);
@@ -1096,9 +1100,50 @@ void Engine::gameDetectionLoop() {
                         }
                     }
                 }
+
+                // Every other app with a live audio session gets its own track
+                // (ADR 0028), not just the focused one: one capture per process
+                // tree, none for silent apps. A session that goes quiet keeps its
+                // capture for a grace period, so pausing playback does not
+                // restart it.
+                const auto now = std::chrono::steady_clock::now();
+                const DWORD selfProcessId = GetCurrentProcessId();
+                for (const DWORD processId : activeAudioSessionProcessIds()) {
+                    const auto* info = findProcessInfo(processSnapshot, processId);
+                    if (!info || processId == selfProcessId) continue;
+                    const auto& exeName = info->exeName;
+                    if (isIgnoredForegroundProcess(exeName) || kSystemExes.contains(lowerAscii(exeName)) ||
+                        containsProcessName(settings_.appAudioProcesses, exeName)) {
+                        continue;
+                    }
+                    const bool insideGame = std::any_of(gameCandidates.begin(), gameCandidates.end(), [&](const GameCaptureCandidate& game) {
+                        return processId == game.processId ||
+                            processHasAncestor(processSnapshot, processId, game.processId) ||
+                            processHasAncestor(processSnapshot, game.processId, processId);
+                    });
+                    if (!insideGame) autoAppSessions_[processId] = { exeName, now };
+                }
+                std::erase_if(autoAppSessions_, [&](const auto& item) {
+                    const auto* info = findProcessInfo(processSnapshot, item.first);
+                    // Gone, reused for another program, or quiet past the grace period.
+                    return !info || lowerAscii(info->exeName) != lowerAscii(item.second.exeName) ||
+                        now - item.second.lastActive > kAutoAppGrace;
+                });
+                std::vector<DWORD> autoProcessIds;
+                for (const auto& [processId, _] : autoAppSessions_) autoProcessIds.push_back(processId);
+                std::set<std::string> autoAppNames;
+                for (const DWORD rootProcessId : collapseProcessTreeRoots(processSnapshot.entries(), autoProcessIds)) {
+                    const auto& exeName = autoAppSessions_.at(rootProcessId).exeName;
+                    // One track per app name; a second unrelated instance shares it.
+                    if (!autoAppNames.insert(lowerAscii(exeName)).second) continue;
+                    const auto sourceSpec = appPidSourceSpec(rootProcessId, exeName);
+                    if (sourceSpec.empty() || containsExactSourceSpec(dynamicSources, sourceSpec)) continue;
+                    dynamicSources.push_back(sourceSpec);
+                    autoApps.push_back(exeName);
+                }
             }
 
-            if (settings_.captureForegroundSystemAudio || settings_.captureGameAudio) {
+            if (settings_.captureForegroundSystemAudio) {
                 foregroundSystemProcesses_.erase(
                     std::remove_if(
                         foregroundSystemProcesses_.begin(),
@@ -1170,6 +1215,11 @@ void Engine::gameDetectionLoop() {
             if (audioSourcesChanged && !detectedGames.empty()) {
                 std::cerr << "[engine] Detected games in loop:";
                 for (const auto& game : detectedGames) std::cerr << " " << game;
+                std::cerr << std::endl;
+            }
+            if (audioSourcesChanged && !autoApps.empty()) {
+                std::cerr << "[engine] App tracks:";
+                for (const auto& app : autoApps) std::cerr << " " << app;
                 std::cerr << std::endl;
             }
             if (audioSourcesChanged && !foregroundSystemApps.empty()) {
@@ -1287,7 +1337,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     settings_.includeMicrophoneAudio = settings.includeMicrophoneAudio;
     settings_.captureGameAudio = settings.captureGameAudio;
     settings_.captureForegroundSystemAudio = settings.captureForegroundSystemAudio;
-    if (!settings_.captureForegroundSystemAudio && !settings_.captureGameAudio) {
+    if (!settings_.captureForegroundSystemAudio) {
         foregroundSystemProcesses_.clear();
     }
     settings_.micVolume = settings.micVolume;

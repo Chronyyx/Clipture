@@ -244,14 +244,6 @@ impl ClipSettings {
 fn default_audio_sources() -> Vec<AudioSourceRule> {
     vec![
         AudioSourceRule {
-            id: "system".into(),
-            label: "System audio".into(),
-            kind: AudioSourceKind::System,
-            enabled: true,
-            omit_if_silent: true,
-            ..AudioSourceRule::default()
-        },
-        AudioSourceRule {
             id: "mic".into(),
             label: "Microphone".into(),
             kind: AudioSourceKind::Microphone,
@@ -269,36 +261,36 @@ fn default_audio_sources() -> Vec<AudioSourceRule> {
         },
         AudioSourceRule {
             id: "game".into(),
-            label: "Detected game/app".into(),
+            label: "Game and apps".into(),
             kind: AudioSourceKind::Game,
+            enabled: true,
             omit_if_silent: true,
             ..AudioSourceRule::default()
         },
     ]
 }
 
+/// The microphone and the automatic game-and-apps source. System audio (ADR
+/// 0027) and per-app tracks (ADR 0028: every app playing sound gets its own
+/// track automatically) are dropped from older profiles; the game source is
+/// always on.
 fn normalize_audio_sources(sources: Vec<AudioSourceRule>) -> Vec<AudioSourceRule> {
     let incoming: HashMap<String, AudioSourceRule> = sources
-        .iter()
-        .cloned()
+        .into_iter()
         .filter(|source| !source.id.trim().is_empty())
         .map(|source| (source.id.clone(), source))
         .collect();
-    let mut normalized: Vec<_> = default_audio_sources()
+    default_audio_sources()
         .into_iter()
         .map(|fallback| incoming.get(&fallback.id).cloned().unwrap_or(fallback))
-        .map(normalize_audio_source)
-        .collect();
-    normalized.extend(
-        sources
-            .into_iter()
-            .filter(|source| {
-                !matches!(source.id.as_str(), "system" | "mic" | "game" | "mix")
-                    && source.kind == AudioSourceKind::App
-            })
-            .map(normalize_audio_source),
-    );
-    normalized
+        .map(|mut source| {
+            if source.id == "game" {
+                source.enabled = true;
+                source.label = "Game and apps".into();
+            }
+            normalize_audio_source(source)
+        })
+        .collect()
 }
 
 fn normalize_audio_source(mut source: AudioSourceRule) -> AudioSourceRule {
@@ -384,7 +376,24 @@ mod tests {
         assert_eq!(settings.bitrate_mbps, 120);
         assert_eq!(settings.nvenc_preset, 3);
         assert_eq!(settings.save_folder, r"C:\safe\clips");
-        assert_eq!(settings.audio_sources.len(), 3);
+        let ids: Vec<_> = settings.audio_sources.iter().map(|source| (source.id.as_str(), source.enabled)).collect();
+        assert_eq!(ids, [("mic", true), ("game", true)], "no system track; game audio on by default");
+    }
+
+    #[test]
+    fn old_audio_sources_become_mic_and_automatic_game_and_apps() {
+        let old: ClipSettings = serde_json::from_str(r#"{"audioSources":[
+            {"id":"system","kind":"system","enabled":true,"captureAllSystem":false,"processNames":["Spotify.exe"]},
+            {"id":"mic","kind":"microphone","enabled":false,"volume":0.5},
+            {"id":"game","kind":"game","label":"Detected game/app","enabled":false},
+            {"id":"app-discord","kind":"app","processName":"discord.exe","enabled":true}
+        ]}"#).unwrap();
+        let sources = old.normalize(r"C:\clips").audio_sources;
+        let ids: Vec<_> = sources.iter().map(|source| source.id.as_str()).collect();
+        assert_eq!(ids, ["mic", "game"], "system and app tracks are gone");
+        let mic = &sources[0];
+        assert!(!mic.enabled && mic.volume == Some(0.5), "the microphone choice is kept");
+        assert!(sources[1].enabled && sources[1].label == "Game and apps", "game and apps is always on");
     }
 
     #[test]

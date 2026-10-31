@@ -91,7 +91,6 @@ const defaultSettings: ClipSettings = {
   importedVideoDirectories: [],
   importedVideoTitles: {},
   audioSources: [
-    { id: "system", label: "System audio", kind: "system", enabled: true, omitIfSilent: true },
     {
       id: "mic",
       label: "Microphone",
@@ -107,7 +106,7 @@ const defaultSettings: ClipSettings = {
       micDeviceMatchKey: "",
       micDeviceName: ""
     },
-    { id: "game", label: "Detected game/app", kind: "game", enabled: false, omitIfSilent: true }
+    { id: "game", label: "Game and apps", kind: "game", enabled: true, omitIfSilent: true }
   ]
 };
 
@@ -219,17 +218,15 @@ function logSaveTiming(saveId: string, stage: string, startedAtMs: number, detai
 }
 
 function normalizeSettings(settings: ClipSettings): ClipSettings {
-  const defaultsById = new Map(defaultSettings.audioSources.map((source) => [source.id, source]));
   const existingById = new Map((settings.audioSources ?? []).map((source) => [source.id, source]));
   const audioSources = defaultSettings.audioSources.map((source) => {
     const existing = existingById.get(source.id);
     return { ...source, ...existing, enabled: existing?.enabled ?? source.enabled };
   });
-  for (const source of settings.audioSources ?? []) {
-    if (!defaultsById.has(source.id) && source.id !== "mix" && source.kind === "app") {
-      audioSources.push({ ...source, enabled: source.enabled ?? false });
-    }
-  }
+  // System audio (ADR 0027) and per-app tracks are gone: the game and every
+  // app playing sound are recorded automatically, each on its own track (ADR 0028).
+  const game = audioSources.find((source) => source.id === "game");
+  if (game) Object.assign(game, { enabled: true, label: "Game and apps" });
   const fps = normalizeCaptureFps(settings.fps);
   const nvencPreset = [1, 2, 3, 4, 5].includes(Number(settings.nvencPreset)) ? Number(settings.nvencPreset) as ClipSettings["nvencPreset"] : defaultSettings.nvencPreset;
   const validResolutionPresets = new Set(["system", "144p", "360p", "720p", "1080p", "1440p", "4k"]);
@@ -775,7 +772,6 @@ class EngineClient {
   async configure(settings: ClipSettings): Promise<EngineDiagnostics> {
     if (!this.child) this.start();
     if (!this.child) return this.lastDiagnostics;
-    const systemAudioSource = settings.audioSources.find((source) => source.id === "system");
     const targetResolution = recordingOutputResolution(settings);
     const effectiveBitrateMbps = settings.autoBitrate
       ? autoBitrateForResolution(await bitrateResolution(settings, targetResolution), settings.fps, settings.maxAutoBitrateMbps)
@@ -792,18 +788,13 @@ class EngineClient {
       targetWidth: targetResolution.width,
       targetHeight: targetResolution.height,
       includeMixedAudio: false,
-      includeSystemAudio: settings.audioSources.some((source) => source.id === "system" && source.enabled && (source.captureAllSystem ?? true)),
+      // System audio was removed (ADR 0027); the engine defaults these to on, so send them off.
+      includeSystemAudio: false,
       includeMicrophoneAudio: settings.audioSources.some((source) => source.id === "mic" && source.enabled),
-      captureGameAudio: settings.audioSources.some((source) => source.id === "game" && source.enabled),
-      captureForegroundSystemAudio: Boolean(systemAudioSource?.enabled && !(systemAudioSource.captureAllSystem ?? true)),
-      appAudioProcesses: Array.from(new Set(settings.audioSources
-        .filter((source) => source.kind === "app" && source.enabled && source.processName?.trim())
-        .map((source) => source.processName!.trim()))).join("|"),
-      systemAudioProcesses: Array.from(new Set(settings.audioSources
-        .filter((source) => source.id === "system" && source.enabled && !(source.captureAllSystem ?? true))
-        .flatMap((source) => source.processNames || [])
-        .map((name) => name.trim())
-        .filter(Boolean))).join("|"),
+      captureGameAudio: true,
+      captureForegroundSystemAudio: false,
+      appAudioProcesses: "",
+      systemAudioProcesses: "",
       micVolume: settings.audioSources.find((source) => source.kind === "microphone")?.volume ?? 1.0,
       micIsolation: settings.audioSources.find((source) => source.kind === "microphone")?.voiceIsolation ?? false,
       micIsolationWeight: settings.audioSources.find((source) => source.kind === "microphone")?.voiceIsolationWeight ?? 1.0,

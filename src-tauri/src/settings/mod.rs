@@ -1,7 +1,3 @@
-mod default_apps;
-
-pub use default_apps::{seed_default_app_sources, DetectedAudioApp};
-
 use std::{
     fs,
     io::{BufWriter, Write},
@@ -27,7 +23,7 @@ impl SettingsStore {
     pub fn load(paths: AppPaths) -> AppResult<Self> {
         paths.ensure_data_dir()?;
         let default_save = paths.default_save_dir.to_string_lossy().into_owned();
-        let mut settings = if paths.settings_file.is_file() {
+        let settings = if paths.settings_file.is_file() {
             let bytes = fs::read(&paths.settings_file).map_err(|source| AppError::Io {
                 action: "read settings",
                 path: paths.settings_file.clone(),
@@ -37,10 +33,6 @@ impl SettingsStore {
         } else {
             ClipSettings::defaults_with_save_folder(default_save)
         };
-        // Persisted with the next save; until then detection simply repeats.
-        if !paths.test_mode {
-            seed_default_app_sources(&mut settings, &crate::platform::detect_default_audio_apps());
-        }
         Ok(Self {
             paths,
             current: RwLock::new(settings),

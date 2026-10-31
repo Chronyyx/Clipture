@@ -84,6 +84,10 @@ impl EngineClient {
                 .is_some_and(|running| running.pid == pid && running.generation == generation)
             {
                 process.take();
+                let mut live = self.live.lock().unwrap_or_else(|p| p.into_inner());
+                if live.is_some_and(|(live_generation, _)| live_generation == generation) {
+                    *live = None;
+                }
                 true
             } else {
                 false

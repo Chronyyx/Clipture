@@ -118,6 +118,13 @@ private:
     std::unique_ptr<EncoderWorker> encoderWorker_;
     std::unique_ptr<AudioCaptureWorker> audioCaptureWorker_;
     std::vector<std::string> foregroundSystemProcesses_;
+    // Apps with a live audio session, each recorded on its own track; touched
+    // only by the detection loop.
+    struct AutoAppSession {
+        std::string exeName;
+        std::chrono::steady_clock::time_point lastActive;
+    };
+    std::map<unsigned long, AutoAppSession> autoAppSessions_; // by process ID
     std::mutex appAudioSourcesMutex_;
     std::vector<std::string> activeAppAudioSources_;
     std::map<std::string, std::string> activeAppAudioTrackAliases_;

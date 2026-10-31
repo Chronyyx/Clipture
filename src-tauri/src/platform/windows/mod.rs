@@ -1,4 +1,3 @@
-mod audio_apps;
 mod caption;
 mod child_job;
 mod elevate;
@@ -17,7 +16,6 @@ mod system_info;
 mod terminate;
 mod wave_sound;
 
-pub(crate) use audio_apps::detect_default_audio_apps;
 pub(crate) use caption::style_main_caption;
 pub(crate) use move_file::move_file;
 pub(crate) use replace_file::replace_file;

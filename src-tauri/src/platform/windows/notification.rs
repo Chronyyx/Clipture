@@ -8,7 +8,8 @@ use windows::Win32::{
     Foundation::{COLORREF, HWND},
     Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND},
     UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA,
+        GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE,
+        HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
         WS_EX_LAYERED,
     },
 };
@@ -191,6 +192,20 @@ fn show_window(app: &AppHandle, request: &NotificationRequest) -> AppResult<()> 
         .map_err(|error| AppError::Integration(error.to_string()))?;
         window.set_ignore_cursor_events(true)?;
         window.show()?;
+        // Games often make their own window topmost; among topmost windows the
+        // last one raised wins. Raise the card to the top of that band on every
+        // notice (a reused card is only re-shown otherwise), without focus.
+        unsafe {
+            let _ = SetWindowPos(
+                HWND(parent.0),
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+        }
         Ok(())
     })();
     if result.is_err() {

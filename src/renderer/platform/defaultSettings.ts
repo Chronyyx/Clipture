@@ -25,14 +25,6 @@ export const defaultSettings: ClipSettings = {
   importedVideoTitles: {},
   audioSources: [
     {
-      id: "system",
-      label: "System audio",
-      kind: "system",
-      captureAllSystem: true,
-      enabled: true,
-      omitIfSilent: true
-    },
-    {
       id: "mic",
       label: "Microphone",
       kind: "microphone",
@@ -46,9 +38,9 @@ export const defaultSettings: ClipSettings = {
     },
     {
       id: "game",
-      label: "Detected game/app",
+      label: "Game and apps",
       kind: "game",
-      enabled: false,
+      enabled: true,
       omitIfSilent: true
     }
   ]
