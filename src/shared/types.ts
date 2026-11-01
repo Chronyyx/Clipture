@@ -651,7 +651,7 @@ export interface CliptureApi {
    * chunks contain; with `tracks=1` a chunk holds one stereo pair per track,
    * in that order, and may be at most `trackChunkSeconds` long.
    * `waveformUrl` serves the clip's audio as peaks (`{ seconds, peaks }`). */
-  clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise<{ url: string; mixed: boolean; message: string; audioChunkUrl?: string; audioChunkSeconds?: number; audioTrackIndexes?: number[]; trackChunkSeconds?: number; waveformUrl?: string }>;
+  clipPlaybackUrl(filePath: string, audioTracks: string[]): Promise<{ url: string; mixed: boolean; message: string; audioChunkUrl?: string; audioChunkSeconds?: number; audioTrackIndexes?: number[]; trackChunkSeconds?: number; waveformUrl?: string; keyframeTimes?: number[] }>;
   releasePlaybackCache(): Promise<boolean>;
   getClipRepairStatus(): Promise<ClipRepairStatus>;
   /** Reads each clip's index only; never modifies files. */

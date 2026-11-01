@@ -51,6 +51,8 @@ pub struct PlaybackDescriptor {
     pub track_chunk_seconds: Option<u32>,
     /// The clip's audio as peaks (JSON `Waveform`), when it has any.
     pub waveform_url: Option<String>,
+    /// Keyframe times in seconds, for scrubbing to frames that decode at once.
+    pub keyframe_times: Option<Vec<f64>>,
 }
 
 #[derive(Clone, Debug)]
@@ -166,6 +168,7 @@ impl MediaSessionRegistry {
             track_chunk_seconds: mixed.then(|| track_chunk_seconds(indexes.len())),
             waveform_url: (!indexes.is_empty()).then(|| format!("{base}/waveform")),
             audio_track_indexes: indexes,
+            keyframe_times: None,
         })
     }
 

@@ -34,7 +34,7 @@ pub struct VideoStreamPlan {
 pub struct MediaService {
     sessions: Arc<MediaSessionRegistry>,
     ffmpeg: Arc<dyn FfmpegExecutor>,
-    thumbnails: ThumbnailService,
+    thumbnails: Arc<ThumbnailService>,
     remote: OnceLock<Arc<dyn RemoteMediaSource>>,
     trimmer: Option<ClipTrimmer>,
     mixer: Option<ClipMixer>,
@@ -45,13 +45,20 @@ impl MediaService {
     pub fn new(sessions: Arc<MediaSessionRegistry>, ffmpeg: Arc<dyn FfmpegExecutor>) -> Self {
         Self {
             sessions,
-            thumbnails: ThumbnailService::new(ffmpeg.clone()),
+            thumbnails: Arc::new(ThumbnailService::new(ffmpeg.clone(), None)),
             ffmpeg,
             remote: OnceLock::new(),
             trimmer: None,
             mixer: None,
             waveforms: None,
         }
+    }
+
+    /// Keeps thumbnails as files in `directory`, made with `ffmpeg` (its own
+    /// slots, so a library full of new clips never holds up playback audio).
+    pub fn with_thumbnails(mut self, directory: PathBuf, ffmpeg: Arc<dyn FfmpegExecutor>) -> Self {
+        self.thumbnails = Arc::new(ThumbnailService::new(ffmpeg, Some(directory)));
+        self
     }
 
     /// Builds clip waveforms with `ffmpeg` (its own slots, so a waveform
@@ -122,8 +129,13 @@ impl MediaService {
                 None
             }
         };
-        self.sessions
-            .open(authority, clip_id, audio_tracks, patches, view, owner)
+        let mut descriptor = self
+            .sessions
+            .open(authority, clip_id, audio_tracks, patches, view, owner)?;
+        // A stored-elsewhere clip (save in place) keeps its timing and
+        // keyframes in the view, so the file's own tables describe it.
+        descriptor.keyframe_times = super::layout_probe::keyframe_times(path);
+        Ok(descriptor)
     }
 
     pub fn video_stream_plan(
@@ -281,19 +293,38 @@ impl MediaService {
         }
     }
 
-    pub fn thumbnail(&self, authority: &PathAuthorizer, clip_id: &str) -> AppResult<String> {
-        self.thumbnails.thumbnail(authority, clip_id)
+    /// The thumbnail URL for an authorized clip; the image loads through the
+    /// media protocol. Cheap.
+    pub fn thumbnail_url(&self, authority: &PathAuthorizer, clip_id: &str) -> AppResult<String> {
+        self.thumbnails.url(authority, clip_id, self.sessions.endpoint())
     }
 
-    /// Player switch/close: playback sessions only. Thumbnails stay cached so
-    /// the library does not re-run FFmpeg for every card after each clip.
+    /// The JPEG behind a thumbnail URL. Blocking: may run FFmpeg.
+    pub fn thumbnail_image(&self, token: &str) -> AppResult<Arc<Vec<u8>>> {
+        self.thumbnails.image(token)
+    }
+
+    /// Deleted clips: their thumbnails go too.
+    pub fn delete_thumbnails(&self, paths: &[PathBuf]) {
+        for path in paths {
+            self.thumbnails.delete(path);
+        }
+    }
+
+    /// The thumbnail service, for making a saved clip's ahead of time.
+    pub fn thumbnails(&self) -> Arc<ThumbnailService> {
+        self.thumbnails.clone()
+    }
+
+    /// Player switch/close: playback sessions only.
     pub fn release_owner(&self, owner: &str) -> usize {
         self.sessions.release_owner(owner) + self.release_remote(owner)
     }
 
     /// The UI owner is gone (window destroyed or UI process exited).
+    /// Thumbnails stay: they are not the window's, and the next window shows
+    /// them at once.
     pub fn release_ui(&self, owner: &str) -> usize {
-        self.thumbnails.clear();
         self.sessions.release_owner(owner) + self.release_remote(owner)
     }
 
@@ -389,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn switching_clips_keeps_thumbnails_but_ui_teardown_clears_them() {
+    fn thumbnails_outlive_players_and_windows() {
         let root = tempfile::tempdir().unwrap();
         let video = root.path().join("clip.mp4");
         fs::write(&video, b"video").unwrap();
@@ -401,13 +432,16 @@ mod tests {
         let ffmpeg = Arc::new(CountingFfmpeg(AtomicUsize::new(0)));
         let sessions = Arc::new(MediaSessionRegistry::new("clipture-media://localhost").unwrap());
         let media = MediaService::new(sessions, ffmpeg.clone());
-        media.thumbnail(&authority, "clip").unwrap();
+        let token = |url: String| url.rsplit('/').nth(1).unwrap().to_owned();
+        let url = media.thumbnail_url(&authority, "clip").unwrap();
+        assert!(url.starts_with("clipture-media://localhost/v1/thumbnail/"));
+        assert_eq!(ffmpeg.0.load(Ordering::Relaxed), 0, "a URL costs no FFmpeg run");
+        media.thumbnail_image(&token(url.clone())).unwrap();
         media.release_owner("main");
-        media.thumbnail(&authority, "clip").unwrap();
-        assert_eq!(ffmpeg.0.load(Ordering::Relaxed), 1, "player release must not evict thumbnails");
         media.release_ui("main");
-        media.thumbnail(&authority, "clip").unwrap();
-        assert_eq!(ffmpeg.0.load(Ordering::Relaxed), 2, "UI teardown frees the thumbnail cache");
+        assert_eq!(media.thumbnail_url(&authority, "clip").unwrap(), url, "the URL survives the window");
+        media.thumbnail_image(&token(url)).unwrap();
+        assert_eq!(ffmpeg.0.load(Ordering::Relaxed), 1, "player and window teardown keep the image");
     }
 
     #[test]

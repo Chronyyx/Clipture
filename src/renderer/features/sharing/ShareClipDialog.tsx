@@ -28,7 +28,7 @@ export function ShareClipDialog({
   const dialog = useRef<HTMLDialogElement>(null);
   const [chosen, setChosen] = useState<string>();
   const [sending, setSending] = useState<{ friendId: string; shareId?: string }>();
-  const thumbnailUrl = useClipThumbnail(clip.filePath);
+  const { url: thumbnailUrl } = useClipThumbnail(clip.filePath);
   const now = useNow();
   const title = clip.title === "Clipture clip" ? "Clipture" : clip.title;
   const friends = snapshot?.friends.filter((friend) => friend.status === "accepted") ?? [];

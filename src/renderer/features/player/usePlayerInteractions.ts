@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from 'react';
+import { nearestKeyframe } from './nearestKeyframe';
+import { seekCoalesced } from './seekCoalesced';
 
 interface MixedAudioControls {
   ensureBuffered(): void;
@@ -17,6 +19,8 @@ interface PlayerInteractionOptions {
   mixed: MixedAudioControls;
   setCurrentTime: Dispatch<SetStateAction<number>>;
   setPlaying: Dispatch<SetStateAction<boolean>>;
+  /** The clip's keyframes, so a scrubber drag shows frames that decode at once. */
+  keyframeTimes?: readonly number[];
 }
 
 export interface SeekFeedback {
@@ -32,8 +36,14 @@ export function usePlayerInteractions({
   playbackRequestedRef,
   mixed,
   setCurrentTime,
-  setPlaying
+  setPlaying,
+  keyframeTimes
 }: PlayerInteractionOptions) {
+  // While the scrubber is dragged the picture shows keyframes (one frame to
+  // decode each) and the thumb follows the pointer; letting go lands on the
+  // exact frame.
+  const scrubbingRef = useRef(false);
+  const scrubTargetRef = useRef<number | null>(null);
   const fastHoldActivatedRef = useRef(false);
   const holdTimeoutRef = useRef<number | null>(null);
   const clickTimeoutRef = useRef<number | null>(null);
@@ -126,7 +136,30 @@ export function usePlayerInteractions({
     const video = videoRef.current;
     if (!video || !Number.isFinite(video.duration)) return;
     if (mixedEnabled) mixed.resetTimeline();
-    video.currentTime = (Math.min(100, Math.max(0, percent)) / 100) * video.duration;
+    const target = (Math.min(100, Math.max(0, percent)) / 100) * video.duration;
+    // A drag sends a seek per pointer move; each one set at once would abort
+    // the decode before its frame showed (3 frames in a 3.5 s drag).
+    if (scrubbingRef.current) {
+      scrubTargetRef.current = target;
+      setCurrentTime(target);
+      seekCoalesced(video, nearestKeyframe(keyframeTimes, target));
+    } else {
+      seekCoalesced(video, target);
+    }
+  }
+
+  function beginScrub() {
+    scrubbingRef.current = true;
+    scrubTargetRef.current = null;
+  }
+
+  function endScrub() {
+    if (!scrubbingRef.current) return;
+    scrubbingRef.current = false;
+    const video = videoRef.current;
+    const target = scrubTargetRef.current;
+    scrubTargetRef.current = null;
+    if (video && target !== null) seekCoalesced(video, target);
   }
 
   const showSeekFeedback = useCallback((actualSeconds: number) => {
@@ -154,7 +187,7 @@ export function usePlayerInteractions({
     const previous = Math.max(0, video.currentTime);
     const next = Math.min(totalDuration, Math.max(0, previous + seconds));
     if (Math.abs(next - previous) < 0.01) return;
-    video.currentTime = next;
+    seekCoalesced(video, next);
     setCurrentTime(next);
     showSeekFeedback(next - previous);
   }, [duration, setCurrentTime, showSeekFeedback, videoRef]);
@@ -254,6 +287,9 @@ export function usePlayerInteractions({
     keyboardSeekingRef,
     seekFeedback,
     seekToPercent,
+    beginScrub,
+    endScrub,
+    scrubbingRef,
     showControls,
     toggleFullscreen,
     togglePlayback

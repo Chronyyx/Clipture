@@ -1,25 +1,34 @@
 import { useEffect, useState } from "react";
-import { cachedThumbnail, requestThumbnail } from "./thumbnailLoader";
+import { cachedThumbnail, forgetThumbnail, requestThumbnail } from "./thumbnailLoader";
 
-export function useClipThumbnail(filePath: string, enabled = true): string {
-  const [thumbnailUrl, setThumbnailUrl] = useState(() => (enabled ? cachedThumbnail(filePath) : ""));
+/** The clip's thumbnail URL ("" until known or when there is none), and a
+ * handler for an image that failed to load, which asks for a fresh URL once. */
+export function useClipThumbnail(filePath: string, enabled = true): { url: string; failed: () => void } {
+  const [url, setUrl] = useState(() => (enabled ? cachedThumbnail(filePath) : ""));
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!enabled) {
-      setThumbnailUrl("");
+      setUrl("");
       return;
     }
     let active = true;
-    setThumbnailUrl(cachedThumbnail(filePath));
-    const request = requestThumbnail(filePath);
-    void request.promise.then((url) => {
-      if (active) setThumbnailUrl(url);
+    setUrl(cachedThumbnail(filePath));
+    void requestThumbnail(filePath).then((next) => {
+      if (active) setUrl(next);
     });
     return () => {
       active = false;
-      request.release();
     };
-  }, [filePath, enabled]);
+  }, [filePath, enabled, attempt]);
 
-  return thumbnailUrl;
+  useEffect(() => setAttempt(0), [filePath]);
+
+  const failed = () => {
+    forgetThumbnail(filePath, url);
+    setUrl("");
+    if (attempt === 0) setAttempt(1);
+  };
+
+  return { url, failed };
 }

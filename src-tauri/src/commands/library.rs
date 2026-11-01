@@ -26,11 +26,14 @@ pub async fn delete_clips(
     }
     let clips = state.clips.clone();
     let library = state.library.clone();
+    let media = state.media.clone();
     let settings_store = state.settings.clone();
     let settings = state.settings.get();
     let (changed, saved_settings) = blocking(move || {
         let saved = clips.delete_saved(&ids)?;
         let imported = library.delete_imported(&settings, &ids)?;
+        media.delete_thumbnails(&saved.removed_paths);
+        media.delete_thumbnails(&imported.removed_paths);
         let persisted = imported
             .settings
             .map(|settings| settings_store.save(settings))

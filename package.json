@@ -1,9 +1,9 @@
 {
   "name": "clipture",
-  "version": "1.8.7",
+  "version": "1.8.8",
   "private": true,
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.8.7: Realtime Only When Your Game Needs It",
+  "releaseTitle": "Clipture 1.8.8: Fast Saves, Instant Thumbnails & Smooth Scrubbing",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

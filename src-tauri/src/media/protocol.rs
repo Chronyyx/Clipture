@@ -33,6 +33,10 @@ const MAXIMUM_AUDIO_START_SECONDS: f64 = 24.0 * 60.0 * 60.0;
 // the player keeps playing audio over a black, stalled picture.
 const MAXIMUM_IN_FLIGHT_VIDEO_REQUESTS: usize = 6;
 const MAXIMUM_IN_FLIGHT_AUDIO_REQUESTS: usize = 2;
+// Thumbnails have their own budget so a library full of cards never holds the
+// player's range reads. Most are file reads; new ones queue for FFmpeg.
+const MAXIMUM_IN_FLIGHT_THUMBNAIL_REQUESTS: usize = 4;
+const THUMBNAIL_REQUEST_QUEUE_TIMEOUT: Duration = Duration::from_secs(30);
 // A media element treats a failed range request as a stall; briefly queueing
 // behind in-flight reads (each at most 4 MiB) is far cheaper than a 503.
 const VIDEO_REQUEST_QUEUE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -68,6 +72,7 @@ where
 pub struct MediaAdmission {
     video: Arc<RequestLimiter>,
     audio: Arc<RequestLimiter>,
+    thumbnail: Arc<RequestLimiter>,
 }
 
 impl MediaAdmission {
@@ -75,6 +80,7 @@ impl MediaAdmission {
         Self {
             video: Arc::new(RequestLimiter::new(MAXIMUM_IN_FLIGHT_VIDEO_REQUESTS)),
             audio: Arc::new(RequestLimiter::new(MAXIMUM_IN_FLIGHT_AUDIO_REQUESTS)),
+            thumbnail: Arc::new(RequestLimiter::new(MAXIMUM_IN_FLIGHT_THUMBNAIL_REQUESTS)),
         }
     }
 
@@ -82,13 +88,10 @@ impl MediaAdmission {
     /// built once per clip); the mixed-audio loader tolerates a
     /// failed chunk and retries, so audio fails fast.
     pub fn admit(&self, uri: &Uri) -> Option<RequestPermit> {
-        if matches!(
-            parse_route(uri),
-            Ok(Route::Audio { .. } | Route::RemoteAudio { .. })
-        ) {
-            self.audio.try_acquire()
-        } else {
-            self.video.acquire_within(VIDEO_REQUEST_QUEUE_TIMEOUT)
+        match parse_route(uri) {
+            Ok(Route::Audio { .. } | Route::RemoteAudio { .. }) => self.audio.try_acquire(),
+            Ok(Route::Thumbnail { .. }) => self.thumbnail.acquire_within(THUMBNAIL_REQUEST_QUEUE_TIMEOUT),
+            _ => self.video.acquire_within(VIDEO_REQUEST_QUEUE_TIMEOUT),
         }
     }
 }
@@ -181,6 +184,15 @@ pub(crate) fn handle_request(
                 Err(error) => service_error_response(&error),
             }
         }
+        Route::Thumbnail { token } => {
+            if request.method() != Method::GET && request.method() != Method::HEAD {
+                return method_not_allowed("GET, HEAD, OPTIONS");
+            }
+            match media.thumbnail_image(token) {
+                Ok(image) => thumbnail_response(&image, request.method() == Method::HEAD),
+                Err(error) => service_error_response(&error),
+            }
+        }
         Route::Audio {
             session_id,
             start_seconds,
@@ -227,6 +239,10 @@ enum Route<'a> {
     Waveform {
         session_id: &'a str,
     },
+    /// A clip's thumbnail; the id is a thumbnail token, not a session.
+    Thumbnail {
+        token: &'a str,
+    },
 }
 
 fn parse_route(uri: &Uri) -> Result<Route<'_>, &'static str> {
@@ -254,6 +270,12 @@ fn parse_route(uri: &Uri) -> Result<Route<'_>, &'static str> {
                     duration_seconds,
                 })
             }
+            _ => Err("invalid media route"),
+        };
+    }
+    if segments[2] == "thumbnail" {
+        return match segments[4] {
+            "image" if uri.query().is_none() => Ok(Route::Thumbnail { token: segments[3] }),
             _ => Err("invalid media route"),
         };
     }
@@ -506,6 +528,19 @@ fn binary_response(
         .header(CACHE_CONTROL, "no-store")
         .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(body)
+        .unwrap_or_else(|_| fallback_response())
+}
+
+/// A thumbnail URL names one version of a clip for this run, so the window
+/// may keep the image as long as it likes.
+fn thumbnail_response(image: &[u8], head: bool) -> Response<Vec<u8>> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "image/jpeg")
+        .header(CONTENT_LENGTH, image.len().to_string())
+        .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(if head { Vec::new() } else { image.to_vec() })
         .unwrap_or_else(|_| fallback_response())
 }
 
@@ -842,5 +877,58 @@ mod tests {
             handle_request(None, "main", request).status(),
             StatusCode::BAD_REQUEST
         );
+    }
+
+    #[test]
+    fn thumbnails_are_served_as_cacheable_images_by_token() {
+        let (root, media, _) = fixture();
+        let authority = PathAuthorizer::from_records([ClipRecord {
+            id: "clip".into(),
+            file_path: root.path().join("clip.mp4").to_string_lossy().into(),
+            ..ClipRecord::default()
+        }]);
+        let url = media.thumbnail_url(&authority, "clip").unwrap();
+        let request = Request::builder().uri(&url).body(Vec::new()).unwrap();
+        assert!(matches!(parse_route(request.uri()), Ok(Route::Thumbnail { .. })));
+        let response = handle_request(Some(media.clone()), "main", request);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "image/jpeg");
+        assert!(response.headers()[CACHE_CONTROL].to_str().unwrap().contains("immutable"));
+        assert_eq!(response.body(), b"RIFF-test-wave");
+
+        let head = Request::builder().method(Method::HEAD).uri(&url).body(Vec::new()).unwrap();
+        let response = handle_request(Some(media.clone()), "main", head);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.body().is_empty());
+
+        let unknown = format!("clipture-media://localhost/v1/thumbnail/{}/image", "b".repeat(48));
+        let request = Request::builder().uri(unknown).body(Vec::new()).unwrap();
+        assert_eq!(handle_request(Some(media.clone()), "main", request).status(), StatusCode::NOT_FOUND);
+        for bad in ["/v1/thumbnail/short/image", "/v1/thumbnail/{t}/video", "/v1/thumbnail/{t}/image?x=1"] {
+            let uri: Uri = format!("clipture-media://localhost{}", bad.replace("{t}", &"a".repeat(48))).parse().unwrap();
+            assert!(parse_route(&uri).is_err(), "{bad} must not parse");
+        }
+    }
+
+    #[test]
+    fn a_full_thumbnail_queue_never_holds_up_video() {
+        let token = "a".repeat(48);
+        let video: Uri = format!("clipture-media://localhost/v1/session/{token}/video").parse().unwrap();
+        let thumbnail: Uri = format!("clipture-media://localhost/v1/thumbnail/{token}/image").parse().unwrap();
+        let admission = Arc::new(MediaAdmission::new());
+        let held_thumbnails: Vec<_> = (0..MAXIMUM_IN_FLIGHT_THUMBNAIL_REQUESTS)
+            .map(|_| admission.admit(&thumbnail).unwrap())
+            .collect();
+        let held_video: Vec<_> = (0..MAXIMUM_IN_FLIGHT_VIDEO_REQUESTS)
+            .map(|_| admission.admit(&video).unwrap())
+            .collect();
+        assert_eq!(held_video.len(), MAXIMUM_IN_FLIGHT_VIDEO_REQUESTS, "video keeps every slot");
+        let waiting = {
+            let admission = Arc::clone(&admission);
+            thread::spawn(move || admission.admit(&thumbnail).is_some())
+        };
+        thread::sleep(Duration::from_millis(50));
+        drop(held_thumbnails);
+        assert!(waiting.join().unwrap(), "a queued thumbnail gets the freed slot");
     }
 }

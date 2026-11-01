@@ -30,6 +30,8 @@ pub struct TrackLayout {
     pub duration_seconds: f64,
     /// How many samples each chunk of the offset table holds, in table order.
     pub chunk_samples: Vec<u32>,
+    /// Keyframes, numbered from 1 (`stss`); `None` when every sample is one.
+    pub sync_samples: Option<Vec<u32>>,
 }
 
 impl TrackLayout {
@@ -62,6 +64,22 @@ pub fn read_layout(path: &Path) -> AppResult<Vec<TrackLayout>> {
     file.seek(SeekFrom::Start(start)).map_err(io)?;
     file.read_exact(&mut moov).map_err(io)?;
     parse_moov(&moov).ok_or_else(|| AppError::Integration("clip index is malformed".into()))
+}
+
+/// Where the clip's video can be decoded from, in seconds: its keyframes.
+/// `None` when every frame is one (nothing to snap to), the clip has no video,
+/// or it has so many that sending them would cost more than it saves.
+pub fn keyframe_times(path: &Path) -> Option<Vec<f64>> {
+    const MAXIMUM_KEYFRAMES: usize = 20_000;
+    let tracks = read_layout(path).ok()?;
+    let video = tracks.iter().find(|track| track.is_video())?;
+    let sync = video.sync_samples.as_ref()?;
+    if sync.is_empty() || sync.len() > MAXIMUM_KEYFRAMES || sync.len() == video.times.len() {
+        return None;
+    }
+    sync.iter()
+        .map(|number| video.times.get((*number as usize).checked_sub(1)?).copied())
+        .collect()
 }
 
 /// True when some audio track is stored far from the video it plays with.
@@ -266,6 +284,16 @@ fn parse_track(trak: &[u8]) -> Option<TrackLayout> {
         ticks = ticks.saturating_add(run.saturating_mul(delta));
     }
     times.resize(count, ticks as f64 / timescale);
+    let sync_samples = match child(stbl, &[b"stss"]) {
+        Some(stss) => {
+            let entries = u32_at(stss, 4)? as usize;
+            if entries > count || entries > stss.len().saturating_sub(8) / 4 {
+                return None;
+            }
+            Some((0..entries).map(|i| u32_at(stss, 8 + 4 * i)).collect::<Option<Vec<_>>>()?)
+        }
+        None => None,
+    };
     Some(TrackLayout {
         handler,
         offsets,
@@ -273,6 +301,7 @@ fn parse_track(trak: &[u8]) -> Option<TrackLayout> {
         times,
         duration_seconds: ticks as f64 / timescale,
         chunk_samples,
+        sync_samples,
     })
 }
 
@@ -316,6 +345,53 @@ pub(crate) mod tests {
 
     pub(crate) fn movie(tracks: &[Vec<u8>]) -> Vec<u8> {
         boxed(b"moov", &tracks.concat())
+    }
+
+    /// A video track of `count` frames 0.5 s apart whose keyframes are `sync`.
+    fn video_with_keyframes(count: u32, sync: Option<&[u32]>) -> Vec<u8> {
+        let offsets: Vec<u32> = (0..count).map(|index| 100 + index * 10).collect();
+        let mut stco = words(&[0, count]);
+        stco.extend(words(&offsets));
+        let mut stbl = [
+            boxed(b"stsz", &words(&[0, 10, count])),
+            boxed(b"stco", &stco),
+            boxed(b"stsc", &words(&[0, 1, 1, 1, 1])),
+            boxed(b"stts", &words(&[0, 1, count, 500])),
+        ]
+        .concat();
+        if let Some(sync) = sync {
+            let mut stss = words(&[0, sync.len() as u32]);
+            stss.extend(words(sync));
+            stbl.extend(boxed(b"stss", &stss));
+        }
+        let mut hdlr = words(&[0, 0]);
+        hdlr.extend_from_slice(b"vide");
+        let mdia = [
+            boxed(b"mdhd", &words(&[0, 0, 0, 1000, 0])),
+            boxed(b"hdlr", &hdlr),
+            boxed(b"minf", &boxed(b"stbl", &stbl)),
+        ]
+        .concat();
+        boxed(b"trak", &boxed(b"mdia", &mdia))
+    }
+
+    #[test]
+    fn keyframe_times_come_from_the_sync_sample_table() {
+        let root = tempfile::tempdir().unwrap();
+        let write = |name: &str, track: Vec<u8>| {
+            let path = root.path().join(name);
+            std::fs::write(&path, movie(&[track])).unwrap();
+            path
+        };
+        let gop = write("gop.mp4", video_with_keyframes(12, Some(&[1, 5, 9])));
+        assert_eq!(keyframe_times(&gop), Some(vec![0.0, 2.0, 4.0]));
+        let intra = write("intra.mp4", video_with_keyframes(4, None));
+        assert_eq!(keyframe_times(&intra), None, "every frame a keyframe: nothing to snap to");
+        let all = write("all.mp4", video_with_keyframes(3, Some(&[1, 2, 3])));
+        assert_eq!(keyframe_times(&all), None);
+        let hostile = write("hostile.mp4", video_with_keyframes(3, Some(&[1, 99])));
+        assert_eq!(keyframe_times(&hostile), None, "a keyframe past the last sample is refused");
+        assert_eq!(keyframe_times(&root.path().join("missing.mp4")), None);
     }
 
     #[test]

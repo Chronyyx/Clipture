@@ -3,7 +3,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ClipRecord, ClipSettings } from '../../../shared/types';
 import { clipture } from '../../platform';
 import { clipSourceLabels, displayAudioTracks, formatDuration } from '../../shared/clips/clipMetadata';
+import { ClipThumbnail } from '../../shared/clips/ClipThumbnail';
 import { useClipIconUrl } from '../../shared/clips/useClipIconUrl';
+import { useClipThumbnail } from '../../shared/clips/useClipThumbnail';
 import { AudioMixer } from './AudioMixer';
 import { PlayerVideoSurface } from './PlayerVideoSurface';
 import { TrimEditor } from './TrimEditor';
@@ -46,6 +48,8 @@ export function ClipPlayer({
   const playbackRequestedRef = useRef(true);
   const [sourceUrl, setSourceUrl] = useState('');
   const [message, setMessage] = useState('Preparing playback');
+  const { url: posterUrl } = useClipThumbnail(clip.filePath);
+  const [keyframeTimes, setKeyframeTimes] = useState<number[]>();
   const [mixedPlayback, setMixedPlayback] = useState(false);
   const [mixedAudioChunkUrl, setMixedAudioChunkUrl] = useState('');
   const [mixedAudioChunkSeconds, setMixedAudioChunkSeconds] = useState(8);
@@ -105,7 +109,8 @@ export function ClipPlayer({
     playbackRequestedRef,
     mixed,
     setCurrentTime,
-    setPlaying
+    setPlaying,
+    keyframeTimes
   });
 
   useEffect(() => {
@@ -117,6 +122,7 @@ export function ClipPlayer({
     setAudioTrackIndexes(playedTracks(clip.audioTracks));
     setTrackChunkSeconds(0);
     setWaveformUrl(undefined);
+    setKeyframeTimes(undefined);
     setPlaying(false);
     setCurrentTime(0);
     setDuration(clip.durationSeconds);
@@ -134,6 +140,7 @@ export function ClipPlayer({
       if (result.audioTrackIndexes) setAudioTrackIndexes(result.audioTrackIndexes);
       setTrackChunkSeconds(result.trackChunkSeconds || 0);
       setWaveformUrl(result.waveformUrl);
+      setKeyframeTimes(result.keyframeTimes);
     }, (error) => {
       setMessage(error instanceof Error ? error.message : 'Could not prepare playback.');
     });
@@ -180,6 +187,7 @@ export function ClipPlayer({
           <PlayerVideoSurface
             videoRef={videoRef}
             sourceUrl={sourceUrl}
+            posterUrl={posterUrl}
             embedded={embedded}
             aspectWidth={aspectWidth || 16}
             aspectHeight={aspectHeight || 9}
@@ -200,7 +208,13 @@ export function ClipPlayer({
             onToggleMixer={mix.mixable ? toggleMix : undefined}
             mixing={mix.open}
           />
-        ) : <div className='empty'>{message}</div>}
+        ) : (
+          // The clip's picture while playback is prepared, not an empty box.
+          <div className='empty player-preparing'>
+            <ClipThumbnail filePath={clip.filePath} eager />
+            <span className='player-preparing-message' role='status'>{message}</span>
+          </div>
+        )}
         {!embedded && editor}
         {(trim.notice || mix.notice) && (
           <div className='edit-notice' role='status'>

@@ -3,8 +3,15 @@ import { useEffect } from "react";
 import type { ClipRecord } from "../../../shared/types";
 import { useNearViewport } from "../../shared/hooks/useNearViewport";
 import { formatClipDate, formatClipTime, formatDuration, parseClipDate } from "../../shared/clips/clipMetadata";
-import { useClipThumbnail } from "../../shared/clips/useClipThumbnail";
+import { ClipThumbnail } from "../../shared/clips/ClipThumbnail";
 import { clipture } from "../../platform/cliptureClient";
+import { menuPointFor, type ClipMenuRequest } from "./ClipContextMenu";
+
+/** Right-click and Delete-key handlers a clip in the library takes. */
+export interface ClipActions {
+  onMenu?: (request: ClipMenuRequest) => void;
+  onDelete?: (clip: ClipRecord) => void;
+}
 
 function ClipRailItem({
   clip,
@@ -12,17 +19,18 @@ function ClipRailItem({
   onSelect,
   onToggleSelected,
   selected,
-  selectionMode
+  selectionMode,
+  actions
 }: {
   clip: ClipRecord;
   active: boolean;
+  actions?: ClipActions;
   onSelect: () => void;
   onToggleSelected?: () => void;
   selected: boolean;
   selectionMode: boolean;
 }) {
   const [itemRef, loadMedia] = useNearViewport<HTMLDivElement>(20);
-  const thumbnailUrl = useClipThumbnail(clip.filePath, loadMedia);
   const createdAt = parseClipDate(clip.createdAt);
   const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
 
@@ -50,6 +58,15 @@ function ClipRailItem({
         selectionMode ? "selectable" : ""
       ].filter(Boolean).join(" ")}
       aria-current={active ? "true" : undefined}
+      onContextMenu={actions?.onMenu && ((event) => {
+        event.preventDefault();
+        actions.onMenu?.({ clip, ...menuPointFor(event) });
+      })}
+      onKeyDown={actions?.onDelete && ((event) => {
+        if (event.key !== "Delete" || event.target !== event.currentTarget.querySelector(".clip-rail-open-button")) return;
+        event.preventDefault();
+        actions.onDelete?.(clip);
+      })}
     >
       <button
         className="clip-rail-open-button"
@@ -63,9 +80,7 @@ function ClipRailItem({
               {selected && <Check size={18} />}
             </span>
           )}
-          {thumbnailUrl
-            ? <img src={thumbnailUrl} alt="" loading="lazy" decoding="async" />
-            : <span className="thumbnail-skeleton" aria-hidden="true" />}
+          <ClipThumbnail filePath={clip.filePath} enabled={loadMedia} />
           {clip.durationSeconds > 0 && (
             <span className="clip-rail-duration">{formatDuration(clip.durationSeconds)}</span>
           )}
@@ -95,10 +110,12 @@ export function LibraryPlayerSidebar({
   onSelectClip,
   onToggleSelected,
   selectedClipIds,
-  selectionMode = false
+  selectionMode = false,
+  actions
 }: {
   clip: ClipRecord;
   railClips: ClipRecord[];
+  actions?: ClipActions;
   onSelectClip: (clip: ClipRecord) => void;
   onToggleSelected?: (clipId: string) => void;
   selectedClipIds?: ReadonlySet<string>;
@@ -120,6 +137,7 @@ export function LibraryPlayerSidebar({
             onToggleSelected={() => onToggleSelected?.(candidate.id)}
             selected={selectedClipIds?.has(candidate.id) ?? false}
             selectionMode={selectionMode}
+            actions={actions}
           />
         ))}
       </div>

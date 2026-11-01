@@ -10,7 +10,7 @@ import { LibraryPlayerSidebar } from "./LibraryPlayerSidebar";
 import { LibraryClipPreview } from "./LibraryClipPreview";
 import { LibraryEmptyState } from "./LibraryEmptyState";
 import { LibrarySkeleton } from "./LibrarySkeleton";
-import { clipture } from "../../platform/cliptureClient";
+import { useClipActions } from "./useClipActions";
 
 export function LibraryView({
   headerControls,
@@ -144,15 +144,15 @@ export function LibraryView({
     });
   };
 
-  const deleteSelectedClips = async () => {
-    const ids = [...selectedClipIds];
-    if (ids.length === 0) return;
-    const deleted = await clipture.deleteClips(ids);
-    if (deleted) {
-      if (selectedClip && selectedClipIds.has(selectedClip.id)) setSelectedClip(undefined);
-      cancelSelection();
+  const clipActions = useClipActions({
+    onPlay: playEditorialClip,
+    onShare: onShareClip,
+    onDeleted: (ids) => {
+      if (selectedClip && ids.includes(selectedClip.id)) setSelectedClip(undefined);
+      setSelectedClipIds((current) => new Set([...current].filter((id) => !ids.includes(id))));
+      if (ids.length > 1 || selectionMode) cancelSelection();
     }
-  };
+  });
 
   const handleImportVideos = async () => {
     await onImportVideos();
@@ -197,7 +197,7 @@ export function LibraryView({
                     {allFilteredClipsSelected ? "Deselect all" : "Select all"}
                   </button>
                   <button className="secondary-button" type="button" onClick={cancelSelection}>Cancel</button>
-                  <button className="danger-button" type="button" onClick={() => void deleteSelectedClips()} disabled={selectedCount === 0}>
+                  <button className="danger-button" type="button" onClick={() => clipActions.confirmDelete(filteredClips.filter((clip) => selectedClipIds.has(clip.id)))} disabled={selectedCount === 0}>
                     <Trash2 size={18} /> Delete
                   </button>
                 </div>
@@ -299,6 +299,7 @@ export function LibraryView({
                 railClips={filteredClips}
                 selectedClipIds={selectedClipIds}
                 selectionMode={selectionMode}
+                actions={clipActions.actions}
               />}
               settings={settings}
             />
@@ -313,9 +314,11 @@ export function LibraryView({
               selectedClipIds={selectedClipIds}
               selectionMode={selectionMode}
               onShare={onShareClip}
+              actions={clipActions.actions}
             />
           )}
         </>) : null}
+        {clipActions.overlays}
       </section>
     </div>
   );

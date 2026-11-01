@@ -2,7 +2,7 @@
 
 Date: 2026-10-30
 
-Status: implemented.
+Status: implemented in 1.8.6; the save-time audio layout fixed in 1.8.8 (below).
 
 ## Context
 
@@ -56,3 +56,15 @@ the number of streams small.
   open while silent (voice chat, some games) keep one capture running.
 - Game detection is unchanged: a program it classifies as a game (for example
   Wallpaper Engine as a Steam title) gets a game track rather than an app track.
+
+## Correction (1.8.8)
+
+The host's save processor still grouped every `app:` track not chosen as an
+app source in settings into one "System audio" track. With app sources gone
+from settings, every saved clip from 1.8.6 and 1.8.7 had its apps merged and
+its tracks reordered, which re-muxed the whole file with FFmpeg after each
+save (1-4 s for a 2-minute 1440p clip, and a full read and write of it). The
+save processor now keeps every recorded track, in the engine's order, and
+only names them; a save no longer runs FFmpeg for audio. Clips already saved
+keep their merged track.
+

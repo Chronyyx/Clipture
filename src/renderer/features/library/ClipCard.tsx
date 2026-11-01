@@ -4,7 +4,7 @@ import type { ClipRecord, ClipSettings } from "../../../shared/types";
 import { useNearViewport } from "../../shared/hooks/useNearViewport";
 import { clipSourceLabels, formatClipDate, formatClipTime, formatDuration, parseClipDate } from "../../shared/clips/clipMetadata";
 import { useClipIconUrl } from "../../shared/clips/useClipIconUrl";
-import { useClipThumbnail } from "../../shared/clips/useClipThumbnail";
+import { ClipThumbnail } from "../../shared/clips/ClipThumbnail";
 import { clipture } from "../../platform/cliptureClient";
 
 export function ClipCard({
@@ -27,7 +27,6 @@ export function ClipCard({
   const createdAt = parseClipDate(clip.createdAt);
   const displayTitle = clip.title === "Clipture clip" ? "Clipture" : clip.title;
   const [cardRef, loadMedia] = useNearViewport<HTMLElement>();
-  const thumbnailUrl = useClipThumbnail(clip.filePath, loadMedia);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState(displayTitle);
   const sourceLabels = useMemo(() => clipSourceLabels(clip, settings), [clip, settings]);
@@ -62,7 +61,7 @@ export function ClipCard({
             {isSelected && <Check size={18} />}
           </span>
         )}
-        {thumbnailUrl ? <img src={thumbnailUrl} alt="" loading="eager" decoding="async" /> : <div className="thumbnail-skeleton" aria-hidden="true" />}
+        <ClipThumbnail filePath={clip.filePath} enabled={loadMedia} />
         {clip.durationSeconds > 0 && <span className="duration-badge">{formatDuration(clip.durationSeconds)}</span>}
         {!selectionMode && (
           <span className="play-badge">

@@ -48,7 +48,7 @@ pub async fn clip_thumbnail_url(
     let settings = state.settings.get();
     blocking(move || {
         let (authority, id) = authorize_path(&library, &settings, &file_path)?;
-        media.thumbnail(&authority, &id)
+        media.thumbnail_url(&authority, &id)
     })
     .await
 }

@@ -78,6 +78,12 @@ impl AppState {
             MediaService::new(sessions, ffmpeg.clone())
                 .with_trim_journals(paths.data_dir.join("trims"))
                 .with_mix_journals(paths.data_dir.join("mixes"))
+                // Its own two FFmpeg slots: a library of new clips never
+                // holds the ones playback audio uses.
+                .with_thumbnails(
+                    paths.data_dir.join("thumbnails"),
+                    Arc::new(CommandFfmpeg::with_concurrency(resolve_ffmpeg_path(&paths), Arc::new(AlwaysReady), 2)),
+                )
                 .with_waveforms(
                     paths.data_dir.join("waveforms"),
                     // A clip's tracks decode side by side.
@@ -129,7 +135,7 @@ impl AppState {
             sound_playback.clone(),
             notifications.clone(),
             save_io.clone(),
-            Arc::new(crate::media::MediaSaveProcessor::new(ffmpeg)),
+            Arc::new(crate::media::MediaSaveProcessor::new(ffmpeg).with_thumbnails(media.thumbnails())),
         ));
         let sharing = SharingService::new(
             paths.data_dir.join("sharing"),

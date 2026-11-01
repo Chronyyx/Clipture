@@ -142,6 +142,9 @@ impl SaveCoordinator {
         };
         emit_save(app, phase, source, duration_seconds, &result);
         if let Some(clip) = result.clip.clone().filter(|_| result.ok) {
+            let processor = self.processor.clone();
+            let saved = clip.clone();
+            tauri::async_runtime::spawn_blocking(move || processor.after_saved(&saved));
             let _ = app.emit("library://changed", clip);
         }
         result

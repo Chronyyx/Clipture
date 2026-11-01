@@ -107,3 +107,30 @@ fn unprocessed_save_is_categorized_without_running_ffmpeg() {
     assert_eq!(fs::read(&saved.file_path).unwrap(), [77; 64]);
     assert!(!path.exists());
 }
+
+/// 1.8.6 regression: a clip with the game, apps and the microphone on their
+/// own tracks (ADR 0028) was re-muxed on every save, merging the apps into a
+/// "System audio" track. It must be published as recorded, without FFmpeg.
+#[test]
+fn per_app_tracks_are_saved_as_recorded_without_ffmpeg() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("deadlock.mp4");
+    fs::write(&path, [91; 64]).unwrap();
+    let clip = ClipRecord {
+        id: "deadlock".into(),
+        game_or_app: "Deadlock".into(),
+        file_path: path.to_string_lossy().into_owned(),
+        resolution: "2560x1440".into(),
+        audio_tracks: vec!["game:deadlock.exe".into(), "app:Discord.exe".into(), "microphone-pcm".into()],
+        ..ClipRecord::default()
+    };
+    let mut settings =
+        ClipSettings::defaults_with_save_folder(root.path().to_string_lossy().into_owned());
+    settings.resolution_preset = Default::default();
+    // FailingFfmpeg fails any job: a re-mux would fail this save.
+    let saved = MediaSaveProcessor::new(Arc::new(FailingFfmpeg))
+        .process(clip, &settings)
+        .unwrap();
+    assert_eq!(saved.audio_tracks, ["deadlock", "Discord", "microphone-pcm"]);
+    assert_eq!(fs::read(&saved.file_path).unwrap(), [91; 64], "published as recorded");
+}

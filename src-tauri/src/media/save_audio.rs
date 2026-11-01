@@ -1,54 +1,30 @@
-use crate::contracts::{AudioSourceKind, ClipSettings};
-
+/// The saved clip's audio tracks and their names. Every track the engine
+/// recorded stays its own track, in the engine's order (ADR 0028: the game,
+/// each app and the microphone apart), so saving never rewrites the file for
+/// audio. Until 1.8.6 apps not chosen in settings were mixed into one "System
+/// audio" track; with apps no longer chosen there, that merged every app and
+/// re-muxed every saved clip.
 pub struct AudioLayout {
     pub groups: Vec<Vec<usize>>,
     pub labels: Vec<String>,
 }
 
 impl AudioLayout {
-    pub fn new(tracks: &[String], settings: &ClipSettings) -> Self {
-        let separate: Vec<_> = settings
-            .audio_sources
+    pub fn new(tracks: &[String]) -> Self {
+        let labels = tracks
             .iter()
-            .filter(|source| source.kind == AudioSourceKind::App && source.enabled)
-            .filter_map(|source| source.process_name.as_ref())
-            .map(|name| format!("app:{name}"))
-            .collect();
-        let mut system = Vec::new();
-        let mut microphones = Vec::new();
-        let mut remaining = Vec::new();
-        for (index, track) in tracks.iter().enumerate() {
-            if track == "microphone-pcm" {
-                microphones.push(index);
-            } else if track == "system-loopback-pcm"
-                || (track.starts_with("app:") && !separate.contains(track))
-            {
-                system.push(index);
-            } else {
-                remaining.push(index);
-            }
-        }
-        let mut groups = Vec::new();
-        let mut labels = Vec::new();
-        if !system.is_empty() {
-            groups.push(system);
-            labels.push("System audio".into());
-        }
-        for index in microphones.into_iter().chain(remaining) {
-            groups.push(vec![index]);
-            let raw = &tracks[index];
-            let name = raw
-                .strip_prefix("app:")
-                .or_else(|| raw.strip_prefix("game:"));
-            labels.push(match name {
-                Some(name) if name.to_ascii_lowercase().ends_with(".exe") => {
-                    name[..name.len() - 4].into()
+            .map(|raw| {
+                if raw == "system-loopback-pcm" {
+                    return "System audio".to_owned();
                 }
-                Some(name) => name.into(),
-                None => raw.clone(),
-            });
-        }
-        Self { groups, labels }
+                match raw.strip_prefix("app:").or_else(|| raw.strip_prefix("game:")) {
+                    Some(name) if name.to_ascii_lowercase().ends_with(".exe") => name[..name.len() - 4].to_owned(),
+                    Some(name) => name.to_owned(),
+                    None => raw.clone(),
+                }
+            })
+            .collect();
+        Self { groups: (0..tracks.len()).map(|index| vec![index]).collect(), labels }
     }
 
     pub fn needs_mix(&self) -> bool {
@@ -66,47 +42,27 @@ impl AudioLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::AudioSourceRule;
 
     #[test]
-    fn system_mix_is_first_and_explicit_apps_remain_separate() {
-        let mut settings = ClipSettings::default();
-        settings.audio_sources.push(AudioSourceRule {
-            kind: AudioSourceKind::App,
-            enabled: true,
-            process_name: Some("chat.exe".into()),
-            ..AudioSourceRule::default()
-        });
+    fn every_track_stays_apart_in_the_engines_order() {
         let tracks = [
+            "game:Deadlock.exe",
+            "app:Discord.exe",
+            "app:chrome.exe",
             "microphone-pcm",
-            "app:browser.exe",
-            "app:chat.exe",
-            "system-loopback-pcm",
-            "game:Game.EXE",
         ]
         .map(String::from);
-        let layout = AudioLayout::new(&tracks, &settings);
-        assert_eq!(layout.groups, vec![vec![1, 3], vec![0], vec![2], vec![4]]);
-        assert_eq!(
-            layout.labels,
-            ["System audio", "microphone-pcm", "chat", "Game"]
-        );
-        assert!(layout.needs_mix());
-        assert!(layout.needs_remap());
+        let layout = AudioLayout::new(&tracks);
+        assert_eq!(layout.groups, vec![vec![0], vec![1], vec![2], vec![3]]);
+        assert_eq!(layout.labels, ["Deadlock", "Discord", "chrome", "microphone-pcm"]);
+        assert!(!layout.needs_mix(), "no app is mixed into another track");
+        assert!(!layout.needs_remap(), "a save never re-muxes the clip for audio");
     }
 
     #[test]
-    fn label_only_changes_do_not_require_ffmpeg_but_reordering_does() {
-        let settings = ClipSettings::default();
-        assert!(!AudioLayout::new(
-            &["system-loopback-pcm".into(), "microphone-pcm".into()],
-            &settings
-        )
-        .needs_remap());
-        assert!(AudioLayout::new(
-            &["microphone-pcm".into(), "system-loopback-pcm".into()],
-            &settings
-        )
-        .needs_remap());
+    fn the_legacy_system_track_is_named_but_not_moved() {
+        let layout = AudioLayout::new(&["microphone-pcm".into(), "system-loopback-pcm".into(), "game:Game".into()]);
+        assert_eq!(layout.labels, ["microphone-pcm", "System audio", "Game"]);
+        assert!(!layout.needs_remap());
     }
 }

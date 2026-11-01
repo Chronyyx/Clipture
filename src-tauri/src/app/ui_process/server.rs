@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 use tauri::Emitter;
 
 pub fn read(app: AppHandle, session: Arc<Session>, mut reader: impl Read) {
-    let slots = super::admission::Admission::new();
+    let slots = Arc::new(super::admission::Admission::new());
     // Media reads have their own budget: sharing the command slots let a burst
     // of thumbnail and icon calls fail a video's first range read, which leaves
     // the player black until the clip is reopened.
@@ -34,20 +34,21 @@ pub fn read(app: AppHandle, session: Arc<Session>, mut reader: impl Read) {
             Message::Invoke { id, command, args }
                 if session.ready.load(Ordering::Acquire) && ids.accept(id) =>
             {
-                let Some(permit) = slots.acquire(Some(&command)) else {
-                    let _ = session.output.send(
-                        Message::Reply {
-                            id,
-                            result: Err("UI host is busy; retry shortly".into()),
-                        }
-                        .into(),
-                    );
-                    continue;
-                };
                 let app = app.clone();
                 let session = session.clone();
+                let slots = slots.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _permit = permit;
+                    // Waits for a slot off the reader, so a burst queues.
+                    let Some(_permit) = slots.acquire(Some(&command)).await else {
+                        let _ = session.output.send(
+                            Message::Reply {
+                                id,
+                                result: Err("UI host is busy; retry shortly".into()),
+                            }
+                            .into(),
+                        );
+                        return;
+                    };
                     let result =
                         super::dispatch::invoke(app.clone(), session.owner.clone(), &command, args)
                             .await;

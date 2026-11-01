@@ -1,9 +1,10 @@
 import { Play } from "lucide-react";
 import type { ClipRecord, ClipSettings } from "../../../shared/types";
 import { formatDuration } from "../../shared/clips/clipMetadata";
-import { useClipThumbnail } from "../../shared/clips/useClipThumbnail";
+import { ClipThumbnail } from "../../shared/clips/ClipThumbnail";
 import { LibraryClipDetails } from "./LibraryClipDetails";
-import { LibraryPlayerSidebar } from "./LibraryPlayerSidebar";
+import { menuPointFor } from "./ClipContextMenu";
+import { LibraryPlayerSidebar, type ClipActions } from "./LibraryPlayerSidebar";
 
 export function LibraryClipPreview({
   clip,
@@ -14,8 +15,10 @@ export function LibraryClipPreview({
   onToggleSelected,
   selectedClipIds,
   selectionMode,
-  onShare
+  onShare,
+  actions
 }: {
+  actions?: ClipActions;
   clip: ClipRecord;
   railClips: ClipRecord[];
   settings?: ClipSettings;
@@ -26,14 +29,24 @@ export function LibraryClipPreview({
   selectionMode: boolean;
   onShare?: (clip: ClipRecord) => void;
 }) {
-  const thumbnailUrl = useClipThumbnail(clip.filePath);
-
   return (
     <section className="player panel library-player library-player-preview">
-      <button className="library-player-main library-preview-main" type="button" onClick={onPlay} aria-label={`Play ${clip.title}`}>
-        {thumbnailUrl
-          ? <img src={thumbnailUrl} alt="" decoding="async" />
-          : <span className="thumbnail-skeleton" aria-hidden="true" />}
+      <button
+        className="library-player-main library-preview-main"
+        type="button"
+        onClick={onPlay}
+        aria-label={`Play ${clip.title}`}
+        onContextMenu={actions?.onMenu && ((event) => {
+          event.preventDefault();
+          actions.onMenu?.({ clip, ...menuPointFor(event) });
+        })}
+        onKeyDown={actions?.onDelete && ((event) => {
+          if (event.key !== "Delete") return;
+          event.preventDefault();
+          actions.onDelete?.(clip);
+        })}
+      >
+        <ClipThumbnail filePath={clip.filePath} eager />
         <span className="play-badge library-preview-play"><Play size={20} /></span>
         {clip.durationSeconds > 0 && (
           <span className="duration-badge">{formatDuration(clip.durationSeconds)}</span>
@@ -47,6 +60,7 @@ export function LibraryClipPreview({
         onToggleSelected={onToggleSelected}
         selectedClipIds={selectedClipIds}
         selectionMode={selectionMode}
+        actions={actions}
       />
     </section>
   );

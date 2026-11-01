@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.8.8] - 2026-11-01
+
+### Saving
+
+- **Fast saves again:** Since 1.8.6, every save rewrote the whole clip after recording it, so "Saving clip…" stayed up for 1 to 4 seconds and the drive worked hard while you played. Saves finish in about a quarter of a second again.
+- **Apps keep their own tracks:** That rewrite also merged every app back into one "System audio" track. Your game, each app and your microphone now stay on separate tracks as intended. Clips saved with 1.8.6 or 1.8.7 keep their merged track.
+
+### Library
+
+- **Instant thumbnails:** Thumbnails are made once and kept, instead of being made again every time Clipture opens. A library of 40 clips shows every thumbnail in a fraction of a second, and new clips have theirs ready as soon as they are saved. Each one takes about 12 KB and is deleted with its clip.
+- **No more "Clipture is busy":** Opening Clipture no longer turns requests away while it loads, so the friends list shows up right away instead of loading forever.
+- **Right-click a clip:** Right-click a clip (or press the menu key) to play it, show it in its folder, send it to a friend or delete it. The Delete key works on a selected clip too.
+- **Delete asks first:** Deleting a clip, from the menu, the Delete key or "Select clips", now asks before removing the file from your PC.
+
+### Player
+
+- **Smooth scrubbing:** Dragging through a clip shows the picture as you go instead of freezing until you let go: 47 frames instead of 3 in a three-second drag, landing on the exact frame where you stop.
+- **No black screen while loading:** The clip's thumbnail shows while it opens, until the first frame is ready.
+
 ## [1.8.7] - 2026-10-31
 
 ### Recording

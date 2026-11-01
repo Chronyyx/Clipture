@@ -1,0 +1,19 @@
+/* A thumbnail waits, invisible, over its skeleton until it has decoded, then
+   fades in: no empty box while it loads. Parents are positioned. */
+.clip-thumbnail:not(.loaded) {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+
+.clip-thumbnail.loaded {
+  animation: clip-thumbnail-in 180ms ease-out;
+}
+
+@keyframes clip-thumbnail-in {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-thumbnail.loaded { animation: none; }
+}

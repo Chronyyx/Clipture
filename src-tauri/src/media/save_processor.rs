@@ -16,11 +16,18 @@ use crate::{
 
 pub struct MediaSaveProcessor {
     executor: Arc<dyn FfmpegExecutor>,
+    thumbnails: Option<Arc<super::ThumbnailService>>,
 }
 
 impl MediaSaveProcessor {
     pub fn new(executor: Arc<dyn FfmpegExecutor>) -> Self {
-        Self { executor }
+        Self { executor, thumbnails: None }
+    }
+
+    /// Makes each saved clip's thumbnail right after the save.
+    pub fn with_thumbnails(mut self, thumbnails: Arc<super::ThumbnailService>) -> Self {
+        self.thumbnails = Some(thumbnails);
+        self
     }
 
     fn stitch(
@@ -96,6 +103,13 @@ impl MediaSaveProcessor {
 }
 
 impl SavedClipProcessor for MediaSaveProcessor {
+    fn after_saved(&self, clip: &ClipRecord) {
+        let Some(thumbnails) = &self.thumbnails else { return };
+        if let Err(error) = thumbnails.prewarm(Path::new(&clip.file_path)) {
+            tracing::warn!(%error, "could not make a saved clip's thumbnail");
+        }
+    }
+
     fn process(&self, mut clip: ClipRecord, settings: &ClipSettings) -> AppResult<ClipRecord> {
         let inputs = SaveInputs::validate(&clip, settings)?;
         let destination = destination(&inputs.root, &clip)?;
@@ -118,7 +132,7 @@ impl SavedClipProcessor for MediaSaveProcessor {
             inputs.files[0].clone()
         };
         let scale = !inputs.segmented && save_resolution::parse(&clip.resolution) != Some(target);
-        let audio = AudioLayout::new(&clip.audio_tracks, settings);
+        let audio = AudioLayout::new(&clip.audio_tracks);
         if scale || audio.needs_remap() {
             let output = temporary.path().join("processed.mp4");
             let mut args = save_jobs::input(&source);

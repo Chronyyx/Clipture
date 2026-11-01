@@ -8,6 +8,9 @@ interface PlayerControlsProps {
   playing: boolean;
   volume: number;
   onSeek: (percent: number) => void;
+  /** A pointer drag on the scrubber starts and ends. */
+  onScrubStart?: () => void;
+  onScrubEnd?: () => void;
   onTogglePlayback: () => void;
   onToggleFullscreen: () => void;
   onVolumeChange: (volume: number) => void;
@@ -25,6 +28,8 @@ export function PlayerControls({
   playing,
   volume,
   onSeek,
+  onScrubStart,
+  onScrubEnd,
   onTogglePlayback,
   onToggleFullscreen,
   onVolumeChange,
@@ -65,7 +70,8 @@ export function PlayerControls({
       </div>
       <div className='transport-timeline'>
         <div className='transport-scale' style={{ '--playback-progress': `${progress}%` } as CSSProperties}>
-          <input className='player-scrubber' type='range' min={0} max={100} step={0.1} value={progress} onChange={(event) => onSeek(Number(event.target.value))} aria-label='Seek' aria-valuetext={`${formatDuration(currentTime)} of ${formatDuration(duration)}`} />
+          <input className='player-scrubber' type='range' min={0} max={100} step={0.1} value={progress} onChange={(event) => onSeek(Number(event.target.value))}
+            onPointerDown={onScrubStart} onPointerUp={onScrubEnd} onPointerCancel={onScrubEnd} onLostPointerCapture={onScrubEnd} aria-label='Seek' aria-valuetext={`${formatDuration(currentTime)} of ${formatDuration(duration)}`} />
         </div>
         <span className='transport-time' title='Clip length'>{formatDuration(duration)}</span>
       </div>

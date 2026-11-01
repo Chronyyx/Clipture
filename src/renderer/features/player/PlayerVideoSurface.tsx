@@ -9,6 +9,8 @@ import { SeekFeedbackOverlay } from './SeekFeedbackOverlay';
 interface PlayerVideoSurfaceProps {
   videoRef: RefObject<HTMLVideoElement | null>;
   sourceUrl: string;
+  /** Shown until the first frame decodes, instead of black. */
+  posterUrl?: string;
   embedded: boolean;
   aspectWidth: number;
   aspectHeight: number;
@@ -33,6 +35,7 @@ interface PlayerVideoSurfaceProps {
 export function PlayerVideoSurface({
   videoRef,
   sourceUrl,
+  posterUrl,
   embedded,
   aspectWidth,
   aspectHeight,
@@ -97,6 +100,7 @@ export function PlayerVideoSurface({
         ref={videoRef}
         key={sourceUrl}
         src={sourceUrl}
+        poster={posterUrl || undefined}
         autoPlay={!mixedEnabled}
         crossOrigin='anonymous'
         muted={mixedEnabled}
@@ -132,7 +136,8 @@ export function PlayerVideoSurface({
           }
         }}
         onTimeUpdate={(event) => {
-          setCurrentTime(event.currentTarget.currentTime);
+          // A drag's keyframe seeks would pull the thumb off the pointer.
+          if (!interactions.scrubbingRef.current) setCurrentTime(event.currentTarget.currentTime);
           if (mixedEnabled) mixed.ensureBuffered();
         }}
         onSeeking={() => {
@@ -141,7 +146,7 @@ export function PlayerVideoSurface({
           mixed.resetTimeline();
         }}
         onSeeked={(event) => {
-          setCurrentTime(event.currentTarget.currentTime);
+          if (!interactions.scrubbingRef.current) setCurrentTime(event.currentTarget.currentTime);
           if (interactions.keyboardSeekingRef.current) return;
           if (playbackRequestedRef.current) void mixed.playWhenReady();
           else if (mixedEnabled) mixed.ensureBuffered();
@@ -164,6 +169,8 @@ export function PlayerVideoSurface({
         playing={playing}
         volume={volume}
         onSeek={interactions.seekToPercent}
+        onScrubStart={interactions.beginScrub}
+        onScrubEnd={interactions.endScrub}
         onTogglePlayback={interactions.togglePlayback}
         onToggleFullscreen={interactions.toggleFullscreen}
         onVolumeChange={setVolume}

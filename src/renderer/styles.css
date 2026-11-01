@@ -1,11 +1,13 @@
 @import './shared/foundation.css';
 @import './shared/skeleton.css';
+@import './shared/clips/clip-thumbnail.css';
 @import './app/app.css';
 @import './features/library/library-layout.css';
 @import './features/player/player.css';
 @import './features/library/library-grid.css';
 @import './features/settings/settings.css';
 @import './features/library/library-selection.css';
+@import './features/library/clip-actions.css';
 @import './features/settings/audio/audio.css';
 @import './features/diagnostics/diagnostics.css';
 @import './features/sharing/sharing.css';
