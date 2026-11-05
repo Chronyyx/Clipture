@@ -43,6 +43,9 @@ struct CapturePipelinePolicy {
     // Experimental: under Windows HDR the game window is captured as 8-bit BGRA,
     // with no tone mapping. Clips HDR games' highlights; no HDR detection.
     bool sdrGameBgra = false;
+    // WGC MinUpdateInterval in 100 ns (CLIPTURE_WGC_MIN_UPDATE_100NS). -1: half
+    // the recording frame period (ADR 0031); 0: every frame the source presents.
+    long long wgcMinUpdateInterval100ns = -1;
 };
 inline const CapturePipelinePolicy& capturePipelinePolicy() {
     static const auto policy = [] {
@@ -81,6 +84,14 @@ inline const CapturePipelinePolicy& capturePipelinePolicy() {
         result.skipCanonicalCopy = flag(L"CLIPTURE_SKIP_CANONICAL", result.skipCanonicalCopy);
         result.idlePoolNoDrain = flag(L"CLIPTURE_IDLE_POOL_NO_DRAIN", result.idlePoolNoDrain);
         result.sdrGameBgra = flag(L"CLIPTURE_SDR_GAME_BGRA", result.sdrGameBgra);
+        {
+            wchar_t value[16] {};
+            const auto count = GetEnvironmentVariableW(L"CLIPTURE_WGC_MIN_UPDATE_100NS", value, 16);
+            if (count > 0 && count < 16) {
+                const long long parsed = _wtoi64(value);
+                if (parsed >= 0 && parsed <= 10'000'000) result.wgcMinUpdateInterval100ns = parsed;
+            }
+        }
         return result;
     }();
     return policy;

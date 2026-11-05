@@ -21,12 +21,14 @@
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include <winrt/base.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <string>
 #include <thread>
 
 namespace clipture::capture {
@@ -37,6 +39,33 @@ using winrt::Windows::Graphics::Capture::GraphicsCaptureItem;
 using winrt::Windows::Graphics::Capture::GraphicsCaptureSession;
 using winrt::Windows::Graphics::DirectX::DirectXPixelFormat;
 using winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
+
+// Recording at 60 fps or less, Windows delivers at most two source frames per
+// recorded frame (ADR 0031): the newest-per-tick selection keeps its
+// freshness, and an uncapped game's every present is no longer copied for us.
+// One per recorded frame stuttered; at 120 fps two per frame stuttered more
+// and saved nothing under GPU load, so faster recording stays uncapped.
+constexpr int kMaximumCappedFps = 60;
+
+int64_t updateInterval100ns(int fps) {
+    const auto forced = capturePipelinePolicy().wgcMinUpdateInterval100ns;
+    if (forced >= 0) return forced;
+    if (fps > kMaximumCappedFps) return 0;
+    return 10'000'000 / (2 * std::clamp(fps, 1, kMaximumCappedFps));
+}
+
+// Old Windows has no IGraphicsCaptureSession5 and keeps its own cadence.
+bool setUpdateInterval(GraphicsCaptureSession const& session, int fps) {
+    if (!session) return false;
+    auto cadence = session.try_as<winrt::Windows::Graphics::Capture::IGraphicsCaptureSession5>();
+    if (!cadence) return false;
+    try {
+        cadence.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan { updateInterval100ns(fps) });
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 
 // Fault injection for stress trials: CLIPTURE_TEST_PREPARE_STALL="<ms>,<onMs>,<offMs>"
 // delays every WGC frame preparation by <ms> for <onMs>, then none for <offMs>,
@@ -70,6 +99,8 @@ struct WgcCaptureBackend::Impl {
     GraphicsCaptureItem item { nullptr };
     Direct3D11CaptureFramePool framePool { nullptr };
     GraphicsCaptureSession session { nullptr };
+    // Recording rate the delivery cap was set for (refreshUpdateInterval).
+    int cadenceFps = 0;
     winrt::event_token frameArrivedToken {};
     winrt::event_token itemClosedToken {};
     DirectXPixelFormat framePoolPixelFormat = DirectXPixelFormat::B8G8R8A8UIntNormalized;
@@ -407,9 +438,7 @@ struct WgcCaptureBackend::Impl {
             traceVram(d3dDevice.Get(), "wgc-game-pool");
             game.session = game.framePool.CreateCaptureSession(game.item);
             game.session.IsCursorCaptureEnabled(true);
-            if (auto cadence = game.session.try_as<winrt::Windows::Graphics::Capture::IGraphicsCaptureSession5>()) {
-                try { cadence.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{0}); } catch (...) {}
-            }
+            setUpdateInterval(game.session, cadenceFps);
             try { game.session.IsBorderRequired(false); } catch (...) {}
             game.window = gameWindow;
             if (!overlayCompositor) {
@@ -486,6 +515,18 @@ struct WgcCaptureBackend::Impl {
     }
 
     // Runs on the backend thread every poll.
+    // The recording rate can change while capture runs; a cap left at the old
+    // rate would deliver one frame per recorded frame at the new one.
+    void refreshUpdateInterval() {
+        const int fps = shared->targetFps.load(std::memory_order_relaxed);
+        if (fps == cadenceFps) return;
+        cadenceFps = fps;
+        setUpdateInterval(session, fps);
+        setUpdateInterval(game.session, fps);
+        std::cerr << "[capture-pipeline] WGC minUpdateInterval100ns=" << updateInterval100ns(fps)
+                  << " fps=" << fps << '\n';
+    }
+
     void updateHybrid() {
         if (window || !capturePipelinePolicy().hybridGameCapture) return;
         auto wanted = static_cast<HWND>(shared->hybridGameWindow.load(std::memory_order_acquire));
@@ -641,18 +682,12 @@ BackendStartResult WgcCaptureBackend::start() {
 
         state.session = state.framePool.CreateCaptureSession(state.item);
         state.session.IsCursorCaptureEnabled(true);
-        // Capability-query the optional API; old Windows keeps its behavior.
-        // Zero removes an API-side rate floor, not a promise of delivered FPS.
-        if (auto cadence = state.session.try_as<winrt::Windows::Graphics::Capture::IGraphicsCaptureSession5>()) {
-            try {
-                cadence.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{0});
-                std::cerr << "[capture-pipeline] WGC minUpdateInterval100ns="
-                          << cadence.MinUpdateInterval().count() << '\n';
-            } catch (const winrt::hresult_error& error) {
-                std::cerr << "[capture-pipeline] WGC interval request unavailable: "
-                          << hresultHex(error.code()) << '\n';
-            }
-        }
+        // A requested interval caps delivery; it does not promise a rate.
+        state.cadenceFps = state.shared->targetFps.load(std::memory_order_relaxed);
+        std::cerr << "[capture-pipeline] WGC minUpdateInterval100ns="
+                  << (setUpdateInterval(state.session, state.cadenceFps)
+                         ? std::to_string(updateInterval100ns(state.cadenceFps)) : std::string("unavailable"))
+                  << " fps=" << state.cadenceFps << '\n';
         try {
             state.session.IsBorderRequired(false);
         } catch (...) {
@@ -695,6 +730,7 @@ BackendStartResult WgcCaptureBackend::start() {
 
 BackendOutcome WgcCaptureBackend::run(std::stop_token stopToken) {
     while (!stopToken.stop_requested() && !impl_->failed.load(std::memory_order_acquire)) {
+        impl_->refreshUpdateInterval();
         impl_->updateHybrid();
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
