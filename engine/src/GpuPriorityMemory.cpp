@@ -130,7 +130,7 @@ void GpuPriorityMemory::open(const std::string& path, std::string gpuIdentity) {
 }
 
 bool GpuPriorityMemory::contains(const std::string& exeName) const {
-    if (keyHex_.empty() || exeName.empty()) return false;
+    if (keyHex_.empty() || exeName.empty() || ids_.empty()) return false;
     const auto id = gameId(keyHex_, exeName, gpuIdentity_);
     return !id.empty() && std::find(ids_.begin(), ids_.end(), id) != ids_.end();
 }

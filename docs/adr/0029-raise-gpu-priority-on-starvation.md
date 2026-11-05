@@ -104,6 +104,25 @@ stutter into clips.
   raised. Loss without a deep queue takes about 20 s.
 - A game that once starved stays raised on that GPU while it keeps the GPU
   busy, even if a later driver would cope at `normal`.
+- What realtime costs the game (stress window fps against the window alone,
+  3080, recording 60 fps, 2026-11-04): about 1.2 % at `normal` and 2.5-3.5 %
+  at `realtime` in light phases, 7-9 % and 12-14 % in the smoke phase. The
+  extra cost grows with the recorded frame rate (+0.6, +1.9 and +2.9 points in
+  light phases at 30, 60 and 120 fps), so it is per recorded frame. Neither a
+  shared capture/NVENC device (one copy and one flush fewer), NV12 input, nor
+  D3D11 GPU thread priority 0 (worse, 6-9 %) reduced it. Nor did splitting
+  the thread priority (capture +7, encoder -7, or encoder -7 alone): within a
+  realtime process every device's work is realtime. The remaining levers are
+  time spent raised, or the encoder in a separate process left at `normal`.
+- The game in front and the running games came only from the audio detection
+  pass, which runs with game or foreground-app audio on, and lists running
+  games only with game audio on. With both off the engine never raised; with
+  only foreground-app audio a raise stepped down as "game closed" after one
+  pass. When game audio is off, the engine now finds the known game in front
+  itself and passes every running process name (2026-11-04; experimental
+  until confirmed in real sessions). Stress window,
+  three frames queued, no audio: 728 stutter frames at `normal` before, raised
+  on queued drops and 191-199 after; one frame queued stays at `normal`.
 - Thresholds come from one GPU, a synthetic window, Overwatch and CS2. The
   diagnostics fields let exports from starved PCs refine them, or replace the
   drop rule with a prediction.

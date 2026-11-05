@@ -624,6 +624,30 @@ ForegroundGameCaptureTarget detectForegroundGameCaptureTarget(HMONITOR activeMon
     }
     return { window, getGameName(exeName) };
 }
+
+// GPU priority needs the game even when no audio option runs the detection
+// pass (ADR 0029): the known game in front, and the name of every running
+// process. Only a game that once starved recording matches the per-game memory,
+// and a raised game only needs to be found by name.
+void detectGamesForGpuPriority(std::string& foregroundGameExe, std::vector<std::string>& runningExes) {
+    HWND window = GetForegroundWindow();
+    DWORD processId = 0;
+    if (window && foregroundGameExe.empty()) GetWindowThreadProcessId(window, &processId);
+    if (processId != 0) {
+        const auto processPath = RunningProcessSnapshot::queryProcessPath(processId);
+        if (!processPath.empty()) {
+            const auto exeName = std::filesystem::path(processPath).filename().string();
+            if (!isIgnoredForegroundProcess(exeName) && isKnownGameProcess(exeName, processPath, processId, window)) {
+                foregroundGameExe = exeName;
+            }
+        }
+    }
+    const auto snapshot = RunningProcessSnapshot::captureNameOnly();
+    std::unordered_set<std::string> seen;
+    for (const auto& entry : snapshot.entries()) {
+        if (seen.insert(entry.lowerExeName).second) runningExes.push_back(entry.exeName);
+    }
+}
 std::pair<int, int> parseResolution(const std::string& resolution) {
     const auto marker = resolution.find('x');
     if (marker == std::string::npos) return { 1920, 1080 };
@@ -1248,6 +1272,10 @@ void Engine::gameDetectionLoop() {
             }
         }
         // Raises the engine's GPU class only on PCs where a game starves it.
+        // The audio pass lists running games only with game audio on.
+        if (!settings_.captureGameAudio || !audioCaptureWorker_) {
+            detectGamesForGpuPriority(foregroundGameExe, runningGameExes);
+        }
         gpuPriority_.observe(foregroundGameExe, runningGameExes, videoDropTotal(), monotonicNow100ns(), settings_.fps);
 
         std::unique_lock lock(gameDetectionWaitMutex_);
