@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.9] - 2026-11-05
+
+### Recording
+
+- **More FPS while you record:** Recording at 60 fps or less, Windows now hands Clipture at most two game frames per recorded frame instead of every frame your game draws. Games running well above your recording rate get back up to 4% of their frame rate, and clips stay just as smooth. Recording at 120 fps works as before.
+- **Priority boost without game audio:** With game audio recording turned off, "Prioritize recording on the GPU" never noticed your game, so it never stepped in when clips started dropping frames. It now finds your game either way.
+
 ## [1.8.8] - 2026-11-01
 
 ### Saving
