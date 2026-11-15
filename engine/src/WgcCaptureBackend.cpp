@@ -150,6 +150,7 @@ struct WgcCaptureBackend::Impl {
             failureReason = std::move(reason);
         }
         failed.store(true, std::memory_order_release);
+        shared->wakeBackend();
     }
 
     std::string failure() {
@@ -729,10 +730,30 @@ BackendStartResult WgcCaptureBackend::start() {
 }
 
 BackendOutcome WgcCaptureBackend::run(std::stop_token stopToken) {
+    // What is above an open game window has to be polled. With none open the
+    // loop only sleeps: a new game window, a rate change and a failure wake it.
+    constexpr auto kCoveragePoll = std::chrono::milliseconds(25);
+    constexpr auto kIdlePoll = std::chrono::seconds(1);
+    auto nextDeviceCheck = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     while (!stopToken.stop_requested() && !impl_->failed.load(std::memory_order_acquire)) {
         impl_->refreshUpdateInterval();
         impl_->updateHybrid();
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        // A driver reset can remove the device while every WGC call still
+        // succeeds and no frame ever arrives again. Checked about once a second.
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= nextDeviceCheck && impl_->d3dDevice) {
+            nextDeviceCheck = now + std::chrono::seconds(1);
+            const HRESULT removed = impl_->d3dDevice->GetDeviceRemovedReason();
+            if (FAILED(removed)) {
+                long expected = 0;
+                impl_->shared->deviceRemovedHr.compare_exchange_strong(expected, static_cast<long>(removed));
+                impl_->fail("WGC capture device removed: " + hresultHex(removed));
+                break;
+            }
+        }
+        impl_->shared->waitForBackendWake(
+            stopToken,
+            impl_->game.session ? std::chrono::milliseconds(kCoveragePoll) : std::chrono::milliseconds(kIdlePoll));
     }
     if (stopToken.stop_requested()) return BackendOutcome::Stopped;
     const std::string reason = impl_->failure();

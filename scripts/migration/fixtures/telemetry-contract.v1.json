@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "source": "src/shared/telemetry.ts#TelemetryApi",
+  "adr": "docs/adr/0035-invite-only-telemetry.md",
+  "operations": [
+    { "method": "getStatus", "command": "telemetry_status", "args": [] },
+    { "method": "enroll", "command": "telemetry_enroll", "args": ["code"] },
+    { "method": "stop", "command": "telemetry_stop", "args": [] },
+    { "method": "lastBatch", "command": "telemetry_last_batch", "args": [] }
+  ],
+  "statusFields": ["supported", "state", "server", "friendName", "deviceId", "enrolledAt", "pendingBytes", "lastUploadAt", "lastUploadRecords", "lastError"]
+}

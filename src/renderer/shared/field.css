@@ -122,6 +122,7 @@
   font-weight: 500;
   letter-spacing: -1px;
 }
+:root:is([data-theme="graphite"], [data-theme="light"]) :is(.topbar, .share-header) h1 { line-height: 40px; }
 
 :root:is([data-theme="graphite"], [data-theme="light"]) :is(.primary, .secondary-button, .keybind-button, .add-source) {
   border: 1px solid var(--border-strong);
@@ -177,7 +178,7 @@
 :root:is([data-theme="graphite"], [data-theme="light"]) .clip-rail-heading { font: 600 12px/1.5 var(--font-ui); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .library-player-side-title { font-size: 23px; font-weight: 500; letter-spacing: -0.5px; }
 
-:root:is([data-theme="graphite"], [data-theme="light"]) :is(.settings-group, .panel:not(.player), .audio-source-card, .modal, .selection-bar, .notice) { border-radius: 7px; }
+:root:is([data-theme="graphite"], [data-theme="light"]) :is(.settings-group, .settings-rows, .panel:not(.player), .audio-source-card, .modal, .selection-bar, .notice) { border-radius: 7px; }
 :root:is([data-theme="graphite"], [data-theme="light"]) .settings-group { padding: 24px; gap: 26px 24px; background: var(--surface); }
 :root:is([data-theme="graphite"], [data-theme="light"]) .settings-group > label { font: 500 12.5px/1.5 var(--font-ui); color: var(--text-muted); }
 :root:is([data-theme="graphite"], [data-theme="light"]) :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]), select, textarea) { border-radius: 4px; font-family: var(--font-ui); }

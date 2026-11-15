@@ -124,6 +124,7 @@ jobs:
           node scripts/migration/test-renderer-boundaries.cjs
           node scripts/migration/test-ui-process-boundaries.cjs
           node scripts/migration/test-save-result-contract.cjs
+          node scripts/migration/test-telemetry-contract.cjs
           node scripts/testing/test-tauri-workflow.cjs
           node scripts/migration/test-frame-diagnostics-parity.cjs
           node scripts/testing/test-library-snapshot.cjs
@@ -138,6 +139,9 @@ jobs:
 
       - name: Test patch tool
         run: cargo test --locked --manifest-path tools/make-patches/Cargo.toml
+
+      - name: Test telemetry protocol
+        run: cargo test --locked --manifest-path tools/telemetry-protocol/Cargo.toml
 
   # The release build, exactly as a release ships it: same configuration,
   # native identity, updater signature and optional Authenticode signing.
@@ -256,6 +260,7 @@ jobs:
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe.sig
             src-tauri/binaries/
+            build/notices/
             dist/renderer/
           if-no-files-found: error
           retention-days: 14

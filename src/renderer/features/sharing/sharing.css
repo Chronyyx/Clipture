@@ -15,12 +15,11 @@
 
 .share-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  /* The library's sticky header padding plus its title row, so page titles
-     share one baseline when switching tabs. */
-  min-height: 46px;
+  /* The same top padding and title row as the other views, so page titles
+     share one line when switching tabs. */
   padding-top: 40px;
   -webkit-app-region: drag;
 }
@@ -33,13 +32,12 @@
   align-items: center;
   gap: 12px;
   min-width: 0;
+  min-height: 40px;
 }
 
 .share-header h1 {
   color: var(--text-strong);
   font-family: var(--font-display);
-  font-size: 28px;
-  line-height: 1.1;
 }
 
 .share-status {
@@ -190,6 +188,40 @@
     radial-gradient(70% 90% at 100% 100%, color-mix(in oklch, var(--friend) 14%, transparent), transparent 70%),
     var(--surface-video);
 }
+
+/* A transport along the foot of the idle screen: play, the clip's length
+   on an empty track. It is laid over the screen so the picture keeps its
+   size. */
+.share-screen-idle { position: relative; }
+.share-idle-transport {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: rgb(0 0 0 / 35%);
+}
+.share-idle-play {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 22px;
+  padding: 0 0 0 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-strong);
+  background: var(--surface-control);
+  cursor: pointer;
+}
+.share-idle-play svg { fill: currentColor; }
+.share-idle-play:focus-visible { outline: 2px solid var(--selection); outline-offset: 2px; }
+.share-idle-track { flex: 1; height: 4px; border-radius: 2px; background: rgb(255 255 255 / 22%); }
+.share-idle-time { color: rgb(255 255 255 / 80%); font-size: 12px; font-variant-numeric: tabular-nums; }
+.share-idle-volume { display: flex; align-items: center; gap: 8px; color: rgb(255 255 255 / 85%); }
+.share-idle-volume input { width: 80px; accent-color: var(--accent); }
 
 /* Before play: the clip is shown, nothing streams yet. */
 /* The same play badge as the library's: a light badge, a solid triangle. */

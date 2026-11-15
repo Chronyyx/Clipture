@@ -10,6 +10,41 @@ export async function revealMainWindow(): Promise<void> {
   await window.setFocus();
 }
 
+/** Reports whether the window fills the screen (maximized or fullscreen),
+ * now and whenever that changes; returns a function that stops watching.
+ * Browser previews and Electron's framed window always count as filling. */
+export function watchWindowFill(onChange: (fills: boolean) => void): () => void {
+  if (hostKind !== 'tauri') {
+    onChange(true);
+    return () => undefined;
+  }
+  const window = getCurrentWindow();
+  let stopped = false;
+  let last: boolean | undefined;
+  const check = async () => {
+    const fills = (await window.isMaximized()) || (await window.isFullscreen());
+    if (!stopped && fills !== last) {
+      last = fills;
+      onChange(fills);
+    }
+  };
+  void check().catch(() => onChange(true));
+  const listening = window.onResized(() => void check().catch(() => undefined));
+  return () => {
+    stopped = true;
+    void listening.then((unlisten) => unlisten());
+  };
+}
+
+export type ResizeEdge = 'North' | 'South' | 'East' | 'West' | 'NorthEast' | 'NorthWest' | 'SouthEast' | 'SouthWest';
+
+/** Starts the system's own resize from `edge`, for windows whose drawn edge
+ * is not the window's rectangle. Does nothing outside the Tauri host. */
+export async function startWindowResize(edge: ResizeEdge): Promise<void> {
+  if (hostKind !== 'tauri') return;
+  await getCurrentWindow().startResizeDragging(edge);
+}
+
 export type WindowAction = 'close' | 'minimize' | 'maximize';
 
 /** Whether the UI may draw its own window controls: the Tauri window drops

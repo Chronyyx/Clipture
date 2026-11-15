@@ -42,7 +42,7 @@ and [flip-mode eligibility/composition](https://learn.microsoft.com/en-us/window
 `CLIPTURE_PIPELINE_TRACE=1` enables process-local stderr diagnostics. Absent or
 other values leave probes off. No persisted setting or host-protocol change.
 
-- `PipelineTimingTrace.hpp`: per-thread CPU aggregation, approximately one
+- `PipelineTimingTrace` (in `GpuStageProbe.hpp`): per-thread CPU aggregation, approximately one
   record/second/stage, including UTC, count, mean, maximum and counts above
   1/5/10 ms. This is not a p95 estimate.
 - `GpuStageProbe.hpp`: bounded eight-slot timestamp/disjoint-query ring per

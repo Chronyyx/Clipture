@@ -4,7 +4,7 @@ mod operation;
 mod processing;
 
 pub use analyzer::{SaveIoAnalyzer, SaveIoAnalyzerState};
-pub use coordinator::SaveCoordinator;
+pub use coordinator::{SaveCoordinator, SaveObserver};
 pub(crate) use coordinator::notification_placement;
 pub use operation::CaptureOperationLease;
 pub use processing::SavedClipProcessor;

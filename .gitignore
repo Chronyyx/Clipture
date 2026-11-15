@@ -25,3 +25,6 @@ release-notes-*.md
 *.key
 *.sig
 tools/make-patches/target/
+tools/telemetry-protocol/target/
+*.sqlite3
+*.sqlite3-*

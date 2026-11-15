@@ -1,6 +1,6 @@
 //! Thin private transport adapter. Existing commands and domain services remain
 //! the only owners of business rules and persistent effects.
-use crate::{admin_hotkey, commands, state::AppState, updates};
+use crate::{admin_hotkey, commands, state::AppState, telemetry, updates};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
@@ -214,6 +214,12 @@ pub async fn invoke(
         "dismiss_admin_game_hotkey" => encode(admin_hotkey::commands::dismiss_admin_game_hotkey(state)),
         "open_main_window" => encode(commands::open_main_window(app.clone())?),
         "close_main_window" => encode(commands::close_main_window(app.clone())?),
+        "telemetry_status" => encode(telemetry::commands::telemetry_status(state)),
+        "telemetry_enroll" => {
+            encode(telemetry::commands::telemetry_enroll(state, argument(&args, "code")?).await?)
+        }
+        "telemetry_stop" => encode(telemetry::commands::telemetry_stop(state)),
+        "telemetry_last_batch" => encode(telemetry::commands::telemetry_last_batch(state)),
         "exit_app" => {
             super::super::request_exit(&app);
             Ok(Value::Null)

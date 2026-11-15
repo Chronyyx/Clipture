@@ -1,5 +1,6 @@
 mod audio_extract;
 mod base64;
+mod edit_lists;
 mod ffmpeg;
 mod layout_probe;
 mod layout_repair;

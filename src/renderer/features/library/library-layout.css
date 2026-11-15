@@ -71,10 +71,8 @@
   display: none;
 }
 
+/* The same button as Save in every other view's header. */
 .library-save-button {
-  height: 46px;
-  padding: 0 18px;
-  border-radius: 8px;
   font-size: 14px;
 }
 
@@ -114,18 +112,18 @@
   gap: 11px;
   min-height: 42px;
   border: 1px solid #333944;
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 0 14px;
   color: #cfd6e2;
   background: #0f1115;
 }
 
-:root .library-search:focus-within {
+:root :is(.library-search, .diagnostics-search):focus-within {
   outline: 2px solid var(--accent);
   outline-offset: 0;
 }
 
-:root .library-search:focus-within input:focus-visible {
+:root :is(.library-search, .diagnostics-search):focus-within input:focus-visible {
   outline: none;
 }
 
@@ -505,8 +503,10 @@
   .library-send-button { transition: none; }
 }
 
-.library-filter-row { display: flex; align-items: center; gap: 12px; }
-.library-filter-row .library-tabs { flex: 0 0 auto; }
+/* The tabs and the search box beside them are one height. */
+.library-filter-row { display: flex; align-items: stretch; gap: 12px; }
+.library-filter-row .library-tabs { flex: 0 0 auto; align-items: stretch; }
+.library-filter-row .library-tab { min-height: 0; }
 .library-filter-row .library-search { flex: 1; min-width: 0; }
 
 /* Narrow: the tabs share the row between them, and search gets its own. */

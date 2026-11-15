@@ -48,7 +48,6 @@
   letter-spacing: -0.4px;
 }
 
-:root[data-theme="graphite"] .mark { width: 30px; height: 30px; }
 :root[data-theme="graphite"] .nav { height: 42px; margin-bottom: 4px; border-radius: 9px; font-weight: 500; }
 :root[data-theme="graphite"] .nav.active { background: #292925; }
 :root[data-theme="graphite"] .encoder { border-color: var(--border); border-radius: 12px; gap: 7px; font-size: 12px; }
@@ -96,8 +95,8 @@
   box-shadow: 0 1px 3px rgb(0 0 0 / 15%);
 }
 
-:root[data-theme="graphite"] .library-search { min-height: 40px; border-radius: 10px; background: #191918; border-color: var(--border); }
-:root[data-theme="graphite"] .library-search input { min-height: 38px; }
+:root[data-theme="graphite"] :is(.library-search, .diagnostics-search) { min-height: 40px; border-radius: 10px; background: #191918; border-color: var(--border); }
+:root[data-theme="graphite"] :is(.library-search, .diagnostics-search) input { min-height: 38px; }
 :root[data-theme="graphite"] .chip { min-height: 30px; padding: 0 13px; border-color: transparent; background: transparent; }
 :root[data-theme="graphite"] .chip:hover { background: var(--surface-hover); color: var(--text); }
 :root[data-theme="graphite"] .chip.active { background: var(--surface-active); color: var(--text-strong); }
@@ -110,6 +109,6 @@
 :root[data-theme="graphite"] :is(.clip-name, .clip-title) { font-weight: 550; letter-spacing: -0.2px; }
 :root[data-theme="graphite"] :is(.panel, .settings-group) { border-radius: 14px; }
 :root[data-theme="graphite"] .settings-group { gap: 24px; padding: 26px; }
-:root[data-theme="graphite"] :is(input:not([type="range"]):not([type="checkbox"]), select, textarea, .secondary-button, .keybind-button) { border-radius: 8px; }
+:root[data-theme="graphite"] :is(input:not([type="range"]):not([type="checkbox"]), select, textarea, .secondary-button) { border-radius: 8px; }
 :root[data-theme="graphite"] .notice { border-radius: 10px; }
 :root[data-theme="graphite"] :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

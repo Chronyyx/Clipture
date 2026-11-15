@@ -96,6 +96,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
             .title("")
             .visible(false)
+            // Aero clears its background so the desktop shows round its shell;
+            // every other theme paints the window opaque.
+            .transparent(true)
             .background_color(tauri::webview::Color(17, 17, 16, 255))
             .inner_size(1240.0, 780.0)
             .min_inner_size(980.0, 640.0)

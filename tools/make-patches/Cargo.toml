@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Release tool: zstd patches from earlier Clipture releases (ADR 0020)"
 edition = "2021"
 publish = false
+license-file = "../../LICENSE"
 
 # Standalone so release CI builds it in seconds instead of rebuilding the app.
 # zstd is pinned to the exact version src-tauri decodes with; the shared

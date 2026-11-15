@@ -2,6 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/Chronyyx/Clipture/releases/latest"><img alt="Download Clipture for Windows" src="https://img.shields.io/badge/Download%20for%20Windows-latest%20release-2ea043?style=for-the-badge&logo=windows&logoColor=white" height="44"></a>
+  <a href="LICENSE"><img alt="License: MIT + Commons Clause (source-available, no resale)" src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-blue?style=for-the-badge" height="28"></a>
 </p>
 <p align="center">On the release page, run <b>Clipture_<i>version</i>_x64-setup.exe</b>. Clipture updates itself after that; the other files there are for those updates.</p>
 
@@ -248,3 +249,25 @@ Run a native engine smoke test with:
 ```
 
 Diagnostics reports the requested and active capture backends, measured display refresh rate, fresh-frame rate, repeats, separately queued fresh/repeated encoder ticks, queue drops, and encoder-stage latency. If DXGI Desktop Duplication cannot start or recover, automatic mode quarantines it for that monitor and falls back to Windows.Graphics.Capture. A forced WGC failure such as `CreateForMonitor failed: HRESULT 0x80070424` is reported as degraded capture instead of silently treating the engine as armed.
+
+## License
+
+Clipture is **MIT + Commons Clause (Source-Available, No Resale)**. It is not an
+OSI-approved open-source license.
+
+- You may view, use, modify and redistribute Clipture under the MIT terms in
+  [`LICENSE`](LICENSE), including for personal and non-commercial use.
+- The Commons Clause removes one right: to **Sell** Clipture. "Sell" means
+  providing to others, for a fee or other consideration (including hosting or
+  consulting/support fees), a product or service whose value derives entirely or
+  substantially from Clipture's functionality. Selling Clipture, distributing it
+  as a paid product, or offering such a paid service needs a separate commercial
+  license from the copyright holder.
+- Other uses are governed by the MIT terms; the restriction covers only selling
+  as defined in the license text.
+- Releases published under the plain MIT License keep that license; this applies
+  to versions distributed with the updated `LICENSE`.
+- Third-party components keep their own licenses; see
+  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+The complete legal terms are in [`LICENSE`](LICENSE).

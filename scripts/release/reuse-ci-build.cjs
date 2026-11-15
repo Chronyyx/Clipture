@@ -17,6 +17,9 @@ const required = [
   path.join(root, 'src-tauri/binaries/clipture_engine-x86_64-pc-windows-msvc.exe'),
   path.join(root, 'src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe'),
   path.join(root, 'dist/renderer/index.html'),
+  // License notices the release uploads beside the runtime files.
+  ...['LICENSE.txt', 'THIRD_PARTY_NOTICES.md', 'FFmpeg-LICENSE.txt', 'FFmpeg-README.txt', 'DEPENDENCY-LICENSES.txt']
+    .map((name) => path.join(root, 'build/notices', name)),
 ];
 const missing = required.filter((file) => !fs.existsSync(file) || fs.statSync(file).size === 0);
 if (missing.length) {

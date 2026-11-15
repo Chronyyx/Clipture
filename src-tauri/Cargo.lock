@@ -655,12 +655,15 @@ dependencies = [
 
 [[package]]
 name = "clipture"
-version = "1.8.9"
+version = "1.9.0"
 dependencies = [
  "auto-launch",
  "base64 0.23.1",
  "blake3",
+ "clipture-telemetry-protocol",
  "dirs 6.0.0",
+ "flate2",
+ "getrandom 0.3.4",
  "iroh",
  "iroh-mdns-address-lookup",
  "minisign",
@@ -689,6 +692,17 @@ dependencies = [
  "windows 0.61.3",
  "winreg 0.55.0",
  "zstd",
+]
+
+[[package]]
+name = "clipture-telemetry-protocol"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

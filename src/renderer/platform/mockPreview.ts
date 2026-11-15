@@ -19,8 +19,10 @@ const games = [
 ] as const;
 
 function thumbnail(hue: number, index: number) {
-  const light = 'hsl(' + hue + ' 55% 58%)';
-  const dark = 'hsl(' + ((hue + 40) % 360) + ' 45% 16%)';
+  // Dark and nearly grey, like a dim frame of video: a stand-in should
+  // not out-shout the interface it is standing in.
+  const light = 'hsl(' + hue + ' 14% 30%)';
+  const dark = 'hsl(' + ((hue + 40) % 360) + ' 18% 8%)';
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="270" viewBox="0 0 480 270">' +
     '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="' + light + '"/>' +
     '<stop offset="1" stop-color="' + dark + '"/></linearGradient></defs>' +

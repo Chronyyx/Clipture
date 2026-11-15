@@ -3,7 +3,6 @@
 
 :root[data-theme="light"] .sidebar { padding: 28px 16px 20px; }
 :root[data-theme="light"] .brand { gap: 10px; padding: 0 8px; font-size: 16px; }
-:root[data-theme="light"] .mark { width: 30px; height: 30px; }
 :root[data-theme="light"] .nav { margin-bottom: 4px; border-radius: 5px; font-weight: 500; }
 :root[data-theme="light"] .nav.active { background: #e3e3e7; color: var(--text-strong); }
 :root[data-theme="light"] .encoder { background: transparent; font-size: 12px; }
@@ -60,8 +59,8 @@
   box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
 }
 
-:root[data-theme="light"] .library-search { min-height: 36px; border-radius: 5px; }
-:root[data-theme="light"] .library-search input { min-height: 34px; }
+:root[data-theme="light"] :is(.library-search, .diagnostics-search) { min-height: 36px; border-radius: 5px; }
+:root[data-theme="light"] :is(.library-search, .diagnostics-search) input { min-height: 34px; }
 :root[data-theme="light"] .chip { min-height: 30px; border-radius: 5px; padding: 0 12px; }
 :root[data-theme="light"] .chip.active { border-color: var(--border-strong); color: var(--text); background: var(--surface-active); }
 :root[data-theme="light"] .chip:hover:not(.active) { border-color: var(--border-strong); color: var(--text); background: var(--surface-hover); }

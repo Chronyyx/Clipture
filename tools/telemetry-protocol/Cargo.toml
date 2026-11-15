@@ -1,0 +1,17 @@
+[package]
+name = "clipture-telemetry-protocol"
+version = "0.1.0"
+description = "Wire format shared by Clipture's telemetry client and server (ADR 0035)"
+edition = "2021"
+publish = false
+license-file = "../../LICENSE"
+
+# src-tauri builds it as a path crate and the private telemetry server as a
+# git dependency on this repository, so the record shape and signing strings
+# cannot drift between them.
+[dependencies]
+base64 = "0.23"
+ed25519-dalek = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"

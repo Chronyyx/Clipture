@@ -51,7 +51,13 @@ impl SaveEngine for NativeSaveEngine {
     }
 }
 
+/// Told about every accepted save once it finished (telemetry, ADR 0035).
+pub trait SaveObserver: Send + Sync {
+    fn saved(&self, result: &SaveClipResult, elapsed_ms: u128, requested_seconds: u32);
+}
+
 pub struct SaveCoordinator {
+    observer: std::sync::OnceLock<Arc<dyn SaveObserver>>,
     busy: CaptureOperationGate,
     engine: Arc<dyn SaveEngine>,
     clips: Arc<ClipService>,
@@ -89,6 +95,7 @@ impl SaveCoordinator {
         processor: Arc<dyn SavedClipProcessor>,
     ) -> Self {
         Self {
+            observer: std::sync::OnceLock::new(),
             busy: CaptureOperationGate::default(),
             engine,
             clips,
@@ -97,6 +104,10 @@ impl SaveCoordinator {
             analyzer,
             processor,
         }
+    }
+
+    pub fn set_observer(&self, observer: Arc<dyn SaveObserver>) {
+        let _ = self.observer.set(observer);
     }
 
     /// Used by the updater to defer installation while a clip is anywhere in
@@ -134,7 +145,11 @@ impl SaveCoordinator {
             duration_seconds,
             &SaveClipResult::default(),
         );
+        let started = std::time::Instant::now();
         let result = self.perform_save(settings, duration_seconds).await;
+        if let Some(observer) = self.observer.get() {
+            observer.saved(&result, started.elapsed().as_millis(), duration_seconds);
+        }
         let phase = if result.ok {
             SavePhase::Completed
         } else {

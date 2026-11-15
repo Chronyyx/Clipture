@@ -49,7 +49,26 @@ private:
 // dozens in flight; one that is capped or waits on its last frame keeps a
 // handful (ADR 0029). Unlike adapter busy, it does not under-read with
 // hardware scheduling on. nullopt when the statistics are unavailable.
-std::optional<double> meanPacketsInFlight(IDXGIAdapter1* adapter, int samples, int intervalMs);
+//
+// Reading one engine node's statistics costs about 0.3 ms of CPU and an
+// adapter has a dozen nodes, most of them unused. Every node is read on a
+// pass's first sample; one that submitted nothing since the previous pass and
+// holds nothing in flight is not read again for the rest of the pass.
+class PacketsInFlightSampler {
+public:
+    explicit PacketsInFlightSampler(IDXGIAdapter1* adapter);
+    ~PacketsInFlightSampler();
+    PacketsInFlightSampler(const PacketsInFlightSampler&) = delete;
+    PacketsInFlightSampler& operator=(const PacketsInFlightSampler&) = delete;
+
+    std::optional<double> mean(int samples, int intervalMs);
+    // Node reads the last mean() made; for tests.
+    int lastNodeReads() const;
+
+private:
+    struct State;
+    std::unique_ptr<State> state_;
+};
 
 // How busy the adapter's 3D engines are, summed over every process (the
 // game's share is most of it), from the counters Task Manager shows. Reads the

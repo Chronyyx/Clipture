@@ -2,8 +2,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { SpookyMascot } from './characters';
 import type { SpookyMood } from './SpookyFace';
-import { useFlicker } from './useFlicker';
-import { useHalloween } from './useHalloween';
+import { useFlicker, useHalloween } from './useHalloween';
 
 const reveal = {
   initial: { opacity: 0, transform: 'translateY(3px)' },

@@ -8,8 +8,7 @@ import { clipSourceLabels } from "../../shared/clips/clipMetadata";
 import { LibraryClipDetails } from "./LibraryClipDetails";
 import { LibraryPlayerSidebar } from "./LibraryPlayerSidebar";
 import { LibraryClipPreview } from "./LibraryClipPreview";
-import { LibraryEmptyState } from "./LibraryEmptyState";
-import { LibrarySkeleton } from "./LibrarySkeleton";
+import { LibraryEmptyState, LibrarySkeleton } from "./LibraryPlaceholders";
 import { useClipActions } from "./useClipActions";
 
 export function LibraryView({

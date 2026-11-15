@@ -6,12 +6,39 @@
 #include <TlHelp32.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cstddef>
+#include <memory>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace clipture {
+
+namespace detail {
+
+// Head of one SystemProcessInformation record (SYSTEM_PROCESS_INFORMATION in
+// winternl.h, with its reserved fields named); thread records follow it.
+struct SystemProcessRecord {
+    ULONG nextEntryOffset;
+    ULONG numberOfThreads;
+    BYTE reserved[48];
+    USHORT imageNameBytes;
+    USHORT imageNameCapacity;
+    PWSTR imageName;
+    LONG basePriority;
+    HANDLE processId;
+    HANDLE parentProcessId;
+};
+#ifdef _WIN64
+static_assert(offsetof(SystemProcessRecord, imageName) == 64);
+static_assert(offsetof(SystemProcessRecord, processId) == 80);
+static_assert(offsetof(SystemProcessRecord, parentProcessId) == 88);
+#endif
+
+}  // namespace detail
 
 struct RunningProcessInfo {
     DWORD processId = 0;
@@ -23,6 +50,14 @@ struct RunningProcessInfo {
 class RunningProcessSnapshot {
 public:
     static RunningProcessSnapshot captureNameOnly() {
+        RunningProcessSnapshot snapshot;
+        if (captureFromSystemList(snapshot)) return snapshot;
+        return captureFromToolhelp();
+    }
+
+    // The same list through Toolhelp, which maps its snapshot section again
+    // for every entry: about twice the time. Used when the system call fails.
+    static RunningProcessSnapshot captureFromToolhelp() {
         RunningProcessSnapshot snapshot;
         HANDLE processes = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (processes == INVALID_HANDLE_VALUE) return snapshot;
@@ -50,12 +85,17 @@ public:
         HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
         if (!process) return {};
 
-        std::wstring path(32768, L'\0');
-        DWORD size = static_cast<DWORD>(path.size());
         std::string result;
-        if (QueryFullProcessImageNameW(process, 0, path.data(), &size) && size > 0) {
-            path.resize(size);
-            result = narrow(path.c_str());
+        wchar_t shortPath[MAX_PATH] {};
+        DWORD size = MAX_PATH;
+        if (QueryFullProcessImageNameW(process, 0, shortPath, &size)) {
+            if (size > 0) result = narrow(shortPath, static_cast<int>(size));
+        } else if (GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+            std::wstring longPath(32768, L'\0');
+            size = static_cast<DWORD>(longPath.size());
+            if (QueryFullProcessImageNameW(process, 0, longPath.data(), &size) && size > 0) {
+                result = narrow(longPath.data(), static_cast<int>(size));
+            }
         }
         CloseHandle(process);
         return result;
@@ -86,6 +126,61 @@ public:
         return valid_;
     }
 
+    // The whole list in one system call, in the order Toolhelp reports it.
+    // False when the call is unavailable; `snapshot` is then left empty.
+    static bool captureFromSystemList(RunningProcessSnapshot& snapshot) {
+        using QuerySystemInformation = LONG(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
+        static const auto query = [] {
+            const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+            return ntdll
+                ? reinterpret_cast<QuerySystemInformation>(GetProcAddress(ntdll, "NtQuerySystemInformation"))
+                : nullptr;
+        }();
+        if (!query) return false;
+
+        constexpr ULONG kSystemProcessInformation = 5;
+        constexpr LONG kLengthMismatch = static_cast<LONG>(0xC0000004);
+        constexpr ULONG kHeadroom = 128 * 1024;
+        static std::atomic<ULONG> lastSize { 1024 * 1024 };
+        ULONG size = lastSize.load(std::memory_order_relaxed);
+        std::unique_ptr<unsigned char[]> buffer;
+        LONG status = kLengthMismatch;
+        for (int attempt = 0; attempt < 4 && status == kLengthMismatch; ++attempt) {
+            buffer.reset(new (std::nothrow) unsigned char[size]);
+            if (!buffer) return false;
+            ULONG needed = 0;
+            status = query(kSystemProcessInformation, buffer.get(), size, &needed);
+            if (status == kLengthMismatch) size = std::max(needed, size) + kHeadroom;
+        }
+        if (status != 0) return false;
+        lastSize.store(size, std::memory_order_relaxed);
+
+        std::size_t offset = 0;
+        for (;;) {
+            if (offset + sizeof(detail::SystemProcessRecord) > size) {
+                snapshot.entries_.clear();
+                return false;
+            }
+            const auto* record = reinterpret_cast<const detail::SystemProcessRecord*>(buffer.get() + offset);
+            const auto processId = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(record->processId));
+            // Toolhelp's name for the idle process, which has none of its own.
+            auto exeName = processId == 0
+                ? std::string("[System Process]")
+                : narrow(record->imageName, static_cast<int>(record->imageNameBytes / sizeof(wchar_t)));
+            auto lowerExeName = lowerAscii(exeName);
+            snapshot.entries_.push_back({
+                processId,
+                static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(record->parentProcessId)),
+                std::move(exeName),
+                std::move(lowerExeName)
+            });
+            if (record->nextEntryOffset == 0) break;
+            offset += record->nextEntryOffset;
+        }
+        snapshot.valid_ = true;
+        return true;
+    }
+
 private:
     static std::string captureProcessName(std::string sourceSpec) {
         return audioProcessName(sourceSpec);
@@ -104,6 +199,15 @@ private:
         if (needed <= 1) return {};
         std::string result(static_cast<std::size_t>(needed - 1), '\0');
         WideCharToMultiByte(CP_UTF8, 0, value, -1, result.data(), needed, nullptr, nullptr);
+        return result;
+    }
+
+    static std::string narrow(const wchar_t* value, int length) {
+        if (!value || length <= 0) return {};
+        const int needed = WideCharToMultiByte(CP_UTF8, 0, value, length, nullptr, 0, nullptr, nullptr);
+        if (needed <= 0) return {};
+        std::string result(static_cast<std::size_t>(needed), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, value, length, result.data(), needed, nullptr, nullptr);
         return result;
     }
 

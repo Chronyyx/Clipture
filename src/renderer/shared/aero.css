@@ -1,252 +1,965 @@
-/* Aero: Frutiger Aero as Windows 7 had it. A glass city of the future
-   under a blue sky with soap bubbles drifting over it; frosted glass panes
-   with a bright reflection across their top half; Windows 7 buttons and
-   selection highlights; and the player as dark taskbar glass. The scene
-   is a bitmap and the glass is painted over it (layered gradients), not
-   blurred, so nothing recomputes while the library scrolls or a clip
-   plays. */
+/* Aero: the Windows XP media player's look. The interface is one moulded
+   object resting on the desktop, a meadow under a deep blue sky with
+   soap bubbles drifting over.
+
+   THE OBJECT is one piece of vector art drawn at the window's size
+   (shared/aero/shellArt.ts, mounted by AeroShell): pale
+   silver-blue plastic in a rolled rim. Its top is nearly flat and rises
+   through an S to a platform at the top right for the window keys; its
+   foot steps up through an S under the taskbar's wing. Formed in it:
+
+     the cap      a glossy blue lobe at the top left carrying the name,
+                  its lower edge sweeping up through an S into the rim
+     the pocket   a tray of periwinkle gel; the taskbar sits in it
+     the well     a dark recess under the pocket's wavy foot; the
+                  recorder's status sits in it
+     the floor    the deep blue working face; the workspace lies on it
+
+   Inside the floor: a bar of silver across the top, and wells for the
+   panes, navy and rounded, edged like the art's own hollows.
+
+   LIGHT comes from above everywhere: raised things are lit along their
+   top and shaded along their foot; hollows are the reverse.
+
+   The numbers that place things against the shell (the shell 42.3, 9.2,
+   39.2 and 34.5 px in from the window's edges; the pocket 54.6 to 261.5
+   px across from 113.8 px down; the well 61.5 to 261.5 px across down to
+   654.6 px; the floor 266.9 px across and 53.1 px down, to 50.8 and 64.5
+   px from the right and foot)
+   are the generator's: change them in both places. */
 :root[data-theme="aero"] {
-  --font-ui: "Segoe UI", "Frutiger", "Myriad Pro", system-ui, sans-serif;
+  --font-ui: "Segoe UI", Tahoma, "Frutiger", sans-serif;
   --font-display: var(--font-ui);
-  --app-bg: #cfe7f8;
-  --sidebar-bg: #d8ecfa;
-  --surface: #f5faff;
-  --surface-deep: #e6f2fb;
-  --surface-row: #eef6fd;
-  --surface-control: #ffffff;
-  --surface-hover: #e5f3fd;
-  --surface-active: #cce8fb;
-  --surface-video: #050d18;
-  --border: #b5d3ec;
-  --border-strong: #8cb4d8;
-  --text: #1e395b;
-  --text-strong: #0b2440;
-  --text-muted: #4a6584;
-  --text-subtle: #627d9a;
-  --icon: #2c5c8f;
-  --accent: #1f7fe0;
-  --accent-hover: #1468c0;
-  --accent-soft: #dcefff;
-  --accent-border: #84acdd;
-  --accent-text: #1561b0;
-  --on-accent: #ffffff;
-  --primary-bg: #1f7fe0;
+  /* In the wells: navy, lettered in white. */
+  --app-bg: #101b52;
+  --sidebar-bg: #17266a;
+  --surface: #17266a;
+  --surface-deep: #0e1848;
+  --surface-row: #1b2c72;
+  --surface-control: #22357e;
+  --surface-hover: #253888;
+  --surface-active: #30479a;
+  --surface-video: #000000;
+  --border: #2e4392;
+  --border-strong: #4c63ba;
+  --text: #e8eeff;
+  --text-strong: #ffffff;
+  --text-muted: #b8c6f0;
+  --text-subtle: #97a8e0;
+  --icon: #c6d2fb;
+  --accent: #7fb2ff;
+  --accent-hover: #a3c8ff;
+  --accent-soft: rgb(127 178 255 / 16%);
+  --accent-border: #5a92ee;
+  --accent-text: #a9ccff;
+  --on-accent: #06164f;
+  --primary-bg: #2f66d8;
   --primary-text: #ffffff;
-  --selection: #3399ff;
-  --selection-ring: rgb(51 153 255 / 30%);
-  --toggle-on: #39b54a;
-  --scrollbar: #a9c8e4;
-  --scrollbar-hover: #7fabd6;
-  --scrollbar-active: #4f8bc9;
-  --shadow: rgb(10 50 100 / 18%);
-  --inset-highlight: rgb(255 255 255 / 90%);
+  --selection: #7db4ff;
+  --selection-ring: rgb(125 180 255 / 40%);
+  --toggle-on: #4ac42f;
+  --scrollbar: #8fa7ea;
+  --scrollbar-hover: #b3c4f4;
+  --scrollbar-active: #d5dffa;
+  --shadow: rgb(4 12 52 / 40%);
+  --inset-highlight: rgb(255 255 255 / 10%);
   color-scheme: light;
 
-  /* The desktop: a glass city under a deep blue sky (skyline.webp,
-     drawn by scripts/assets/render-aero-scene.cjs) with soap bubbles
-     drawn over it as vectors, both framed the same way. */
+  /* The desktop: a meadow under a deep blue sky (meadow.webp, drawn by
+     scripts/assets/render-aero-wallpaper.cjs). */
   --aero-sky:
-    url("../../../assets/aero/bubbles.svg") center / cover no-repeat,
-    url("../../../assets/aero/skyline.webp") center / cover no-repeat,
-    #2f8fea;
+    url("../../../assets/aero/meadow.webp") center / cover no-repeat,
+    #1e8fee;
 
-  /* Glass panes: a bright reflection on the upper half, a white rim. */
-  --aero-pane: linear-gradient(to bottom, rgb(255 255 255 / 94%), rgb(255 255 255 / 80%) 46%, rgb(255 255 255 / 70%) 47%, rgb(255 255 255 / 84%));
-  --aero-pane-edge: inset 0 0 0 1px rgb(255 255 255 / 85%), 0 0 0 1px rgb(20 70 130 / 30%), 0 6px 18px rgb(10 50 100 / 22%);
-  --aero-frost: linear-gradient(to bottom, rgb(255 255 255 / 74%), rgb(255 255 255 / 58%) 40%, rgb(255 255 255 / 68%));
+  --aero-ink: #0f1f66;
+  --aero-ink-soft: #3a4e9c;
+  /* Silver: the rim's metal, for the bar across the top. */
+  --aero-silver: linear-gradient(to bottom, #eef2fc 0%, #d3ddf2 14%, #b9c7e5 46%, #a9b9dc 62%, #b4c8ee 92%, #8ea3d8 100%);
+  /* A raised strip of the same metal: the player's transport. */
+  --aero-strip: linear-gradient(to bottom, #fbfcff 0%, #e3eafb 44%, #c6d2f2 56%, #d6dff7 100%);
+  /* The display's floor: the body's blue. */
+  --aero-floor: linear-gradient(to bottom, #3760d0, #2a4fbe);
+  /* A well: navy, rounded, sunk, lit along the lower right of its rim. */
+  --aero-well: linear-gradient(to bottom, #284698, #1a2e72);
+  --aero-well-rim: #0b1650 #b9cbf8 #b9cbf8 #0b1650;
+  --aero-well-shade: inset 0 3px 6px rgb(0 0 0 / 55%), inset 2px 0 4px -1px rgb(0 0 0 / 45%), 0 1px 0 rgb(255 255 255 / 30%);
+  --aero-radius: 10px;
+  --aero-rule: rgb(130 160 245 / 20%);
+  /* A raised header over a list: a bar of lit blue. */
+  --aero-header: linear-gradient(to bottom, #9fb2e3 0%, #6b80bd 42%, #475e9f 56%, #5470b8 100%);
+  --aero-header-edge: inset 0 1px 0 rgb(255 255 255 / 75%), inset 0 -1px 0 rgb(20 45 140 / 45%), 0 1px 2px rgb(0 0 0 / 40%);
 
-  /* Windows 7 command buttons: resting, hot, pressed. */
-  --aero-button: linear-gradient(to bottom, #f2f2f2 0%, #ebebeb 49%, #dddddd 50%, #cfcfcf 100%);
-  --aero-button-hot: linear-gradient(to bottom, #eaf6fd 0%, #d9f0fc 49%, #bee6fd 50%, #a7d9f5 100%);
-  --aero-button-down: linear-gradient(to bottom, #e5f4fc 0%, #c4e5f6 49%, #98d1ef 50%, #68b3db 100%);
-  /* The default button: glossy azure. */
-  --aero-orb: linear-gradient(to bottom, #8fd6ff 0%, #3aa3f2 46%, #0b6fd4 50%, #2b90ea 100%);
-  --aero-orb-hot: linear-gradient(to bottom, #a8e0ff 0%, #52b2f7 46%, #157ee2 50%, #3ea2f3 100%);
-  --aero-orb-down: linear-gradient(to bottom, #2b86d9 0%, #0d63bf 50%, #1f80dc 100%);
-  /* Windows 7 list selection. */
-  --aero-selected: linear-gradient(to bottom, #f2f9fe 0%, #dcf0fd 49%, #c7e6fb 50%, #d9effc 100%);
+  /* A key: silver, lit along its top and shaded along its foot. */
+  --aero-key: linear-gradient(to bottom, #ffffff 0%, #eaf0fc 44%, #c9d5f3 56%, #dbe4f9 100%);
+  --aero-key-hot: linear-gradient(to bottom, #ffffff 0%, #e6f3ff 44%, #bfdefb 56%, #d9edff 100%);
+  --aero-key-down: linear-gradient(to bottom, #a9b9e6 0%, #c1cef0 60%, #d3ddf6 100%);
+  --aero-key-edge: inset 0 1px 0 #ffffff, inset 0 -1px 0 rgb(70 95 170 / 45%), 0 1px 2px rgb(10 20 70 / 45%);
+  /* A round key: the player's own, a ball of the same metal. */
+  --aero-ball: radial-gradient(circle at 42% 24%, #ffffff 0%, #eef3fe 34%, #c3d0f0 62%, #94a8dc 100%);
+  --aero-ball-edge: inset 0 1px 1px #ffffff, inset 0 -3px 5px rgb(60 85 165 / 45%), 0 0 0 1px rgb(255 255 255 / 55%), 0 2px 4px rgb(10 20 70 / 55%);
+  /* Blue gel: the default key, and whatever is chosen. */
+  --aero-go: linear-gradient(to bottom, #9cbcfb 0%, #5a8ff5 44%, #2270f2 56%, #1c66ee 100%);
+  --aero-go-hot: linear-gradient(to bottom, #b8d0ff 0%, #74a3f8 44%, #3a82f6 56%, #3279f2 100%);
+  --aero-go-down: linear-gradient(to bottom, #1f4fbc 0%, #2f66d8 70%, #4a80e6 100%);
+  --aero-go-edge: inset 0 1px 0 rgb(255 255 255 / 85%), inset 0 -1px 0 rgb(10 40 130 / 60%), 0 1px 2px rgb(10 20 70 / 50%);
+  /* The chosen row in a list. */
+  --aero-selected: linear-gradient(to bottom, #4a72dc, #3158c4);
 }
 
-/* The desktop behind the glass. */
-:root[data-theme="aero"] body { background: var(--aero-sky); }
-:root[data-theme="aero"] .app-shell { background: transparent; }
-:root[data-theme="aero"] .workspace { background: transparent; }
+/* On silver, type is navy and accents are the gel's blue. */
+:root[data-theme="aero"] :is(.library-top, .topbar, .share-header, .field-transport) {
+  --surface: #dfe7fb;
+  --surface-deep: #c9d5f4;
+  --surface-row: #e6edfc;
+  --surface-control: #f2f6ff;
+  --surface-hover: #e9f0ff;
+  --surface-active: #cdd9f7;
+  --border: #8fa0d2;
+  --border-strong: #5f72b4;
+  --text: #17286e;
+  --text-strong: #0c1a5c;
+  --text-muted: #3a4e9c;
+  --text-subtle: #5466ac;
+  --icon: #2748b0;
+  --accent: #1f5fd8;
+  --accent-hover: #2f72ea;
+  --accent-soft: rgb(31 95 216 / 12%);
+  --accent-border: #1f5fd8;
+  --accent-text: #1746b8;
+  --on-accent: #ffffff;
+  --inset-highlight: #ffffff;
+  color: var(--text);
+}
 
-/* The navigation pane and the header: frosted glass over the sky. */
+/* The desktop shows around the object. */
+/* The meadow shows only while the window fills the screen; otherwise the
+   window is clear round the shell and the real desktop shows through. */
+:root[data-theme="aero"], :root[data-theme="aero"] body { background: transparent; }
+:root[data-theme="aero"][data-window-fill="true"] body { background: var(--aero-sky); }
+:root[data-theme="aero"] .app-shell { grid-template-columns: 260px minmax(0, 1fr); background: transparent; isolation: isolate; font-size: 12px; font-variant-numeric: tabular-nums; }
+.aero-shell { display: none; }
+:root[data-theme="aero"] .aero-shell {
+  display: block;
+  position: absolute;
+  z-index: -1;
+  inset: 9.2px 39.2px 34.5px 42.3px;
+  pointer-events: none;
+}
+/* The art and its shadow, rasterised by AeroShell with 24px of room on
+   every side; while the window is resized the bitmap just stretches. */
+:root[data-theme="aero"] .aero-shell > canvas {
+  display: block;
+  position: absolute;
+  inset: -24px;
+  width: calc(100% + 48px);
+  height: calc(100% + 48px);
+}
+
+/* Resize grips along the shell's rim and corners: the window is cut to the
+   shell, so the system's own resize borders are gone. Not while maximized. */
+/* The window moves by the shell's silver top and its cap, not the window's
+   rectangle, most of which is cut away; the window keys stay clickable. */
+:root[data-theme="aero"] .titlebar-drag-region { top: 9px; right: 175px; left: 42px; height: 44px; }
+/* At launch the window opens before the shell has been drawn; until it has,
+   the interface stays hidden, so the window appears whole in one frame. */
+:root[data-theme="aero"]:not([data-shell-ready]) .app-shell > * { visibility: hidden; }
+:root[data-theme="aero"]:not([data-shell-ready]) .app-shell > .aero-shell { visibility: visible; }
+.aero-resize { display: none; }
+:root[data-theme="aero"] .aero-resize { display: block; position: absolute; z-index: 10000; inset: 9.2px 39.2px 34.5px 42.3px; pointer-events: none; }
+:root[data-theme="aero"][data-window-fill="true"] .aero-resize { display: none; }
+:root[data-theme="aero"] .aero-resize > span { position: absolute; pointer-events: auto; }
+:root[data-theme="aero"] .aero-resize-north { top: 15px; right: 280px; left: 300px; height: 7px; cursor: ns-resize; }
+:root[data-theme="aero"] .aero-resize-south { right: 52px; bottom: 0; left: 300px; height: 7px; cursor: ns-resize; }
+:root[data-theme="aero"] .aero-resize-west { top: 70px; bottom: 80px; left: 0; width: 7px; cursor: ew-resize; }
+:root[data-theme="aero"] .aero-resize-east { top: 40px; right: 0; bottom: 52px; width: 7px; cursor: ew-resize; }
+:root[data-theme="aero"] .aero-resize-northwest { top: 20px; left: 0; width: 26px; height: 26px; cursor: nwse-resize; }
+:root[data-theme="aero"] .aero-resize-northeast { top: 0; right: 0; width: 30px; height: 30px; cursor: nesw-resize; }
+:root[data-theme="aero"] .aero-resize-southeast { right: 0; bottom: 0; width: 34px; height: 34px; cursor: nwse-resize; }
+:root[data-theme="aero"] .aero-resize-southwest { bottom: 14px; left: 0; width: 30px; height: 30px; cursor: nesw-resize; }
+
+/* The window's keys, set into the rim at the top right: minimise and
+   maximise in one silver capsule, and close as a key of red gel. The
+   shell is the whole window, so there is no system frame. */
+:root[data-theme="aero"] .window-controls { top: 18.5px; right: 61px; left: auto; gap: 5px; align-items: center; }
+:root[data-theme="aero"] .window-control {
+  width: 33px;
+  height: 24px;
+  border: 1.5px solid #3b4f90;
+  border-radius: 0;
+  background: linear-gradient(to bottom, #ffffff 0%, #eef2fc 38%, #cdd8f2 62%, #b9c8ec 100%);
+  box-shadow: inset 0 1px 0 #ffffff, inset 0 -2px 3px rgb(80 105 180 / 30%), 0 1px 2px rgb(10 20 70 / 35%);
+}
+:root[data-theme="aero"] .window-control.minimize { order: 1; margin-right: -5px; border-right: 1px solid #6f82bd; border-radius: 12px 0 0 12px; }
+:root[data-theme="aero"] .window-control.maximize { order: 2; border-left: 0; border-radius: 0 12px 12px 0; }
+:root[data-theme="aero"] .window-control.close {
+  order: 3;
+  width: 32px;
+  height: 24px;
+  border-color: #8a1a0c;
+  border-radius: 11px;
+  background: linear-gradient(to bottom, #ffb3a4 0%, #f46d52 30%, #dc3a20 56%, #c52812 100%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 75%), inset 0 -2px 3px rgb(110 15 0 / 35%), 0 1px 2px rgb(10 20 70 / 45%);
+}
+:root[data-theme="aero"] .window-control svg { opacity: 1; }
+:root[data-theme="aero"] .window-control.minimize svg, :root[data-theme="aero"] .window-control.maximize svg { display: none; }
+:root[data-theme="aero"] .window-control.minimize::before { content: ""; width: 14px; height: 4px; margin-top: 6px; border-radius: 1px; background: #24397f; box-shadow: 0 1px 0 rgb(255 255 255 / 80%); }
+:root[data-theme="aero"] .window-control.maximize::before { content: ""; width: 11px; height: 10px; border: 2.5px solid #24397f; border-top-width: 3.5px; border-radius: 1px; box-shadow: 0 1px 0 rgb(255 255 255 / 70%); }
+:root[data-theme="aero"] .window-control.close svg { width: 15px; height: 15px; stroke: #ffffff; stroke-width: 2.6; filter: drop-shadow(0 0 1px rgb(110 15 0 / 90%)); }
+:root[data-theme="aero"] .window-control:is(:hover, :focus-visible) { background: linear-gradient(to bottom, #ffffff 0%, #e8f4ff 38%, #bfe0fd 62%, #a9d2fb 100%); }
+:root[data-theme="aero"] .window-control.close:is(:hover, :focus-visible) { background: linear-gradient(to bottom, #ffc6ba 0%, #ff8266 30%, #ec4628 56%, #d6331a 100%); }
+:root[data-theme="aero"] .window-control:active { filter: brightness(0.88); }
+
+/* ---- The wing ---- */
+/* The name stands on the wing's crown; the keys below it sit in the
+   pocket; the recorder's status drops into the groove at the foot. */
 :root[data-theme="aero"] .sidebar {
-  border-right: 1px solid rgb(255 255 255 / 80%);
-  background: var(--aero-frost);
-  box-shadow: 1px 0 0 rgb(20 70 130 / 25%);
-}
-:root[data-theme="aero"] .library-top {
-  border-bottom: 1px solid rgb(20 70 130 / 22%);
-  background: linear-gradient(to bottom, rgb(250 253 255 / 97%), rgb(226 241 252 / 96%) 50%, rgb(213 234 250 / 96%) 51%, rgb(225 240 252 / 96%));
-  box-shadow: inset 0 -1px 0 rgb(255 255 255 / 80%), 0 2px 10px rgb(10 50 100 / 12%);
-}
-:root[data-theme="aero"] :is(h1, .library-title h1) {
-  color: #1e5ba8;
-  font-weight: 300;
-  letter-spacing: -0.5px;
-}
-:root[data-theme="aero"] .library-title-icon { color: #1e5ba8; }
-
-/* Type that sits straight on the sky is white with a soft glow, the way
-   Windows 7 set captions over glass. */
-:root[data-theme="aero"] :is(.topbar, .settings-section-header, .share-header-title) :is(h1, h2, h3, p, span, small),
-:root[data-theme="aero"] :is(.share-toggle > span, .diagnostics-selected-only > span, .diagnostics-count, .diagnostics-clear) {
-  color: #ffffff;
-  text-shadow: 0 0 10px rgb(0 40 110 / 55%), 0 1px 1px rgb(0 30 80 / 45%);
-}
-:root[data-theme="aero"] .topbar h1 { font-weight: 300; }
-
-/* The settings rail is a frosted pane of its own. */
-:root[data-theme="aero"] .settings-rail {
-  align-self: start;
-  padding: 6px;
-  border-radius: 8px;
-  background: var(--aero-frost);
-  box-shadow: var(--aero-pane-edge);
-}
-:root[data-theme="aero"] .settings-rail-item { border: 1px solid transparent; border-radius: 3px; }
-:root[data-theme="aero"] .settings-rail-item:hover:not(.active) { border-color: #b8d6fb; background: linear-gradient(to bottom, #fafdff, #ebf4fd); }
-:root[data-theme="aero"] .settings-rail-item.active { border-color: #84acdd; color: var(--text-strong); background: var(--aero-selected); }
-:root[data-theme="aero"] .settings-rail-indicator { display: none; }
-
-/* Panes of glass. */
-:root[data-theme="aero"] :is(.settings-group, .panel:not(.player), .audio-source-card, .modal, .recorder-status, .library-player-sidebar, .library-player-details, .clip-card) {
+  margin: 52px 0 80px 55px;
+  padding: 0;
   border: 0;
-  border-radius: 8px;
-  background: var(--aero-pane);
-  box-shadow: var(--aero-pane-edge);
+  background: transparent;
+  overflow: hidden;
+  scrollbar-gutter: auto;
 }
-:root[data-theme="aero"] .library-player-sidebar { border-radius: 0 8px 8px 0; }
-:root[data-theme="aero"] .titlebar-update-button.refresh { color: #10365e; }
-:root[data-theme="aero"] .library-player-details { border-radius: 0 0 0 8px; }
-/* Panes that hold their own heading and lists get room inside the glass. */
-:root[data-theme="aero"] .settings-group.single-column { padding: 18px 20px; }
-:root[data-theme="aero"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, rgb(243 249 255 / 97%) 88%); }
-:root[data-theme="aero"] .clip-card:hover { box-shadow: inset 0 0 0 1px #ffffff, 0 0 0 1px #3c7fb1, 0 0 12px rgb(51 153 255 / 45%); }
-:root[data-theme="aero"] :is(.clip-card.active, .clip-card.selected) { box-shadow: inset 0 0 0 1px #ffffff, 0 0 0 2px #3399ff, 0 0 14px rgb(51 153 255 / 50%); }
+:root[data-theme="aero"] .brand { height: 30px; margin: 0 0 39px; padding: 0 0 0 20px; gap: 13px; }
+:root[data-theme="aero"] .brand strong { color: #ffffff; font-size: 21px; font-style: italic; font-weight: 700; letter-spacing: -0.2px; text-shadow: 0 1px 2px rgb(5 20 80 / 80%); }
+:root[data-theme="aero"] .mark { width: 29px; height: 29px; filter: drop-shadow(0 1px 2px rgb(5 20 80 / 70%)); }
+:root[data-theme="aero"] .sidebar-version { order: 9; margin: 0; padding: 13px 0 0; font-size: 12px !important; color: #43558f; font-style: italic; text-align: center; padding-left: 28px; text-shadow: 0 1px 0 rgb(255 255 255 / 75%); }
 
-/* Command buttons. */
-:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .add-source, .titlebar-update-button, .chip, .icon-button:not(.yt-pill)) {
-  border: 1px solid #707070;
-  border-radius: 3px;
-  color: #1b1b1b;
-  background: var(--aero-button);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 75%);
+/* Its keys: bold labels with a groove cut between them, running to the
+   pocket's edge. Under the pointer a key brightens; the chosen one is a
+   band of the body's deeper blue. */
+:root[data-theme="aero"] .nav-list { flex: 0 0 auto; gap: 0; margin: 0; }
+:root[data-theme="aero"] .nav {
+  height: 39px;
+  margin-bottom: 0;
+  padding: 0 14px 0 31px;
+  gap: 6px;
+  border: 0;
+  border-bottom: 1px solid rgb(20 40 130 / 35%);
+  border-radius: 0;
+  color: #ffffff;
+  font-size: 15.5px;
+  font-weight: 700;
+  text-shadow: 0 1px 1px rgb(10 25 90 / 70%);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 30%);
 }
-:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .add-source, .titlebar-update-button, .chip, .icon-button:not(.yt-pill)):hover:not(:disabled) {
-  border-color: #3c7fb1;
-  color: #000000;
-  background: var(--aero-button-hot);
+:root[data-theme="aero"] .nav svg { width: 18px; height: 18px; color: #eef3ff; filter: drop-shadow(0 1px 1px rgb(10 25 90 / 50%)); }
+:root[data-theme="aero"] .nav:hover:not(.active) { color: #ffffff; background: linear-gradient(to right, rgb(255 255 255 / 30%), rgb(255 255 255 / 6%)); }
+:root[data-theme="aero"] .nav.active {
+  color: #ffffff;
+  background: linear-gradient(to bottom, #3a63d6 0%, #1c45bd 48%, #1a46c4 60%, #1f55d8 100%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 45%), inset 0 -1px 0 rgb(10 30 110 / 60%), 0 1px 0 rgb(255 255 255 / 30%);
 }
-:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .add-source, .titlebar-update-button, .chip, .icon-button:not(.yt-pill)):active:not(:disabled) {
-  border-color: #2c628b;
-  background: var(--aero-button-down);
-  box-shadow: inset 0 1px 2px rgb(0 40 80 / 25%);
+:root[data-theme="aero"] .nav.active svg { color: #ffffff; }
+:root[data-theme="aero"] .nav-indicator { display: none; }
+/* The first row sits in the tray's rounded top, so its highlight follows that curve. */
+:root[data-theme="aero"] .nav-list > .nav:first-child { border-radius: 19px 15px 0 0; }
+/* The count of waiting requests: a silver bead. */
+:root[data-theme="aero"] .nav-badge { display: inline-grid; place-items: center; min-width: 20px; height: 20px; margin-right: 0; border: 1px solid #33478f; border-radius: 999px; color: var(--aero-ink); background: var(--aero-ball); font-size: 11px; font-weight: 700; line-height: 1; text-shadow: none; box-shadow: inset 0 1px 0 #ffffff, 0 1px 2px rgb(10 20 70 / 50%); }
+
+/* Friends: a small well in the gel, under a raised header. It scrolls
+   inside itself, so the wing never does. */
+:root[data-theme="aero"] .sidebar > .share-side {
+  --sidebar-bg: #0f1a50;
+  display: flex;
+  /* Always down to the recorder, so its curved foot meets the well however few friends there are. */
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  position: relative;
+  margin: 12px 0 0;
+  padding: 3px 3px 18px;
+  /* Its foot follows the recorder well's top, 7px above it: high at the left, falling to the right. */
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 94.4% 100%, 79.2% calc(100% - 3.8px), 57.2% calc(100% - 9.8px), 35.3% calc(100% - 13.8px), 14.4% calc(100% - 15.6px), 0 calc(100% - 16px));
+  border: 1px solid;
+  border-color: var(--aero-well-rim);
+  border-radius: 10px;
+  background: var(--aero-well);
+  box-shadow: var(--aero-well-shade);
 }
-:root[data-theme="aero"] :is(.primary, .chip.active) {
-  border: 1px solid #0a4f9c;
+:root[data-theme="aero"] .sidebar > .share-side::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 18px;
+  background: url("data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 100 18%22 preserveAspectRatio%3D%22none%22%3E%3Cpath d%3D%22M0 2.75 C 7 2.9%2C 14.4 3.15%2C 14.4 3.15 S 35.3 4.95%2C 35.3 4.95 S 57.2 8.95%2C 57.2 8.95 S 79.2 14.95%2C 79.2 14.95 S 94.4 18.75%2C 100 18.75%22 fill%3D%22none%22 stroke%3D%22%23b9cbf8%22 stroke-width%3D%221.5%22 vector-effect%3D%22non-scaling-stroke%22%2F%3E%3C%2Fsvg%3E") 0 0 / 100% 100% no-repeat;
+  pointer-events: none;
+}
+:root[data-theme="aero"] .sidebar > .share-side .share-side-head {
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 20px;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid #2a46a8;
+  border-radius: 6px;
+  background: var(--aero-header);
+  box-shadow: var(--aero-header-edge);
+}
+:root[data-theme="aero"] .sidebar > .share-side .share-side-head h2 { color: #ffffff; font-size: 11px; font-weight: 700; text-shadow: 0 1px 1px rgb(10 25 90 / 70%); }
+:root[data-theme="aero"] .sidebar > .share-side .share-side-head span { color: #eef3ff; font-size: 11px; text-shadow: 0 1px 1px rgb(10 25 90 / 60%); }
+:root[data-theme="aero"] .sidebar > .share-side .share-side-status { flex: 0 0 auto; }
+:root[data-theme="aero"] .sidebar > .share-side .share-side-list { min-height: 0; overflow-y: auto; }
+:root[data-theme="aero"] .share-side-status { border-radius: 6px; }
+:root[data-theme="aero"] .share-side-status button { min-height: 22px; border-radius: 5px; font-size: 11px; }
+:root[data-theme="aero"] .share-side-row { min-height: 32px; padding: 2px 6px; border-radius: 4px; }
+:root[data-theme="aero"] .share-side-request { border-radius: 4px; }
+:root[data-theme="aero"] .share-side-name { font-size: 12px; }
+
+/* The recorder's status runs along the groove cut in the wing's foot.
+   Its box is the groove, so it draws nothing of its own: the state, how
+   much is ready to save, and the buffer as a row of lit segments. */
+:root[data-theme="aero"] .recorder-status {
+  order: 8;
+  flex: 0 0 66px;
+  display: grid;
+  grid-template-rows: 15px 14px auto;
+  align-content: center;
+  gap: 1px;
+  height: 66px;
+  margin: auto 0 0 7px;
+  padding: 0 10px 0 20px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+:root[data-theme="aero"] .recorder-status.warning { border: 0; }
+:root[data-theme="aero"] .recorder-status-head { position: relative; top: -6.4px; left: 2px; gap: 7px; }
+:root[data-theme="aero"] .recorder-status-head strong { color: #ffffff; font-size: 14px; font-style: italic; font-weight: 700; line-height: 15px; }
+:root[data-theme="aero"] .recorder-status-detail { position: relative; top: -4.1px; left: -1.5px; overflow: hidden; color: #f4f7ff; font-size: 12.6px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
+:root[data-theme="aero"] .recorder-tally { width: 10px; height: 10px; box-shadow: inset 0 1px 1px rgb(255 255 255 / 70%), 0 0 0 1px rgb(60 0 0 / 60%); }
+:root[data-theme="aero"] .recorder-status.live .recorder-tally { box-shadow: inset 0 1px 1px rgb(255 255 255 / 70%), 0 0 0 1px rgb(90 0 0 / 70%), 0 0 6px 1px rgb(255 70 70 / 60%); }
+:root[data-theme="aero"] .recorder-buffer { gap: 1px; margin: 2px 0 0; }
+:root[data-theme="aero"] .recorder-buffer-track {
+  height: 7px;
+  border-radius: 0;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 7px, #0f1a50 7px 9px),
+    linear-gradient(to bottom, #8fc0ff, #3f82f0);
+}
+:root[data-theme="aero"] .recorder-status:not(.live, .warning) .recorder-buffer-track { background: repeating-linear-gradient(90deg, #2a3c84 0 7px, #0f1a50 7px 9px); }
+:root[data-theme="aero"] .recorder-buffer-labels { color: #e3eaff; font-family: var(--font-ui); font-size: 11px; line-height: 13px; }
+
+/* ---- The display ---- */
+/* The body's working face: a blue floor framed by a lip of the rim's
+   silver, its corners fitted to the outline's. */
+:root[data-theme="aero"] .workspace {
+  margin: 53px 55px 63.5px 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 19px 19px 50px 19px;
+  background: transparent;
+  box-shadow: none;
+  /* No scrollbar of its own: a bar would cut a strip down the right that
+     the top bar cannot cover, and the frame would show through it. Views
+     that run long still scroll by wheel, touchpad and keyboard. */
+  scrollbar-width: none;
+  /* Views scroll inside themselves, under the top bar, with a slim bar kept
+     off the rounded corner; the floor clips them to its own curve. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+:root[data-theme="aero"] .workspace::-webkit-scrollbar { display: none; }
+:root[data-theme="aero"] .workspace > :not(.view) { flex: none; }
+:root[data-theme="aero"] .workspace > .view { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; border-bottom-right-radius: 40px; }
+:root[data-theme="aero"] .workspace > .view::-webkit-scrollbar { width: 8px; }
+:root[data-theme="aero"] .workspace > .view::-webkit-scrollbar-button { display: none; }
+/* Under a top bar of its own the scrolling area stops short of the rim, so
+   its bar runs on the blue, never over the silver; the content stays put. */
+:root[data-theme="aero"] .workspace > .topbar ~ .view { margin-right: 9px; padding-right: 2px; }
+:root[data-theme="aero"] .workspace > .view::-webkit-scrollbar-track { margin: 6px 0 44px; background: transparent; }
+:root[data-theme="aero"] .workspace > .view::-webkit-scrollbar-thumb { border: 1px solid #3b55a8; border-radius: 4px; background: linear-gradient(to right, #c9d7fb, #8fa7ea); }
+:root[data-theme="aero"] .view { padding: 9px 11px 10px 13px; }
+/* Views that carry their own bar across the top run edge to edge; their
+   panes take the floor's margins themselves. */
+:root[data-theme="aero"] .view:has(> .share-view, > .library-layout) { padding: 0; }
+
+/* The bar across the top of every view: a band of the rim's silver,
+   ruled off from the floor by a groove. */
+:root[data-theme="aero"] :is(.library-top, .topbar, .share-header) {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  gap: 10px;
+  margin: 0;
+  min-height: 41px;
+  padding: 7px 24px 7px 26px;
+  border: 0;
+  border-bottom: 1px solid #2a3f88;
+  background: var(--aero-silver);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 85%), 0 1px 0 rgb(160 185 240 / 45%), 0 3px 5px rgb(5 15 60 / 45%);
+}
+:root[data-theme="aero"] :is(.topbar, .share-header) { align-items: center; min-height: 0; }
+:root[data-theme="aero"] :is(h1, .library-title h1) { font-size: 18px; font-weight: 700; letter-spacing: 0; }
+:root[data-theme="aero"] :is(.topbar, .share-header) h1 { line-height: 26px; }
+:root[data-theme="aero"] .share-header :is(.share-header-title, .share-header-actions) { min-height: 26px; }
+:root[data-theme="aero"] .share-header-title { gap: 25px; }
+:root[data-theme="aero"] .share-header { padding-right: 20px; }
+:root[data-theme="aero"] .share-header .share-toggle { gap: 12px; }
+:root[data-theme="aero"] .share-header .share-toggle input[type="checkbox"].toggle-switch { width: 40px; min-width: 40px; height: 22px; }
+:root[data-theme="aero"] :is(.topbar, .share-header-title) :is(h1, p, span, small),
+:root[data-theme="aero"] .share-header .share-toggle > span,
+:root[data-theme="aero"] .library-top :is(.library-title h1, .library-title-icon, .library-title svg) { color: var(--aero-ink); text-shadow: 0 1px 0 rgb(255 255 255 / 85%); }
+:root[data-theme="aero"] .share-header-title .share-status { gap: 8px; font-size: 13px; }
+:root[data-theme="aero"] .topbar p { color: var(--aero-ink-soft); font-size: 11px; text-shadow: none; }
+:root[data-theme="aero"] .topbar-actions { gap: 6px; }
+:root[data-theme="aero"] .save-actions,
+:root[data-theme="aero"] .library-inline-actions { gap: 6px; }
+
+/* The library's bar carries its tools too. */
+:root[data-theme="aero"] .library-top { gap: 8px; padding-bottom: 8px; }
+:root[data-theme="aero"] .library-hero { min-height: 26px; padding: 0; }
+:root[data-theme="aero"] .library-title { gap: 8px; }
+:root[data-theme="aero"] .library-title svg { width: 18px; height: 18px; }
+:root[data-theme="aero"] .library-filter-row { gap: 8px; margin-top: 4px; }
+:root[data-theme="aero"] .library-actions-row { min-height: 0; }
+:root[data-theme="aero"] .chip-row { gap: 2px; }
+
+/* ---- Keys ---- */
+:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .titlebar-update-button.refresh, .primary) {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 11px;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 400;
+}
+:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .titlebar-update-button.refresh, .primary) svg { width: 14px; height: 14px; }
+:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .titlebar-update-button, .icon-button:not(.yt-pill)) {
+  border: 1px solid #5568ac;
+  border-radius: 4px;
+  color: var(--aero-ink);
+  background: var(--aero-key);
+  box-shadow: var(--aero-key-edge);
+}
+:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .titlebar-update-button, .icon-button:not(.yt-pill)):hover:not(:disabled) {
+  border-color: #2f66d8;
+  color: #06155a;
+  background: var(--aero-key-hot);
+  box-shadow: inset 0 1px 0 #ffffff, inset 0 -1px 0 rgb(40 110 210 / 50%), 0 0 0 1px rgb(140 190 255 / 75%);
+}
+:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .titlebar-update-button, .icon-button:not(.yt-pill)):active:not(:disabled) {
+  border-color: #32458c;
+  background: var(--aero-key-down);
+  box-shadow: inset 0 2px 3px rgb(20 35 100 / 50%);
+}
+:root[data-theme="aero"] :is(.secondary-button, .keybind-button, .icon-button:not(.yt-pill)) svg { color: #2748b0; }
+:root[data-theme="aero"] .titlebar-update-button.refresh { color: var(--aero-ink); }
+:root[data-theme="aero"] :is(.primary, .share-send, .library-send-button) {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 12px;
+  border: 1px solid #16348f;
   border-radius: 4px;
   color: #ffffff;
-  background: var(--aero-orb);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 70%), inset 0 0 0 1px rgb(255 255 255 / 25%), 0 1px 4px rgb(10 80 160 / 35%);
-  text-shadow: 0 1px 1px rgb(0 30 80 / 45%);
+  background: var(--aero-go);
+  font-size: 12px;
+  font-weight: 700;
+  text-shadow: 0 -1px 0 rgb(10 35 120 / 70%);
+  box-shadow: var(--aero-go-edge);
 }
-:root[data-theme="aero"] :is(.primary, .chip.active):hover:not(:disabled) {
+:root[data-theme="aero"] :is(.primary, .share-send, .library-send-button):hover:not(:disabled) {
+  border-color: #16348f;
   color: #ffffff;
-  background: var(--aero-orb-hot);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 75%), 0 0 12px rgb(80 180 255 / 70%);
+  background: var(--aero-go-hot);
+  box-shadow: inset 0 1px 0 #ffffff, inset 0 -1px 0 rgb(10 40 130 / 60%), 0 0 0 1px rgb(150 195 255 / 85%);
   filter: none;
 }
-:root[data-theme="aero"] .primary:active:not(:disabled) { background: var(--aero-orb-down); box-shadow: inset 0 2px 4px rgb(0 30 80 / 40%); }
-:root[data-theme="aero"] .primary svg { color: #ffffff; filter: drop-shadow(0 1px 1px rgb(0 30 80 / 40%)); }
+:root[data-theme="aero"] :is(.primary, .share-send, .library-send-button):active:not(:disabled) { background: var(--aero-go-down); box-shadow: inset 0 2px 3px rgb(0 15 70 / 60%); }
+:root[data-theme="aero"] :is(.primary, .share-send, .library-send-button) svg { color: #ffffff; filter: drop-shadow(0 -1px 0 rgb(10 35 120 / 60%)); }
 
-/* Text boxes. */
-:root[data-theme="aero"] :is(.library-search, .diagnostics-search, input:not([type="range"], [type="checkbox"], [type="radio"]), select, textarea) {
-  border: 1px solid #abadb3;
-  border-top-color: #8e8f8f;
-  border-radius: 3px;
-  background: #ffffff;
-  box-shadow: inset 0 1px 2px rgb(0 0 0 / 8%);
+/* Toolbar keys: flat on the silver until the pointer raises them; the
+   chosen one is pressed in and blue. */
+:root[data-theme="aero"] .chip {
+  min-height: 22px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--aero-ink);
+  background: transparent;
+  font-size: 11px;
 }
-:root[data-theme="aero"] :is(.library-search, .diagnostics-search):focus-within,
-:root[data-theme="aero"] :is(input:not([type="range"], [type="checkbox"], [type="radio"]), select, textarea):focus { border-color: #3d7bad; box-shadow: 0 0 0 1px rgb(61 123 173 / 25%); }
-:root[data-theme="aero"] .library-search input { border: 0; background: transparent; box-shadow: none; }
+:root[data-theme="aero"] .chip:hover:not(:disabled, .active) { border-color: #ffffff #7586c2 #7586c2 #ffffff; background: linear-gradient(to bottom, #ffffff, #dde6fa); }
+:root[data-theme="aero"] .chip.active {
+  border-color: #14287e #9fb5f2 #9fb5f2 #14287e;
+  color: #ffffff;
+  background: linear-gradient(to bottom, #233f9e, #3058c6);
+  text-shadow: 0 1px 1px rgb(10 25 90 / 60%);
+  box-shadow: inset 0 2px 3px rgb(0 0 0 / 45%);
+}
 
-/* Tabs: a segmented switch with the current tab selected. */
-:root[data-theme="aero"] .library-tabs {
+/* Text boxes are paper let into the surface: white, lettered in navy. */
+:root[data-theme="aero"] :is(.library-search, .diagnostics-search, input:not([type="range"], [type="checkbox"], [type="radio"]), select, textarea) {
+  border: 1px solid;
+  border-color: #34478f #9fb0de #9fb0de #34478f;
+  border-radius: 3px;
+  color: var(--aero-ink);
+  background: #ffffff;
+  font-size: 12px;
+  box-shadow: inset 0 1px 2px rgb(20 35 100 / 30%);
+}
+:root[data-theme="aero"] :is(input:not([type="range"], [type="checkbox"], [type="radio"], [type="color"]), select) { min-height: 24px; height: 24px; padding-block: 0; }
+:root[data-theme="aero"] :is(.library-search, .diagnostics-search) { min-height: 24px; gap: 6px; padding: 0 8px; }
+:root[data-theme="aero"] :is(.library-search, .diagnostics-search) svg { width: 14px; height: 14px; color: #2748b0; }
+:root[data-theme="aero"] :is(input, textarea)::placeholder { color: #6b7bb5; }
+:root[data-theme="aero"] :is(input:not([type="range"], [type="checkbox"], [type="radio"]), select, textarea):focus { border-color: #1f5fd8; box-shadow: inset 0 1px 2px rgb(20 35 100 / 20%), 0 0 0 1px #7db4ff; }
+/* A search box is one box: the field inside it draws nothing of its own,
+   focused or not. */
+:root[data-theme="aero"] :is(.library-search, .diagnostics-search) input,
+:root[data-theme="aero"] :is(.library-search, .diagnostics-search) input:focus { min-height: 22px; height: 22px; border: 0; border-radius: 0; color: var(--aero-ink); background: transparent; box-shadow: none; }
+:root[data-theme="aero"] :is(.library-search, .diagnostics-search):focus-within { border-color: #1f5fd8; outline-color: #7db4ff; }
+
+/* Tabs: tabs of silver; the current one is blue gel. */
+:root[data-theme="aero"] :is(.library-tabs, .share-rail-tabs) {
   width: fit-content;
   max-width: 100%;
   gap: 2px;
   margin: 0;
-  padding: 3px;
-  border: 1px solid #8cb4d8;
-  border-radius: 5px;
-  background: linear-gradient(to bottom, rgb(255 255 255 / 70%), rgb(220 238 252 / 70%));
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
-:root[data-theme="aero"] .library-tab {
+:root[data-theme="aero"] :is(.library-tab, .share-rail-tabs button) {
   min-width: 0;
-  min-height: 30px;
-  padding: 6px 18px;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 500;
+  min-height: 24px;
+  padding: 0 14px;
+  border: 1px solid #5568ac;
+  border-radius: 6px 6px 3px 3px;
+  color: var(--aero-ink);
+  background: var(--aero-key);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: var(--aero-key-edge);
 }
-:root[data-theme="aero"] :is(.library-tab, .settings-tab):hover:not(.active) { border-color: #b8d6fb; background: linear-gradient(to bottom, #fafdff, #ebf4fd); }
-:root[data-theme="aero"] :is(.library-tab.active, .settings-tab.active),
-:root[data-theme="aero"] .nav.active {
-  border: 1px solid #84acdd;
-  border-radius: 3px;
-  color: var(--text-strong);
-  background: var(--aero-selected);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 80%);
+:root[data-theme="aero"] :is(.library-tab, .share-rail-tabs button):hover:not(.active) { color: #06155a; background: var(--aero-key-hot); }
+:root[data-theme="aero"] :is(.library-tab.active, .share-rail-tabs button.active) {
+  border: 1px solid #16348f;
+  color: #ffffff;
+  background: var(--aero-go);
+  text-shadow: 0 -1px 0 rgb(10 35 120 / 70%);
+  box-shadow: var(--aero-go-edge);
 }
-:root[data-theme="aero"] .nav { border: 1px solid transparent; border-radius: 3px; }
-:root[data-theme="aero"] .nav:hover:not(.active) { border-color: #b8d6fb; background: linear-gradient(to bottom, rgb(250 253 255 / 90%), rgb(235 244 253 / 90%)); }
-:root[data-theme="aero"] .nav.active svg { color: var(--accent); }
-:root[data-theme="aero"] .nav-indicator { display: none; }
+:root[data-theme="aero"] :is(.library-tab, .share-rail-tabs button) span { color: inherit; opacity: 0.85; }
 
-/* Status readouts: dark glass with a cool glow. */
-:root[data-theme="aero"] .encoder {
-  border: 1px solid #0d2a4a;
+/* ---- Wells ---- */
+/* Every pane is a well: navy, rounded, sunk into the floor, with a light
+   rim along its lower right. */
+:root[data-theme="aero"] :is(.settings-container, .share-people, .share-stage, .share-intro, .share-incoming-item, .diagnostics.panel, .panel:not(.player), .library-player-sidebar, .clip-card) {
+  border: 1px solid;
+  border-color: var(--aero-well-rim);
+  border-radius: var(--aero-radius);
+  background: var(--aero-well);
+  box-shadow: var(--aero-well-shade);
+}
+/* Inside a well, its parts are parted by hairlines, not more wells. */
+:root[data-theme="aero"] :is(.settings-group, .settings-rows, .audio-source-card) { border: 1px solid var(--aero-rule); border-radius: 6px; background: rgb(255 255 255 / 3%); box-shadow: none; }
+:root[data-theme="aero"] .setting-row + .setting-row { border-top: 1px solid var(--aero-rule); }
+:root[data-theme="aero"] .clip-card:hover { border-color: #9cc4ff; }
+:root[data-theme="aero"] :is(.clip-card.active, .clip-card.selected) { border-color: #ffffff; }
+
+/* A raised header over a list: a bar of lit blue with rounded ends. */
+:root[data-theme="aero"] :is(.clip-rail-heading, .share-people > :is(.share-requests, .share-friends) > h2) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 22px;
+  padding: 0 10px;
+  border: 1px solid #2a46a8;
+  border-radius: 7px;
+  color: #ffffff;
+  background: var(--aero-header);
+  font-size: 12px;
+  font-weight: 700;
+  text-shadow: 0 1px 1px rgb(10 25 90 / 70%);
+  box-shadow: var(--aero-header-edge);
+}
+:root[data-theme="aero"] .share-people > :is(.share-requests, .share-friends) > h2 { justify-content: flex-start; gap: 9px; min-height: 24px; margin: 0 0 7px; padding-left: 15px; border-radius: 12px; font-size: 14px; }
+/* Rules between the panel's sections, cut into the well. */
+:root[data-theme="aero"] .share-people > :is(.share-code-card, .share-requests) { border-bottom: 1px solid rgb(10 22 80 / 70%); box-shadow: 0 1px 0 rgb(120 150 230 / 35%); }
+:root[data-theme="aero"] :is(.clip-rail-heading, .share-people h2) :is(strong, span) { color: #ffffff; }
+
+/* ---- The library ---- */
+/* The player and its list stand side by side on the floor. The player
+   is a well whose upper part is the viewport, set in a silver bezel. */
+:root[data-theme="aero"] .library-player {
+  gap: 0 10px;
+  padding: 7px 15px 10px 10px;
+  grid-template-rows: max-content minmax(0, 1fr);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+:root[data-theme="aero"] .library-player-main {
+  aspect-ratio: 16 / 9;
+  border: 3px solid;
+  border-color: #f4f7ff #a9bbea #a9bbea #f4f7ff;
+  border-radius: var(--aero-radius) var(--aero-radius) 0 0;
+  background: #000000;
+  box-shadow: 0 0 0 1px #0b1650, inset 0 0 0 1px #000000, inset 0 4px 10px rgb(0 0 0 / 70%);
+}
+:root[data-theme="aero"] .library-player .library-player-details {
+  align-items: center;
+  gap: 4px 12px;
+  padding: 8px 12px 10px 14px;
+  border: 1px solid;
+  border-color: #0b1650 #b9cbf8 #b9cbf8 #0b1650;
+  border-top: 0;
+  border-radius: 0 0 var(--aero-radius) var(--aero-radius);
+  background: var(--aero-well);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 30%);
+}
+:root[data-theme="aero"] .library-player-side-header { gap: 2px; }
+:root[data-theme="aero"] .library-player-side-title { align-items: center; font-size: 15px; font-style: italic; font-weight: 700; line-height: 20px; }
+:root[data-theme="aero"] .library-player-side-header p { font-size: 12px; }
+:root[data-theme="aero"] .library-player-side-meta { gap: 2px 18px; font-size: 11px; }
+:root[data-theme="aero"] .library-player-side-meta dt { color: var(--text-subtle); }
+:root[data-theme="aero"] .library-player-details .library-send-button { align-self: center; }
+:root[data-theme="aero"] .library-player-title-edit-button { width: 20px; height: 20px; vertical-align: -3px; }
+/* The key that starts it: a ball of the rim's metal. */
+:root[data-theme="aero"] :is(.play-badge, .share-play) {
+  width: 52px;
+  height: 52px;
+  border: 1px solid #33478f;
+  color: #1f55c8;
+  background: var(--aero-ball);
+  box-shadow: inset 0 2px 1px #ffffff, inset 0 -6px 9px rgb(60 85 165 / 50%), 0 0 0 3px rgb(255 255 255 / 30%), 0 3px 8px rgb(0 0 0 / 70%);
+}
+:root[data-theme="aero"] .library-preview-main:hover .play-badge { color: #2f72ea; box-shadow: inset 0 2px 1px #ffffff, inset 0 -6px 9px rgb(60 120 220 / 45%), 0 0 0 3px rgb(160 205 255 / 60%), 0 3px 8px rgb(0 0 0 / 70%); }
+:root[data-theme="aero"] .duration-badge { border-radius: 3px; color: #ffffff; background: rgb(0 0 0 / 80%); font-weight: 700; }
+
+/* The list of clips: a well with a raised header, one compact row a clip. */
+:root[data-theme="aero"] .library-player .library-player-sidebar { padding: 4px; }
+:root[data-theme="aero"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, rgb(15 26 80 / 97%) 88%); border-radius: 0 0 var(--aero-radius) var(--aero-radius); }
+:root[data-theme="aero"] .clip-rail { padding: 4px 0 40px; }
+:root[data-theme="aero"] .clip-rail-item { padding: 4px 4px 4px 6px; border-top: 0; border-bottom: 1px solid var(--aero-rule); border-radius: 0; }
+:root[data-theme="aero"] .clip-rail-open-button { grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; }
+:root[data-theme="aero"] .clip-rail-thumbnail { width: 72px; border: 1px solid #000000; border-radius: 3px; box-shadow: 0 0 0 1px rgb(150 175 245 / 35%); }
+:root[data-theme="aero"] .clip-rail-thumbnail .duration-badge { right: 2px; bottom: 2px; padding: 0 3px; font-size: 10px; line-height: 13px; }
+:root[data-theme="aero"] .clip-rail-copy { gap: 2px; }
+:root[data-theme="aero"] .clip-rail-copy strong { font-size: 12px; }
+:root[data-theme="aero"] .clip-rail-copy :is(span, small, time) { font-size: 11px; }
+:root[data-theme="aero"] .clip-rail-item:hover { background: rgb(255 255 255 / 8%); }
+:root[data-theme="aero"] .clip-rail-item.active { border-radius: 5px; background: var(--aero-selected); box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%); }
+:root[data-theme="aero"] .clip-rail-item.active .clip-rail-copy :is(span, small, time) { color: #dbe6ff; }
+
+/* ---- Settings: one well, a list of pages down its left ---- */
+:root[data-theme="aero"] .settings-container { gap: 0; min-height: calc(100vh - 182px); overflow: hidden; }
+:root[data-theme="aero"] .settings-rail {
+  align-self: stretch;
+  align-content: start;
+  gap: 3px;
+  padding: 12px 8px 10px 10px;
+  border-right: 1px solid var(--aero-rule);
+}
+:root[data-theme="aero"] .settings-rail-item { gap: 11px; height: 38px; min-height: 38px; padding: 0 13px; border: 1px solid transparent; border-radius: 7px; color: #e8eeff; font-size: 14.5px; font-weight: 700; }
+:root[data-theme="aero"] .settings-rail-item svg { width: 19px; height: 19px; color: #c6d2fb; }
+:root[data-theme="aero"] .settings-rail-item:hover:not(.active) { color: #ffffff; background: rgb(255 255 255 / 10%); }
+:root[data-theme="aero"] .settings-rail-item.active { border-color: #16348f; color: #ffffff; background: var(--aero-go); text-shadow: 0 -1px 0 rgb(10 35 120 / 70%); box-shadow: var(--aero-go-edge); }
+:root[data-theme="aero"] .settings-rail-item.active svg { color: #ffffff; }
+:root[data-theme="aero"] .settings-rail-indicator { display: none; }
+:root[data-theme="aero"] .settings-content { padding: 14px 18px 18px; }
+:root[data-theme="aero"] .settings-section-header :is(h2, h3) { font-size: 15px; font-style: italic; font-weight: 700; }
+:root[data-theme="aero"] .settings-section-header p { font-size: 12px; }
+:root[data-theme="aero"] .settings-group.single-column { padding: 12px 14px; }
+:root[data-theme="aero"] .setting-row { padding-block: 12px; }
+/* Settings controls at a size meant to be clicked: toggles, the shortcut key and the number fields. */
+:root[data-theme="aero"] .settings-content input[type="checkbox"].toggle-switch { width: 50px; min-width: 50px; height: 28px; min-height: 28px; }
+:root[data-theme="aero"] .settings-content input[type="checkbox"].toggle-switch::after { width: 22px; height: 22px; margin-left: 3px; }
+:root[data-theme="aero"] .settings-content input[type="checkbox"].toggle-switch:checked::after { transform: translateX(22px); }
+:root[data-theme="aero"] .settings-content .keybind-button { min-width: 220px; height: 34px; min-height: 34px; padding: 0 14px; font-size: 14px; }
+:root[data-theme="aero"] .settings-content :is(input:not([type="range"], [type="checkbox"], [type="radio"], [type="color"]), select) { height: 32px; min-height: 32px; font-size: 14px; }
+
+/* ---- Friends ---- */
+:root[data-theme="aero"] .share-view { gap: 0; }
+:root[data-theme="aero"] .share-layout { grid-template-columns: minmax(0, 1fr) 267px; gap: 12px; padding: 9px 11px 10px 13px; }
+:root[data-theme="aero"] .share-main { gap: 5px; }
+/* An offered clip: a short well, the clip's frame, what it is, and the
+   two answers. */
+:root[data-theme="aero"] .share-incoming-item { grid-template-columns: 119px minmax(0, 1fr) auto; gap: 9px; min-height: 87px; padding: 10.5px 9px 7.5px 13px; }
+:root[data-theme="aero"] .share-incoming-tile { width: 119px; height: 68px; }
+:root[data-theme="aero"] .share-incoming-copy { gap: 0; line-height: 19px; }
+:root[data-theme="aero"] .share-incoming-who { color: #e3eafb; font-size: 13.3px; font-weight: 400; }
+:root[data-theme="aero"] .share-incoming-copy > span:last-child { color: #e3eafb; font-size: 13px; }
+:root[data-theme="aero"] .share-tile-letter { font-size: 26px; font-weight: 700; opacity: 1; }
+:root[data-theme="aero"] .share-tile-duration { font-weight: 700; font-size: 11.5px; }
+:root[data-theme="aero"] .share-incoming-actions { gap: 8px; margin-right: 2px; }
+:root[data-theme="aero"] .share-incoming-actions :is(.secondary-button, .share-send) { height: 25px; min-height: 25px; padding: 0 10px; font-size: 13px; }
+:root[data-theme="aero"] :is(.share-incoming-item, .share-rail-item) :is(.share-screen, .send-art, .share-tile) { border-radius: 4px; }
+/* The stage is not one box: the player is a well, the tabs stand under
+   it on the floor, and the shared clips are a well of their own. */
+:root[data-theme="aero"] .share-stage { gap: 0; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+:root[data-theme="aero"] .share-stage-main {
+  overflow: hidden;
+  border: 1px solid;
+  border-color: var(--aero-well-rim);
+  border-radius: var(--aero-radius);
+  background: var(--aero-well);
+  box-shadow: var(--aero-well-shade);
+}
+/* The screen, in a silver bezel, with the light lying across its glass. */
+:root[data-theme="aero"] .share-screen > .share-screen-message { background: transparent; }
+:root[data-theme="aero"] .share-screen-idle p { position: relative; top: -1px; left: -2px; color: #ffffff; font-size: 12.4px; }
+/* The idle transport is the bezel's own foot: a strip of silver, a gel
+   play key, a sunk track with its thumb at the start. */
+:root[data-theme="aero"] .share-idle-transport {
+  gap: 12px;
+  height: 25px;
+  padding: 0 12px 0 10px;
+  border-top: 1px solid #ffffff;
+  background: linear-gradient(to bottom, #e9eef9 0%, #cbd6ee 50%, #b7c5e6 100%);
+  box-shadow: inset 0 -1px 0 #8ea0d0;
+}
+:root[data-theme="aero"] .share-idle-play { width: 42px; height: 19px; border: 1px solid #6e80ba; color: #1f3d9c; background: var(--aero-key); box-shadow: var(--aero-key-edge); }
+:root[data-theme="aero"] .share-idle-track {
+  height: 8px;
+  border: 1px solid;
+  border-color: #7a8bc2 #ffffff #ffffff #7a8bc2;
   border-radius: 4px;
-  color: #c4ecff;
-  background: linear-gradient(to bottom, rgb(255 255 255 / 12%), rgb(255 255 255 / 0%) 50%), #071528;
-  box-shadow: inset 0 1px 3px rgb(0 0 0 / 50%), 0 1px 0 rgb(255 255 255 / 80%);
+  background: linear-gradient(to bottom, #aebbe0, #dfe6f7);
+  box-shadow: inset 0 1px 2px rgb(20 35 100 / 35%);
+  position: relative;
+  margin-right: 26px;
 }
-:root[data-theme="aero"] .encoder > span { color: #7fc4f2; }
-:root[data-theme="aero"] .encoder small { color: #a9d8f7; }
-:root[data-theme="aero"] .duration-badge { border-radius: 3px; color: #ffffff; background: rgb(5 20 40 / 78%); }
+/* The track's thumb and the volume slider: white keys rimmed in green.
+   The length is already in the line below the screen. */
+:root[data-theme="aero"] .share-idle-track::after {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 8px;
+  width: 11px;
+  height: 16px;
+  border: 1.5px solid #3fb52a;
+  border-radius: 3px;
+  background: linear-gradient(to bottom, #ffffff 0%, #e7f6e2 55%, #9be27f 80%, #59c23c 100%);
+  box-shadow: 0 1px 2px rgb(10 30 60 / 45%);
+}
+:root[data-theme="aero"] .share-idle-time { display: none; }
+:root[data-theme="aero"] .share-idle-volume { gap: 9px; color: #1f3d9c; }
+:root[data-theme="aero"] .share-idle-volume input { width: 70px; height: 16px; margin: 0; background: transparent; appearance: none; }
+:root[data-theme="aero"] .share-idle-volume input::-webkit-slider-runnable-track {
+  height: 5px;
+  border: 1px solid;
+  border-color: #7a8bc2 #ffffff #ffffff #7a8bc2;
+  border-radius: 3px;
+  background: linear-gradient(to right, #3fbf2a 0 var(--volume, 100%), #c3cde9 var(--volume, 100%));
+}
+:root[data-theme="aero"] .share-idle-volume input::-webkit-slider-thumb {
+  width: 11px;
+  height: 16px;
+  margin-top: -6.5px;
+  border: 1.5px solid #3fb52a;
+  border-radius: 3px;
+  background: linear-gradient(to bottom, #ffffff 0%, #e7f6e2 55%, #9be27f 80%, #59c23c 100%);
+  box-shadow: 0 1px 2px rgb(10 30 60 / 45%);
+  appearance: none;
+}
+:root[data-theme="aero"] .share-idle-volume input:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
+:root[data-theme="aero"] .share-screen {
+  height: calc(100vh - 468px);
+  margin: 5px 5px 0 0;
+  min-height: 180px;
+  aspect-ratio: auto;
+  border: 4px solid;
+  border-color: #f2f5fc #b7c4e4 #9eaed6 #e2e9f8;
+  border-radius: 9px 9px 6px 6px;
+  background:
+    linear-gradient(155deg, rgb(255 255 255 / 14%) 0%, rgb(255 255 255 / 4%) 34%, rgb(255 255 255 / 0%) 35%),
+    linear-gradient(135deg, #5a7393 0%, #2b3c57 30%, #141d2d 58%, #0d1422 100%);
+  box-shadow: inset 0 0 0 1px #000000, inset 0 4px 12px rgb(0 0 0 / 70%), 0 1px 0 #6f84c8;
+}
+:root[data-theme="aero"] .share-stage-bar { min-height: 0; padding: 10px 12px 10px 10px; border: 0; background: transparent; }
+:root[data-theme="aero"] .share-stage-title { gap: 2px; }
+:root[data-theme="aero"] .share-stage-title h2 { font-size: 16.5px; font-style: italic; line-height: 17px; }
+:root[data-theme="aero"] .share-stage-title :is(p, span) { font-size: 13.3px; }
+:root[data-theme="aero"] .share-stage-title p.share-window { color: #e3eafb; font-size: 12.9px; }
+:root[data-theme="aero"] .share-stage-actions { gap: 15px; margin-top: 12px; }
+:root[data-theme="aero"] .share-stage-actions :is(.share-send, .primary) { height: 25px; min-height: 25px; padding: 0 18px; font-size: 13px; }
+:root[data-theme="aero"] .share-stage-actions .icon-button { width: 29px; height: 25px; padding: 0; }
+:root[data-theme="aero"] .share-rail-item { gap: 14px; padding: 0; border: 0; border-radius: 4px; background: transparent; box-shadow: none; }
+:root[data-theme="aero"] .share-rail-item .share-tile-duration { right: 1px; bottom: 1px; font-size: 12.5px; }
+:root[data-theme="aero"] .share-rail-copy strong { font-size: 14px; font-weight: 700; }
+:root[data-theme="aero"] .share-rail-copy > span { color: #e3eafb; font-size: 13px; }
+:root[data-theme="aero"] .share-rail { gap: 4px; margin-top: 5px; border: 0; background: transparent; }
+:root[data-theme="aero"] .share-rail-tabs button { min-height: 27px; padding: 0 12px; font-size: 13.5px; }
+:root[data-theme="aero"] .share-rail-tabs { gap: 5.5px; margin-left: 11.6px; }
+:root[data-theme="aero"] .share-rail-tabs #share-rail-received { width: 143.5px; }
+:root[data-theme="aero"] .share-rail-tabs #share-rail-sent { width: 82px; }
+:root[data-theme="aero"] .share-rail-tabs button span { font-weight: 700; opacity: 1; }
+:root[data-theme="aero"] .share-rail-list {
+  height: calc(100vh - 696px);
+  min-height: 67px;
+  overflow-y: auto;
+  padding: 7px 11px 7px 19px;
+  border: 1px solid;
+  border-color: var(--aero-well-rim);
+  border-radius: var(--aero-radius);
+  background: var(--aero-well);
+  box-shadow: var(--aero-well-shade);
+}
+:root[data-theme="aero"] .share-rail-item.active { background: transparent; }
+:root[data-theme="aero"] .share-rail-item :is(.share-tile, .send-art) { width: 96px; height: 52px; }
 
-/* The transport and edit decks: dark taskbar glass, an aqua marker. */
+/* The people: one well, each list under a raised header. */
+:root[data-theme="aero"] .share-people { position: sticky; top: 7px; max-height: calc(100vh - 198px); overflow-y: auto; padding: 6px 1px 6px 3px; }
+:root[data-theme="aero"] .share-people .share-avatar { width: 35px !important; height: 35px !important; color: #fff; text-shadow: 0 1px 1px rgb(0 0 40 / 0.45); }
+:root[data-theme="aero"] .share-people .share-code-card .share-me .share-avatar { width: 43px !important; height: 43px !important; font-size: 19px !important; }
+:root[data-theme="aero"] .share-people .share-code-card { gap: 0; padding: 8px 14px 20px 12px; }
+:root[data-theme="aero"] .share-people .share-code-card .share-hint { margin: 7px 0 0; line-height: 18px; }
+:root[data-theme="aero"] .share-people .share-code-card .share-copy-button { margin-top: 9px; }
+:root[data-theme="aero"] .share-people .share-code-card .share-disclosure { margin-top: 8px; padding-left: 5px; gap: 10px; }
+:root[data-theme="aero"] .share-people .share-friend-list { gap: 0; margin: 0 6px 0 -2px; }
+:root[data-theme="aero"] .share-people .share-friend-row { gap: 14px; min-height: 43.85px; padding: 3px 0 3px 8px; }
+:root[data-theme="aero"] .share-people .share-friend-copy { gap: 0; }
+:root[data-theme="aero"] .share-people .share-friend-copy strong { font-size: 14.5px; }
+:root[data-theme="aero"] .share-people .share-friend-copy > span { font-size: 13px; }
+/* The captions in the panel and under the screen read near white, as the reference has them. */
+:root[data-theme="aero"] :is(.share-people, .share-stage-title) { --text-muted: #e3eafb; }
+:root[data-theme="aero"] .share-people > section.share-requests { padding-bottom: 13px; }
+:root[data-theme="aero"] .share-people .share-row-actions .icon-button { width: 29px; height: 28px; }
+:root[data-theme="aero"] .share-people .share-requests .share-rename:not(:hover, :focus-visible) { border-color: transparent; background: transparent; box-shadow: none; }
+:root[data-theme="aero"] .share-people .share-hint { font-size: 13px; }
+:root[data-theme="aero"] .share-people .share-copy-button { height: 26px; padding: 0 0 4.6px 7.6px; font-size: 13px; font-weight: 600; }
+:root[data-theme="aero"] .share-people .share-copy-button svg { width: 16px; height: 16px; margin-right: 8.8px; }
+:root[data-theme="aero"] .share-people > * { padding: 8px 10px; }
+:root[data-theme="aero"] .share-people > * + * { border-top: 0; }
+:root[data-theme="aero"] .share-people > :is(.share-requests, .share-friends) { gap: 0; padding: 4px 0 6px; background: transparent; }
+:root[data-theme="aero"] .share-people > :is(.share-requests, .share-friends) > :not(h2) { margin-inline: 6px; }
+
+/* ---- Diagnostics: tools on the floor, the readings in a well ---- */
+:root[data-theme="aero"] .diagnostics-toolbar { margin: 0 0 10px; padding: 0; border: 0; background: transparent; }
+:root[data-theme="aero"] :is(.diagnostics-selected-only > span, .diagnostics-count, .diagnostics-clear) { color: #ffffff; font-size: 11px; text-shadow: 0 1px 1px rgb(10 25 90 / 60%); }
+:root[data-theme="aero"] .diagnostics.panel { overflow: hidden; }
+:root[data-theme="aero"] .metric { padding: 8px 36px 9px 14px; border-color: var(--aero-rule); border-radius: 0; background: transparent; }
+:root[data-theme="aero"] .metric.selected { background: rgb(127 178 255 / 16%); }
+:root[data-theme="aero"] .metric strong { font-size: 14px; }
+
+/* A dialog is a small player of its own: a well in a rim of silver. */
+:root[data-theme="aero"] .modal { border: 0; border-radius: 12px; background: var(--aero-well); box-shadow: inset 0 3px 6px rgb(0 0 0 / 55%), 0 0 0 1px #0b1650, 0 0 0 4px #e8eefc, 0 0 0 5px #6f84c8, 0 0 0 9px #3159c8, 0 0 0 10px #1a3184, 0 14px 36px rgb(4 12 60 / 60%); }
+
+/* Readouts. */
+:root[data-theme="aero"] .encoder {
+  border: 1px solid;
+  border-color: var(--aero-well-rim);
+  border-radius: 6px;
+  color: #cfe4ff;
+  background: #050a22;
+  box-shadow: inset 0 2px 3px rgb(0 0 0 / 80%);
+}
+:root[data-theme="aero"] .encoder > span,
+:root[data-theme="aero"] .encoder small { color: #8ea6da; }
+
+/* The transport: the bezel's foot while a clip plays. A strip of silver,
+   round keys, a thin seek line, and the volume. */
 :root[data-theme="aero"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
-  --transport-face: #142c47;
-  --transport-key: #1d3a5c;
-  --transport-edge: #3a5a7c;
-  --transport-ink: #ffffff;
-  --transport-muted: #a9c3dd;
-  --transport-track: #2b4a6b;
-  --transport-fill: #bfe3ff;
-  --transport-marker: #36b4ff;
-  --transport-on-marker: #04243f;
-  --transport-highlight: rgb(255 255 255 / 18%);
-  --transport-display: #050d18;
-  --transport-display-ink: #c4ecff;
+  --transport-face: #d4ddf6;
+  --transport-key: #eef3fe;
+  --transport-edge: #5568ac;
+  --transport-ink: #0f1f66;
+  --transport-muted: #3a4e9c;
+  --transport-track: #1c2a66;
+  --transport-fill: #4f9bff;
+  --transport-marker: #1f5fd8;
+  --transport-on-marker: #ffffff;
+  --transport-highlight: rgb(255 255 255 / 90%);
+  --transport-display: #050a22;
+  --transport-display-ink: #cfe4ff;
   --transport-playhead: #ffffff;
-  --transport-region: #c4ecff;
-  --transport-shade: 0 16 36;
+  --transport-region: #1f5fd8;
+  --transport-shade: 20 35 100;
 }
-:root[data-theme="aero"] :is(.field-transport, .edit-deck) {
-  background: linear-gradient(to bottom, rgb(255 255 255 / 22%), rgb(255 255 255 / 8%) 48%, rgb(255 255 255 / 0%) 50%), linear-gradient(to bottom, #1d3d62, #0b1c30);
+:root[data-theme="aero"] :is(.field-transport, .edit-deck) { background: var(--aero-strip); }
+:root[data-theme="aero"] .field-transport { border: 1px solid; border-color: #ffffff #6b7db8 #6b7db8 #ffffff; border-radius: 8px; box-shadow: 0 0 0 1px #1c2f86, 0 3px 8px rgb(0 0 0 / 55%); }
+:root[data-theme="aero"] .field-transport .yt-pill { border: 0; border-radius: 4px; background: transparent; box-shadow: none; }
+:root[data-theme="aero"] .field-transport :is(.yt-pill.icon-button, .transport-play, .transport-mute) {
+  border: 1px solid #33478f;
+  border-radius: 50%;
+  color: #1f55c8;
+  background: var(--aero-ball);
+  box-shadow: var(--aero-ball-edge);
 }
-:root[data-theme="aero"] .field-transport { border-color: rgb(255 255 255 / 25%); border-radius: 6px; box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%), 0 4px 14px rgb(0 20 50 / 40%); }
-:root[data-theme="aero"] .library-player-sidebar.edit-rail { background: linear-gradient(to bottom, #1d3d62, #0b1c30); }
+:root[data-theme="aero"] .field-transport .yt-pill.icon-button { width: 30px; height: 30px; }
+:root[data-theme="aero"] .field-transport .transport-play { width: 36px; height: 36px; }
+:root[data-theme="aero"] .field-transport .transport-mute { flex: 0 0 24px; width: 24px; height: 24px; }
+:root[data-theme="aero"] .field-transport :is(.yt-pill.icon-button, .transport-play, .transport-mute):hover { color: #2f72ea; background: radial-gradient(circle at 42% 24%, #ffffff 0%, #e6f3ff 34%, #b9dcfb 62%, #8fb8ec 100%); }
+:root[data-theme="aero"] .field-transport :is(.yt-pill.icon-button, .transport-play, .transport-mute):active { box-shadow: inset 0 2px 4px rgb(20 35 100 / 60%); }
+:root[data-theme="aero"] .field-transport .yt-pill.icon-button.active { color: #ffffff; background: radial-gradient(circle at 42% 24%, #c4dbff 0%, #5c8eee 45%, #2f66d8 100%); }
+:root[data-theme="aero"] .field-transport .time-readout { border: 1px solid; border-color: #34478f #ffffff #ffffff #34478f; border-radius: 3px; box-shadow: inset 0 2px 3px rgb(0 0 0 / 80%); }
+:root[data-theme="aero"] .field-transport .player-scrubber::-webkit-slider-thumb { width: 9px; height: 15px; border: 1px solid #33478f; border-radius: 3px; background: linear-gradient(to bottom, #ffffff, #c3d0f0); box-shadow: 0 1px 2px rgb(10 20 70 / 60%); }
 
-.theme-preview.aero .theme-preview-sidebar { background: linear-gradient(to bottom, rgb(255 255 255 / 75%), rgb(255 255 255 / 45%)), #5fb0ec; }
-.theme-preview.aero .theme-preview-content { background: url("../../../assets/aero/skyline.webp") center / cover no-repeat, #2f8fea; }
+/* Library: the page holds still under its silver bar and only the player
+   and list below it scroll, with the bar kept off the rim and the corner.
+   In a narrow window the list moves below the player instead of being squeezed. */
+:root[data-theme="aero"] .workspace > .view:has(> .library-layout) { overflow: hidden; }
+:root[data-theme="aero"] :is(.library-layout, .browse-surface) { gap: 0; height: 100%; min-height: 0; }
+:root[data-theme="aero"] .browse-surface > .library-player {
+  flex: 1 1 0;
+  min-height: 0;
+  margin-right: 9px;
+  padding-right: 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-bottom-right-radius: 38px;
+
+}
+:root[data-theme="aero"] .browse-surface > .library-player::-webkit-scrollbar { width: 8px; }
+:root[data-theme="aero"] .browse-surface > .library-player::-webkit-scrollbar-track { margin: 6px 0 44px; background: transparent; }
+:root[data-theme="aero"] .browse-surface > .library-player::-webkit-scrollbar-thumb { border: 1px solid #3b55a8; border-radius: 4px; background: linear-gradient(to right, #c9d7fb, #8fa7ea); }
+@container clip-library (max-width: 840px) {
+  :root[data-theme="aero"] .browse-surface > .library-player { grid-template-columns: minmax(0, 1fr); grid-template-rows: max-content max-content minmax(340px, 1fr); }
+  :root[data-theme="aero"] .library-player-main { aspect-ratio: 16 / 9; }
+  :root[data-theme="aero"] .library-player .library-player-sidebar { grid-column: 1; grid-row: 3; margin-top: 10px; border-left: 1px solid; border-bottom-right-radius: var(--aero-radius); }
+}
+
+/* Scrollbars have no arrow keys, and those in a rounded corner stop short of its curve. */
+:root[data-theme="aero"] *::-webkit-scrollbar-button { display: none !important; width: 0; height: 0; }
+:root[data-theme="aero"] .library-player-sidebar .clip-rail::-webkit-scrollbar-track { margin-bottom: 34px; }
+/* Panels that reach the bottom right corner follow the floor round it. */
+:root[data-theme="aero"] :is(.diagnostics.panel, .settings-container, .library-player-sidebar) { border-bottom-right-radius: 38px; }
+
+/* A narrow window stacks the taskbar over the display. There is no wing
+   to shape, so the object is drawn plain: the body's blue in a silver
+   rim, with the taskbar on a tray of gel. */
+@media (max-width: 900px) {
+  :root[data-theme="aero"] .aero-shell { display: none; }
+  :root[data-theme="aero"] .app-shell::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 9.2px 39.2px 34.5px 42.3px;
+    pointer-events: none;
+    border: 0;
+    border-radius: 24px;
+    border-image: none;
+    background: linear-gradient(to bottom, #a9c4fb 0, #7da0f0 10px, #4f78de 34px, #3159c8 90px, #1d3ea4 100%);
+    box-shadow: inset 0 0 0 1px #1a3184, inset 0 0 0 6px #dfe7fb, inset 0 0 0 7px #16307f;
+  }
+  :root[data-theme="aero"] .sidebar {
+    margin: 18px 22px 0;
+    padding: 4px 8px;
+    border: 1px solid;
+    border-color: #16307f #ffffff #ffffff #16307f;
+    border-radius: 10px;
+    background: linear-gradient(to bottom, #a6bdf6, #7f9eea 45%, #5679d8);
+    overflow: visible;
+  }
+  :root[data-theme="aero"] .brand { display: none; }
+  :root[data-theme="aero"] .nav-list { margin: 0; }
+  :root[data-theme="aero"] .nav { border-bottom: 0; border-radius: 6px; box-shadow: none; }
+  :root[data-theme="aero"] .sidebar > .share-side { display: none; }
+  :root[data-theme="aero"] .recorder-status { display: flex; order: 0; height: auto; margin: 0; padding: 5px 10px; border-radius: 8px; background: #101b52; box-shadow: inset 0 2px 4px rgb(0 0 0 / 70%); }
+  :root[data-theme="aero"] .workspace { margin: 8px 22px 22px; border-radius: 12px 12px 20px 20px; }
+}
+
+.theme-preview.aero .theme-preview-sidebar { background: linear-gradient(to bottom, #a6bdf6, #7f9eea 45%, #5679d8); }
+.theme-preview.aero .theme-preview-content { background: url("../../../assets/aero/meadow.webp") center / cover no-repeat, #1e8fee; }
 .theme-preview.aero .theme-preview-line { background: rgb(255 255 255 / 85%); }
-.theme-preview.aero .theme-preview-button { background: linear-gradient(to bottom, #8fd6ff, #3aa3f2 46%, #0b6fd4 50%, #2b90ea); }
+.theme-preview.aero .theme-preview-button { border-radius: 3px; background: linear-gradient(to bottom, #a8c8fb, #5c8eee 44%, #2f66d8 56%, #4a80e6); }

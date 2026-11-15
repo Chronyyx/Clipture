@@ -1,5 +1,6 @@
 #include "clipture/GpuPriorityControl.hpp"
 
+#include "clipture/MediaClock.hpp"
 #include "clipture/NativeRuntime.hpp"
 #include "clipture/platform/windows/GpuAdapterFacts.hpp"
 #include "clipture/platform/windows/GpuSchedulingPriority.hpp"
@@ -55,11 +56,14 @@ std::string adapterIdentity(IDXGIAdapter1* adapter) {
 
 }  // namespace
 
-GpuPriorityControl::GpuPriorityControl() : startRaised_(startRaised()) {
+GpuPriorityControl::GpuPriorityControl() : startRaised_(startRaised()), gateBypass_(startRaised_) {
     std::string ignoredName;
     adapter_ = findPreferredAdapter(ignoredName);
     adapterMemory_ = std::make_unique<platform::AdapterMemoryCounter>(adapter_.Get());
+    gateMemory_ = std::make_unique<platform::AdapterMemoryCounter>(adapter_.Get());
+    vramTotal_ = platform::queryGpuAdapterFacts(adapter_.Get()).dedicatedVideoMemoryBytes;
     adapterBusy_ = std::make_unique<platform::AdapterBusyCounter>(adapter_.Get());
+    inFlightSampler_ = std::make_unique<platform::PacketsInFlightSampler>(adapter_.Get());
     gpuIdentity_ = adapterIdentity(adapter_.Get());
 }
 
@@ -84,21 +88,20 @@ void GpuPriorityControl::apply(bool boost, const std::string& memoryPath, Diagno
         if (appliedBoost_ != boost) {
             appliedBoost_ = boost;
             boost_ = boost;
-            starvation_.reset();
-            trackedGame_.clear();
             const auto override = environmentOverride();
             override_ = override.has_value();
             if (override) {
-                raised_ = false;
+                policy_.reset();
                 setClassLocked(static_cast<int>(*override), "override");
             } else if (boost && startRaised_) {
                 startRaised_ = false;
-                raiseLocked({}, "start raised");
-            } else if (!boost || !raised_) {
-                // Turning the boost off (by hand or after a hang) drops a raise.
-                raised_ = false;
-                raisedGame_.clear();
-                raisedReason_.clear();
+                policy_.startRaised();
+                vramWaitPasses_ = 0;
+                applyRaiseLocked();
+            } else {
+                // Turning the boost off (by hand or after a hang) drops a raise;
+                // turning it on starts at normal.
+                policy_.reset();
                 setClassLocked(static_cast<int>(platform::GpuSchedulingClass::Normal), "configure");
             }
         }
@@ -110,82 +113,59 @@ void GpuPriorityControl::observe(const std::string& foregroundGame,
                                  const std::vector<std::string>& runningGames,
                                  uint64_t droppedTotal,
                                  int64_t now100ns,
-                                 int fps) {
+                                 int fps,
+                                 PipelineProgress pipeline) {
+    const auto foreground = lowerAscii(foregroundGame);
     // Sampled before taking the lock: it sleeps about 100 ms, and publish()
     // must not wait on it.
-    const auto inFlight = platform::meanPacketsInFlight(adapter_.Get(), kInFlightSamples, kInFlightIntervalMs);
-    const auto busy = adapterBusy_->busyPercent();
+    const auto inFlight = inFlightNeeded(foreground, droppedTotal)
+        ? inFlightSampler_->mean(kInFlightSamples, kInFlightIntervalMs)
+        : std::nullopt;
+    const auto vramUsage = gateMemory_->dedicatedUsageBytes();
     std::lock_guard lock(mutex_);
-    lastBusy_ = busy;
     lastInFlight_ = inFlight;
+    updateGatesLocked(pipeline, fps, vramUsage);
     if (!boost_ || override_) return;
-    std::vector<std::string> running;
-    running.reserve(runningGames.size());
-    for (const auto& game : runningGames) running.push_back(lowerAscii(game));
-    const auto foreground = lowerAscii(foregroundGame);
+    applyRaiseLocked();
 
-    if (raised_) {
-        if (raisedGame_.empty()) return;
-        if (std::find(running.begin(), running.end(), raisedGame_) != running.end()) {
-            raisedGameMissing_ = 0;
-        } else if (++raisedGameMissing_ >= kGoneGamePasses) {
-            lowerLocked("game closed");
-            return;
+    GpuRaisePolicy::Pass pass;
+    pass.foreground = foreground;
+    pass.running.reserve(runningGames.size());
+    for (const auto& game : runningGames) pass.running.push_back(lowerAscii(game));
+    pass.droppedTotal = droppedTotal;
+    pass.inFlight = inFlight;
+    pass.now100ns = now100ns;
+    pass.fps = fps;
+    pass.realtimeInEffect = realtimeApplied_;
+    const auto decision = policy_.observe(pass, [this](const std::string& game) { return memory_.contains(game); });
+    if (decision.rememberGame && memory_.enabled()) {
+        if (memory_.remember(decision.game)) {
+            std::cerr << "[engine] GPU priority: game remembered for realtime.\n";
+        } else {
+            std::cerr << "[engine] GPU priority memory could not be saved.\n";
         }
-        // Remembered once the queue stays deep for two minutes this session.
-        if (raisedReason_ != "remembered" && remember_.observe(lastInFlight_, now100ns) && memory_.enabled()) {
-            if (memory_.remember(raisedGame_)) {
-                std::cerr << "[engine] GPU priority: game remembered for realtime.\n";
-            } else {
-                std::cerr << "[engine] GPU priority memory could not be saved.\n";
-            }
-        }
-        // One quiet step-down per game session: if drops raised this game
-        // again after one, realtime itself shortened its queue, and stepping
-        // down again would cycle stutter into clips until the game closes.
-        if (raisedGame_ != quietGame_ && quiet_.observe(lastInFlight_, now100ns)) {
-            quietGame_ = raisedGame_;
-            lowerLocked("gpu quiet");
-        }
-        return;
     }
+    if (decision.action == GpuRaisePolicy::Action::Raise) {
+        vramWaitPasses_ = 0;
+        applyRaiseLocked();
+    } else if (decision.action == GpuRaisePolicy::Action::Lower) {
+        setClassLocked(static_cast<int>(platform::GpuSchedulingClass::Normal), decision.reason);
+    }
+}
 
-    // A game that starved recording on this GPU before starts raised, unless
-    // this session of it was already lowered for a quiet GPU.
-    if (!quietGame_.empty() && std::find(running.begin(), running.end(), quietGame_) == running.end()) {
-        quietGame_.clear();
-    }
-    if (!foreground.empty() && foreground != quietGame_ && memory_.contains(foreground)) {
-        raiseLocked(foreground, "remembered");
-        return;
-    }
-    for (const auto& game : running) {
-        if (game != quietGame_ && memory_.contains(game)) {
-            raiseLocked(game, "remembered");
-            return;
-        }
-    }
-
-    // Starvation is judged per game in front; drops on the desktop or after a
-    // switch to another game start the history over.
-    if (foreground != trackedGame_) {
-        trackedGame_ = foreground;
-        starvation_.reset();
-    }
-    if (foreground.empty()) return;
-    const auto verdict = starvation_.observe(droppedTotal, lastInFlight_, now100ns, fps);
-    if (verdict == GpuStarvationDetector::Verdict::None) return;
-    raiseLocked(foreground, verdict == GpuStarvationDetector::Verdict::QueuedDrops ? "queued drops" : "steady drops");
+bool GpuPriorityControl::inFlightNeeded(const std::string& foregroundGame, uint64_t droppedTotal) {
+    std::lock_guard lock(mutex_);
+    if (!boost_ || override_) return false;
+    return policy_.needsInFlight(foregroundGame, droppedTotal);
 }
 
 void GpuPriorityControl::publish(Diagnostics& diagnostics) {
     std::lock_guard lock(mutex_);
     diagnostics.gpuPriorityBoost = boost_;
-    diagnostics.gpuPriorityRaised = raised_;
-    diagnostics.gpuPriorityReason = raisedReason_;
+    diagnostics.gpuPriorityRaised = policy_.raised();
+    diagnostics.gpuPriorityReason = policy_.reason();
     diagnostics.gpuPriorityRememberedGames = static_cast<int>(memory_.size());
-    diagnostics.gpuStarvationLossyWindows = starvation_.lossyWindows();
-    diagnostics.gpuBusyPercent = lastBusy_.value_or(-1.0);
+    diagnostics.gpuStarvationLossyWindows = policy_.lossyWindows();
     diagnostics.gpuPacketsInFlight = lastInFlight_.value_or(-1.0);
     diagnostics.gpuSchedulingRequested = requested_;
     diagnostics.gpuSchedulingOverride = override_;
@@ -193,28 +173,65 @@ void GpuPriorityControl::publish(Diagnostics& diagnostics) {
     diagnostics.gpuSchedulingStatus = setStatus_;
 }
 
-void GpuPriorityControl::raiseLocked(const std::string& game, const char* reason) {
-    raised_ = true;
-    raisedGame_ = game;
-    raisedReason_ = reason;
-    raisedGameMissing_ = 0;
-    quiet_.reset();
-    remember_.reset();
-    setClassLocked(static_cast<int>(platform::GpuSchedulingClass::Realtime), reason);
+void GpuPriorityControl::encoderSetupStarting() {
+    std::lock_guard lock(mutex_);
+    setupInProgress_ = true;
+    pipelineReady_ = false;
+    if (gateBypass_ || !realtimeApplied_) return;
+    holdReason_ = "encoder setup";
+    setClassLocked(static_cast<int>(platform::GpuSchedulingClass::Normal), "encoder setup");
 }
 
-void GpuPriorityControl::lowerLocked(const char* reason) {
-    raised_ = false;
-    raisedGame_.clear();
-    raisedReason_.clear();
-    trackedGame_.clear();
-    starvation_.reset();
-    setClassLocked(static_cast<int>(platform::GpuSchedulingClass::Normal), reason);
+void GpuPriorityControl::updateGatesLocked(PipelineProgress pipeline, int fps, std::optional<uint64_t> vramUsage) {
+    if (pipeline.encoderSetups != seenSetups_) {
+        seenSetups_ = pipeline.encoderSetups;
+        setupFramesBase_ = pipeline.framesEncoded;
+        setupInProgress_ = false;
+        pipelineReady_ = false;
+    }
+    const uint64_t settleFrames = static_cast<uint64_t>(std::max(1, fps)) * kSetupSettleSeconds;
+    if (!pipelineReady_ && !setupInProgress_ && seenSetups_ > 0 &&
+        pipeline.framesEncoded >= setupFramesBase_ + settleFrames) {
+        pipelineReady_ = true;
+    }
+    vramMoving_ = false;
+    if (vramUsage && vramTotal_ > 0) {
+        const bool nearlyFull = *vramUsage + kVramHeadroomBytes > vramTotal_;
+        const uint64_t change = lastVramUsage_
+            ? (*vramUsage > *lastVramUsage_ ? *vramUsage - *lastVramUsage_ : *lastVramUsage_ - *vramUsage)
+            : 0;
+        vramMoving_ = nearlyFull && change >= kVramMovingBytes;
+    }
+    lastVramUsage_ = vramUsage;
+}
+
+void GpuPriorityControl::applyRaiseLocked() {
+    if (!policy_.raised() || realtimeApplied_) return;
+    const char* hold = nullptr;
+    if (!gateBypass_) {
+        if (!pipelineReady_) {
+            hold = "encoder setup";
+        } else if (vramMoving_ && vramWaitPasses_ < kMaxVramWaitPasses) {
+            ++vramWaitPasses_;
+            hold = "video memory moving";
+        }
+    }
+    if (hold) {
+        if (holdReason_ != hold) {
+            holdReason_ = hold;
+            std::cerr << "[engine] GPU priority raise held at normal (" << hold << ").\n";
+        }
+        return;
+    }
+    vramWaitPasses_ = 0;
+    holdReason_.clear();
+    setClassLocked(static_cast<int>(platform::GpuSchedulingClass::Realtime), policy_.reason().c_str());
 }
 
 void GpuPriorityControl::setClassLocked(int requested, const char* reason) {
     const auto result = platform::setProcessGpuSchedulingClass(
         GetCurrentProcess(), static_cast<platform::GpuSchedulingClass>(requested));
+    realtimeApplied_ = requested == static_cast<int>(platform::GpuSchedulingClass::Realtime);
     requested_ = platform::gpuSchedulingClassName(requested);
     active_ = result.available ? platform::gpuSchedulingClassName(result.active) : "unavailable";
     setStatus_ = static_cast<int64_t>(result.setStatus);
@@ -225,7 +242,12 @@ void GpuPriorityControl::setClassLocked(int requested, const char* reason) {
               << ".\n";
 }
 
-void GpuPriorityControl::refreshMemory(Diagnostics& diagnostics) {
+std::string GpuPriorityControl::schedulingClass() {
+    std::lock_guard lock(mutex_);
+    return active_;
+}
+
+void GpuPriorityControl::refreshUsage(Diagnostics& diagnostics, bool sampleBusy) {
     const auto usage = platform::queryVideoMemoryUsage(adapter_.Get());
     if (usage.available) {
         diagnostics.vramBudgetMb = usage.budgetBytes / kMegabyte;
@@ -234,6 +256,18 @@ void GpuPriorityControl::refreshMemory(Diagnostics& diagnostics) {
     if (const auto adapterUsage = adapterMemory_->dedicatedUsageBytes()) {
         diagnostics.vramAdapterUsageMb = *adapterUsage / kMegabyte;
     }
+
+    const int64_t now100ns = monotonicNow100ns();
+    const bool recent = busySampledAt100ns_ != 0 && now100ns - busySampledAt100ns_ <= kBusyMaximumAge100ns;
+    if (sampleBusy) {
+        // The counter reports the mean since its previous read.
+        const auto busy = adapterBusy_->busyPercent();
+        lastBusy_ = recent ? busy : std::nullopt;
+        busySampledAt100ns_ = now100ns;
+    } else if (!recent) {
+        lastBusy_.reset();
+    }
+    diagnostics.gpuBusyPercent = lastBusy_.value_or(-1.0);
 }
 
 }  // namespace clipture

@@ -20,6 +20,7 @@ use crate::{
     save::{SaveCoordinator, SaveIoAnalyzer},
     settings::SettingsStore,
     sharing::{ClipLibrary, Network, SharingEvents, SharingService},
+    telemetry::TelemetryService,
     sounds::{
         BundledSound, DecodedSoundPlayer, SilentSoundPlayer, SoundLibrary, SoundPlayer,
         SoundService,
@@ -43,6 +44,7 @@ pub struct AppState {
     pub save_io: Arc<SaveIoAnalyzer>,
     pub sharing: Arc<SharingService>,
     pub admin_hotkey: Arc<crate::admin_hotkey::AdminHotkeyService>,
+    pub telemetry: Arc<TelemetryService>,
     exiting: AtomicBool,
 }
 
@@ -152,6 +154,8 @@ impl AppState {
             },
         );
         media.set_remote_source(sharing.clone());
+        let telemetry = TelemetryService::new(&paths.data_dir, !paths.test_mode);
+        saves.set_observer(telemetry.clone());
         let diagnostics = Arc::new(DiagnosticsBuilder::new(
             ApplicationInfo {
                 name: "Clipture".into(),
@@ -178,6 +182,7 @@ impl AppState {
             save_io,
             sharing,
             admin_hotkey: Arc::default(),
+            telemetry,
             exiting: AtomicBool::new(false),
         }
     }
@@ -223,6 +228,7 @@ impl AppState {
                 "autostart",
                 "sharing",
                 "sharing://changed",
+                "telemetry",
             ],
         }
     }

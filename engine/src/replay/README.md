@@ -44,7 +44,7 @@ for lifecycle, copy/padding costs and verification limits.
 
 - `Mp4SamplePacker.cpp` and its public header: pure conversion of one resident
   Annex B packet to MP4 sample bytes. No disk access or source mutation.
-- `H264DecoderConfig.hpp`: immutable SPS/PPS bytes, independent of payload offsets.
+- `H264DecoderConfig` (in `PacketRingBuffer.hpp`): immutable SPS/PPS bytes, independent of payload offsets.
 - `../ReplaySegmentStore.cpp`: existing persistence worker invokes the packer
   only when `prepareMp4Samples` is enabled. It installs new bytes/metadata under
   its snapshot mutex only after a successful write. Source snapshots remain valid.

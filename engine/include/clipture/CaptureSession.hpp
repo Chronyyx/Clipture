@@ -84,6 +84,9 @@ public:
     uint64_t ownedSlotDrops() const;
     const SlotPoolUsage& captureTextureSlots() const;
     uint64_t sourceFramesSuperseded() const;
+    // Running totals, read without building runtimeStats().
+    uint64_t publishedFrames() const;
+    uint64_t desktopPresents() const;
     uint64_t callbackErrors() const;
     uint64_t captureEpoch() const;
     std::string resolution() const;
@@ -92,6 +95,8 @@ public:
     std::string status() const;
     void* activeMonitor() const;
     CaptureRuntimeStats runtimeStats() const;
+    // The GPU reported a capture device removed (driver reset): 0 while fine.
+    long deviceRemovedHr() const;
 
 private:
     struct Impl;

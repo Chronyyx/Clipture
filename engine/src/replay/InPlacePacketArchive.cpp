@@ -3,6 +3,7 @@
 #include "clipture/replay/Mp4SamplePacker.hpp"
 #include "clipture/platform/windows/InPlaceFile.hpp"
 #include <algorithm>
+#include <cstring>
 #include <atomic>
 #include <map>
 
@@ -184,6 +185,41 @@ std::optional<EncodedPacket> InPlacePacketArchive::persist(const EncodedPacket& 
     prepared->payloadReader = std::move(reader);
     prepared->payload.reset();
     return prepared;
+}
+std::vector<std::optional<EncodedPacket>> InPlacePacketArchive::persistRun(std::span<const EncodedPacket> sources) {
+    std::vector<std::optional<EncodedPacket>> result(sources.size());
+    std::vector<std::optional<EncodedPacket>> prepared(sources.size());
+    std::vector<std::size_t> indexes, lengths;
+    PacketPayload joined;
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        const auto& source = sources[i];
+        auto packet = source.kind == PacketKind::Audio && source.codec == PacketCodec::AacLc
+            ? std::optional<EncodedPacket>(source) : packMp4VideoSample(source);
+        if (!packet || !packet->payload) continue;
+        const auto bytes = payloadBytes(*packet);
+        if (bytes.empty() || bytes.size() > 64u * 1024u * 1024u - joined.size()) break;
+        const auto start = joined.size();
+        joined.resize(start + bytes.size());
+        std::memcpy(joined.data() + start, bytes.data(), bytes.size());
+        indexes.push_back(i);
+        lengths.push_back(bytes.size());
+        prepared[i] = std::move(packet);
+    }
+    if (joined.empty()) return result;
+    std::vector<PacketPayloadReaderPtr> readers;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (!impl_->ensureActive()) return result;
+        readers = impl_->active->writeRun(joined, lengths);
+    }
+    for (std::size_t k = 0; k < readers.size() && k < indexes.size(); ++k) {
+        if (!readers[k]) continue;
+        auto& packet = *prepared[indexes[k]];
+        packet.payloadReader = std::move(readers[k]);
+        packet.payload.reset();
+        result[indexes[k]] = std::move(packet);
+    }
+    return result;
 }
 namespace {
 std::shared_ptr<InPlaceFile> leasedFile(const EncodedPacket& packet) {

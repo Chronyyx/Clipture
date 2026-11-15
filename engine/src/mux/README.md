@@ -26,7 +26,7 @@ audio normalization and paced writer. Do not duplicate those behaviors here.
 - `PreparedVideoLayout.cpp` gates eligibility and requests a pinned region plan.
   It accepts only prepared, disk-backed H.264 samples with explicit source extents.
   Legacy, opaque or resident packets and invalid alignment select compact fallback.
-- `WritePadding.hpp` streams zero bytes through the existing buffered writer, so
+- `writePadding` (in `Mp4Muxer.cpp`) streams zero bytes through the existing buffered writer, so
   its output pacing, error state and I/O accounting remain in effect.
 - `replay/PayloadLayoutPlan.cpp` owns arithmetic, grouping and sample offsets.
   `AlignRegions` inserts a minimal gap before a contiguous region to match its

@@ -1,0 +1,83 @@
+.telemetry-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-row);
+  color: var(--text);
+}
+
+.telemetry-panel header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.telemetry-panel h2 { margin: 0; }
+.telemetry-panel p { margin: 0; }
+
+.telemetry-state {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+}
+
+.telemetry-state.active { color: var(--text-strong); border-color: var(--selection); }
+.telemetry-muted { color: var(--text-muted); font-size: 13px; }
+
+.telemetry-join {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.telemetry-join input {
+  flex: 1 1 320px;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface-deep);
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.telemetry-hint, .telemetry-error { color: var(--text-muted); font-size: 13px; }
+.telemetry-error { color: var(--text-strong); }
+.telemetry-confirm { display: grid; gap: 10px; }
+.telemetry-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.telemetry-actions .primary { height: 34px; }
+
+.telemetry-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.telemetry-facts dt { color: var(--text-muted); }
+.telemetry-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+.telemetry-batch {
+  max-height: 320px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--surface-deep);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.telemetry-batch ol { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
+.telemetry-batch details { margin-top: 10px; }
+.telemetry-batch summary { cursor: pointer; color: var(--text-muted); }
+.telemetry-batch pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }

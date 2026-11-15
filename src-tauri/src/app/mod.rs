@@ -1,4 +1,5 @@
 pub mod autostart;
+mod aero_outline;
 #[cfg(windows)]
 pub(crate) mod installer_startup;
 mod background;
@@ -99,6 +100,7 @@ fn share_cues(test_mode: bool) -> Option<Arc<crate::sounds::CuePlayer>> {
 }
 
 pub fn handle_second_instance(app: &AppHandle, arguments: &[String]) {
+    background::enroll_from_arguments(app, arguments);
     // An invite link (clipture://add/...) always opens the UI to confirm it.
     let invite = crate::sharing::invite_argument(arguments);
     if let (Some(invite), Some(state)) = (invite.clone(), app.try_state::<AppState>()) {
@@ -117,6 +119,7 @@ pub fn handle_second_instance(app: &AppHandle, arguments: &[String]) {
 pub fn request_exit(app: &AppHandle) {
     if let Some(state) = app.try_state::<AppState>() {
         state.begin_exit();
+        state.telemetry.finish("quit");
         ui_process::shutdown(app);
         state.engine.shutdown();
     }

@@ -18,6 +18,7 @@ mod settings;
 mod sharing;
 mod sounds;
 mod state;
+mod telemetry;
 mod updates;
 
 use tauri::{Manager, RunEvent};
@@ -31,13 +32,14 @@ pub fn installer_startup_command() -> Option<i32> {
 }
 
 pub fn run() {
-    let _ = tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
+    {
+        use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
+        let console = tracing_subscriber::fmt::layer().with_writer(std::io::stderr).with_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "clipture=info,warn".into()),
-        )
-        .try_init();
+        );
+        let _ = tracing_subscriber::registry().with(console).with(telemetry::log_layer()).try_init();
+    }
     if let Ok(paths) = paths::AppPaths::discover() {
         diagnostics::install_crash_log(&paths.data_dir);
     }
@@ -151,6 +153,10 @@ pub fn run() {
             commands::open_main_window,
             commands::close_main_window,
             commands::exit_app,
+            telemetry::commands::telemetry_status,
+            telemetry::commands::telemetry_enroll,
+            telemetry::commands::telemetry_stop,
+            telemetry::commands::telemetry_last_batch,
         ])
         .setup(|application| {
             if updates::activation::activate_at_launch()? {
@@ -181,6 +187,7 @@ pub fn run() {
         RunEvent::Exit => {
             app::ui_process::shutdown(app_handle);
             if let Some(state) = app_handle.try_state::<state::AppState>() {
+                state.telemetry.finish("exit");
                 state.sharing.shutdown();
                 state.engine.shutdown();
             }

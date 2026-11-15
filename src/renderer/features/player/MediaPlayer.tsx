@@ -14,6 +14,8 @@ interface MediaPlayerProps {
   aspectHeight: number;
   /** The video element, for callers that watch its events. */
   onVideo?: (video: HTMLVideoElement | null) => void;
+  /** Volume to start at (0 to 1), such as one chosen before playback. */
+  initialVolume?: number;
 }
 
 /** Clipture's player (controls, gestures, multi-track audio) for any media
@@ -25,14 +27,15 @@ export function MediaPlayer({
   durationHint,
   aspectWidth,
   aspectHeight,
-  onVideo
+  onVideo,
+  initialVolume = 1
 }: MediaPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const playbackRequestedRef = useRef(true);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(durationHint);
-  const [volume, setVolume] = useState(1);
+  const [volume, setVolume] = useState(initialVolume);
   const mixedEnabled = mixedAudio && Boolean(audioChunkUrl);
 
   const mixed = useMixedAudioPlayback({

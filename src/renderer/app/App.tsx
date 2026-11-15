@@ -1,4 +1,4 @@
-import { Activity, Download, Library, Save, SlidersHorizontal, Users, type LucideIcon } from "lucide-react";
+import { Activity, Download, Library, Save, Settings, SlidersHorizontal, Users, type LucideIcon } from "lucide-react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 // @ts-ignore
@@ -7,15 +7,21 @@ import type { ClipRecord, ClipSettings } from "../../shared/types";
 import { AdminGameCard } from "../features/admin-hotkey";
 import { useCaptureActions } from "../features/capture";
 import { DiagnosticsView, RecorderStatus, useDiagnostics } from "../features/diagnostics";
-import { appVersion } from "./appVersion";
 import { WindowControls } from "./WindowControls";
 import { drawsWindowControls } from "../platform";
 import { LibraryView, useClipLibrary } from "../features/library";
 import { SettingsView, useClipPreferences } from "../features/settings";
 import { FriendsSidebar, FriendsView, InviteDialog, ShareClipDialog, friendsWaiting, useSharing } from "../features/sharing";
+import { TelemetryPanel } from "../features/telemetry";
 import { TitlebarUpdateControls, useUpdates } from "../features/updates";
+import { AeroShell, useAeroTheme } from "../shared/aero";
 import { HalloweenAmbience, SpookyNoticePet, SpookySaveCheer } from "../shared/halloween";
 import { CafeNoticePet, CafeSaveCheer } from "../shared/maid-cafe";
+
+declare const __APP_VERSION__: string | undefined;
+
+/** The Clipture version this interface was built as (from package.json). */
+const appVersion: string = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "";
 
 type Tab = "library" | "friends" | "settings" | "diagnostics";
 type AppNotice = { message: string; tab?: Tab; durationMs: number };
@@ -59,8 +65,10 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
     setFocusFriendId(friendId);
     setActiveTab("friends");
   };
-  // Light is drawn without the system frame: its own lights, its own drag strip.
-  const ownFrame = drawsWindowControls && settings?.uiTheme === "light";
+  // Light and Aero are drawn without the system frame: their own window
+  // keys, their own drag strip. Aero's shell is the whole window.
+  const aero = useAeroTheme();
+  const ownFrame = drawsWindowControls && (settings?.uiTheme === "light" || settings?.uiTheme === "aero");
   const { updateState, checkForUpdatesNow, downloadUpdate, installUpdate } = useUpdates(globalNotice);
   const updateControls = <TitlebarUpdateControls
     updateState={updateState}
@@ -90,6 +98,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
     <div className="app-shell">
       <div className="titlebar-drag-region" aria-hidden="true" data-tauri-drag-region={ownFrame || undefined} />
       {ownFrame && <WindowControls />}
+      <AeroShell />
       <HalloweenAmbience />
       <aside className="sidebar">
         <div className="brand">
@@ -99,7 +108,10 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
           </div>
         </div>
         <nav className="nav-list" aria-label="Main">
-          {tabs.map(({ id, label, Icon }) => (
+          {tabs.map(({ id, label, Icon: TabIcon }) => {
+            // The Aero skin follows the old media player, whose settings key is a gear.
+            const Icon = aero && id === "settings" ? Settings : TabIcon;
+            return (
             <button key={id} className={activeTab === id ? "nav active" : "nav"} aria-current={activeTab === id ? "page" : undefined}
               onClick={() => (id === "friends" ? openFriends() : setActiveTab(id))}>
               {activeTab === id && (
@@ -111,7 +123,8 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
                 <span className="nav-badge" aria-label={waiting.label}>{waiting.count}</span>
               )}
             </button>
-          ))}
+            );
+          })}
         </nav>
         <RecorderStatus
           diagnostics={diagnostics}
@@ -182,7 +195,8 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
           // A lingering transform would contain position:fixed dialogs.
           animate={{ opacity: 1, transform: "translateY(0px)", transitionEnd: { transform: "none" } }}
           exit={{ opacity: 0 }}
-          transition={viewTransition}>
+          // Aero's views sit in the shell's moulded floor; a fade would show the bare floor through them.
+          transition={aero ? { duration: 0 } : viewTransition}>
         {activeTab === "library" && (
           <LibraryView
             headerControls={updateNews}
@@ -217,6 +231,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
         {activeTab === "diagnostics" && <>
           {diagnosticsError && <div className="notice" role="status">Diagnostics refresh delayed. {hasDiagnostics ? "Values below are the last received snapshot, not live readings." : "No snapshot received yet."} {diagnosticsError}</div>}
           <DiagnosticsView diagnostics={diagnostics} />
+          <TelemetryPanel />
         </>}
         </motion.div>
         </AnimatePresence>

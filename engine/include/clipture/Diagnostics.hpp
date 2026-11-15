@@ -186,8 +186,10 @@ struct Diagnostics {
     std::string gpuPriorityReason;
     int gpuPriorityRememberedGames = 0;
     int gpuStarvationLossyWindows = 0;
-    // Adapter 3D busy percent and mean work packets in flight on the adapter
-    // at the last detection pass (-1 unknown).
+    // Adapter 3D busy percent since the previous diagnostics that asked for
+    // it, and mean work packets in flight on the adapter at the last
+    // detection pass that needed them (a game in front, or raised). -1 when
+    // unknown or not read.
     double gpuBusyPercent = -1.0;
     double gpuPacketsInFlight = -1.0;
     std::string gpuSchedulingRequested = "default";

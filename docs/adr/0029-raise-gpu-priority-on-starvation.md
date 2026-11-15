@@ -126,3 +126,13 @@ stutter into clips.
 - Thresholds come from one GPU, a synthetic window, Overwatch and CS2. The
   diagnostics fields let exports from starved PCs refine them, or replace the
   drop rule with a prediction.
+- Reading packets in flight is not free (measured 2026-11-10): about 114 ms
+  of CPU per pass on the 3080, with or without a game. Since ADR 0032 a pass
+  reads them only when it acts on them (boost on, and a known game in front
+  or a game raised) and skips engine nodes that are not in use;
+  `gpuPacketsInFlight` is -1 after a pass that did not read them.
+- `gpuBusyPercent` is not used by any rule. Since ADR 0032 it is read only
+  for diagnostics that ask for it, and is -1 on the first read after 10 s
+  without one.
+- The host watchdog's poll is now `getProgress` (ADR 0032); it still carries
+  the class, so the 3 s threshold follows a raise as before.
