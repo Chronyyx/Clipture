@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.9.0] - 2026-11-15
+
+### Recording
+
+- **Lighter while you play:** Clipture uses about a third less CPU while it records (in Deadlock and Fortnite, about 0.27 of a core instead of 0.4). The microphone's noise suppression did seven times more work than it needed, at a priority above your game's; it now takes a fraction of that. The replay buffer is written to disk a few times a second instead of once for every frame, and the GPU is no longer checked while your clips record cleanly.
+- **Smarter GPU priority:** "Prioritize recording on the GPU" now only raises recording for the game you are playing. A game left running in the background no longer costs the game in front its performance. Switching away from a raised game hands the GPU back within seconds and raises again the moment you return, and a raise that does not make your clips smoother is undone for the rest of that session.
+- **Only the tracks you record:** With the system audio or microphone track off, Clipture no longer captures that audio in the background.
+
+### Look
+
+- **New Aero look:** The Aero theme's window takes the shape of its glossy shell over a new meadow wallpaper, and clicks outside the shell reach whatever is behind it.
+
+### Clips
+
+- **Repaired clips keep their audio exact:** Repairing a clip whose audio ended before the video no longer fills the silence with repeated audio.
+
+### License
+
+- **Source-available:** Clipture is now licensed MIT + Commons Clause. You can still use, modify and share it, but not sell it or offer it as a paid service. Versions before 1.9.0 keep the MIT license.
+- **Third-party notices included:** The licenses of everything Clipture ships, FFmpeg's GPL among them, are now installed in Clipture's `licenses` folder and published with every release.
+
 ## [1.8.9] - 2026-11-05
 
 ### Recording

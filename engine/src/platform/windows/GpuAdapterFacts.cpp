@@ -130,37 +130,104 @@ std::optional<uint64_t> AdapterMemoryCounter::dedicatedUsageBytes() {
     return total;
 }
 
-std::optional<double> meanPacketsInFlight(IDXGIAdapter1* adapter, int samples, int intervalMs) {
+struct PacketsInFlightSampler::State {
+    LUID luid {};
+    bool hasAdapter = false;
+    // Packets each node had been given in total at the previous pass's first
+    // sample; empty before the first pass.
+    std::vector<uint64_t> submittedAtLastPass;
+    std::vector<ULONG> busyNodes;
+    int lastNodeReads = 0;
+};
+
+PacketsInFlightSampler::PacketsInFlightSampler(IDXGIAdapter1* adapter) : state_(std::make_unique<State>()) {
+    DXGI_ADAPTER_DESC1 desc {};
+    if (!adapter || FAILED(adapter->GetDesc1(&desc))) return;
+    state_->luid = desc.AdapterLuid;
+    state_->hasAdapter = true;
+}
+
+PacketsInFlightSampler::~PacketsInFlightSampler() = default;
+
+int PacketsInFlightSampler::lastNodeReads() const {
+    return state_->lastNodeReads;
+}
+
+std::optional<double> PacketsInFlightSampler::mean(int samples, int intervalMs) {
     using QueryStatisticsFn = NTSTATUS(APIENTRY*)(const D3DKMT_QUERYSTATISTICS*);
     static const auto queryStatistics = [] {
         const HMODULE gdi = LoadLibraryW(L"gdi32.dll");
         return gdi ? reinterpret_cast<QueryStatisticsFn>(GetProcAddress(gdi, "D3DKMTQueryStatistics")) : nullptr;
     }();
-    DXGI_ADAPTER_DESC1 desc {};
-    if (!queryStatistics || !adapter || FAILED(adapter->GetDesc1(&desc)) || samples <= 0) return std::nullopt;
+    state_->lastNodeReads = 0;
+    if (!queryStatistics || !state_->hasAdapter || samples <= 0) return std::nullopt;
     D3DKMT_QUERYSTATISTICS adapterQuery {};
     adapterQuery.Type = D3DKMT_QUERYSTATISTICS_ADAPTER;
-    adapterQuery.AdapterLuid = desc.AdapterLuid;
+    adapterQuery.AdapterLuid = state_->luid;
     if (queryStatistics(&adapterQuery) != 0) return std::nullopt;
     const ULONG nodes = adapterQuery.QueryResult.AdapterInformation.NodeCount;
 
+    // Packets a node was given in total and has not finished yet.
+    struct NodeRead {
+        uint64_t submitted = 0;
+        int64_t inFlight = 0;
+    };
+    const auto readNode = [&](ULONG node, NodeRead& read) {
+        D3DKMT_QUERYSTATISTICS query {};
+        query.Type = D3DKMT_QUERYSTATISTICS_NODE;
+        query.AdapterLuid = state_->luid;
+        query.QueryNode.NodeId = node;
+        ++state_->lastNodeReads;
+        if (queryStatistics(&query) != 0) return false;
+        const auto& packets = query.QueryResult.NodeInformation.GlobalInformation.PacketStatistics;
+        for (const auto& type : packets.QueuePacket) {
+            read.submitted += type.PacketSubmited;
+            read.inFlight += static_cast<int64_t>(type.PacketSubmited) - static_cast<int64_t>(type.PacketCompleted);
+        }
+        return true;
+    };
+
     double total = 0.0;
     int read = 0;
-    for (int sample = 0; sample < samples; ++sample) {
-        if (sample > 0) Sleep(static_cast<DWORD>(intervalMs));
+    // The first sample reads every node and finds the ones in use: given work
+    // since the previous pass, or holding some now. The other nodes hold
+    // nothing, so the later samples leave them out.
+    {
+        const bool knowsLastPass = state_->submittedAtLastPass.size() == nodes;
+        std::vector<uint64_t> submitted(nodes, 0);
+        state_->busyNodes.clear();
         int64_t inFlight = 0;
         bool ok = true;
         for (ULONG node = 0; node < nodes && ok; ++node) {
-            D3DKMT_QUERYSTATISTICS query {};
-            query.Type = D3DKMT_QUERYSTATISTICS_NODE;
-            query.AdapterLuid = desc.AdapterLuid;
-            query.QueryNode.NodeId = node;
-            ok = queryStatistics(&query) == 0;
+            NodeRead now;
+            ok = readNode(node, now);
             if (!ok) break;
-            const auto& packets = query.QueryResult.NodeInformation.GlobalInformation.PacketStatistics;
-            for (const auto& type : packets.QueuePacket) {
-                inFlight += static_cast<int64_t>(type.PacketSubmited) - static_cast<int64_t>(type.PacketCompleted);
+            submitted[node] = now.submitted;
+            inFlight += now.inFlight;
+            if (!knowsLastPass || now.inFlight != 0 || now.submitted != state_->submittedAtLastPass[node]) {
+                state_->busyNodes.push_back(node);
             }
+        }
+        if (ok) {
+            state_->submittedAtLastPass = std::move(submitted);
+            total += static_cast<double>(std::max<int64_t>(0, inFlight));
+            ++read;
+        } else {
+            // Nothing known about the nodes: read them all this pass.
+            state_->submittedAtLastPass.clear();
+            state_->busyNodes.clear();
+            for (ULONG node = 0; node < nodes; ++node) state_->busyNodes.push_back(node);
+        }
+    }
+    for (int sample = 1; sample < samples; ++sample) {
+        Sleep(static_cast<DWORD>(intervalMs));
+        int64_t inFlight = 0;
+        bool ok = true;
+        for (const ULONG node : state_->busyNodes) {
+            NodeRead now;
+            ok = readNode(node, now);
+            if (!ok) break;
+            inFlight += now.inFlight;
         }
         if (!ok) continue;
         total += static_cast<double>(std::max<int64_t>(0, inFlight));

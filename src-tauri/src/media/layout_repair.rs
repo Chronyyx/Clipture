@@ -17,6 +17,7 @@ use crate::{
 };
 
 use super::{
+    edit_lists::restore_edit_lists,
     layout_probe::{is_padded, needs_interleave_repair, read_layout, TrackLayout},
     library_input, FfmpegExecutor, FfmpegJob,
 };
@@ -155,6 +156,7 @@ fn repair_clip(ffmpeg: &dyn FfmpegExecutor, replace: fn(&Path, &Path) -> std::io
     let working = working_path(path);
     let _ = fs::remove_file(&working);
     let result = remux(ffmpeg, path, &working)
+        .and_then(|()| restore_edit_lists(path, &working))
         .and_then(|()| verify(&original, &read_layout(&working)?))
         .and_then(|()| {
             replace(path, &working).map_err(|source| AppError::Io {
@@ -182,11 +184,16 @@ fn needs_repair(tracks: &[TrackLayout], file_bytes: u64) -> bool {
 }
 
 fn remux(ffmpeg: &dyn FfmpegExecutor, input: &Path, output: &Path) -> AppResult<()> {
+    // Samples are copied exactly as stored; applying edit lists here would
+    // fill a track's trailing silence with repeats of earlier audio. The
+    // original lists are written back afterwards (see edit_lists).
     let head = [
         OsString::from("-nostdin"),
         OsString::from("-hide_banner"),
         OsString::from("-loglevel"),
         OsString::from("error"),
+        OsString::from("-ignore_editlist"),
+        OsString::from("1"),
     ];
     let mut job = FfmpegJob::new(
         "clip layout repair",
@@ -339,7 +346,7 @@ mod tests {
         fs::copy(&sample, &clip).unwrap();
         let created = fs::metadata(&clip).unwrap().created().unwrap();
         let original = read_layout(&clip).unwrap();
-        assert!(needs_interleave_repair(&original), "sample must be a split clip");
+        assert!(needs_repair(&original, fs::metadata(&clip).unwrap().len()), "sample must be a clip that needs fixing");
         let executor = crate::media::CommandFfmpeg::with_concurrency(ffmpeg, Arc::new(crate::media::AlwaysReady), 1);
         let repair = ClipLayoutRepair::new(Arc::new(executor));
         repair.check(vec![RepairCandidate { title: "sample".into(), path: clip.clone() }]);
@@ -351,6 +358,10 @@ mod tests {
         }
         let done = repair.status();
         assert_eq!((done.repaired, done.failed), (1, 0), "{:?}", done.message);
+        // CLIPTURE_REPAIR_KEEP=<path> keeps the repaired copy for inspection.
+        if let Some(keep) = std::env::var_os("CLIPTURE_REPAIR_KEEP") {
+            fs::copy(&clip, keep).unwrap();
+        }
         let repaired = read_layout(&clip).unwrap();
         assert!(!needs_interleave_repair(&repaired));
         assert_eq!(original[0].sizes, repaired[0].sizes, "video samples are untouched");

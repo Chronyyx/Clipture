@@ -9,7 +9,9 @@ namespace clipture {
 
 class DeadlineWait {
 public:
-    explicit DeadlineWait(int64_t spinTail100ns = 2'000) : timer_(CreateWaitableTimerExW(
+    // spinTail100ns: busy-wait this much before the deadline after the timer
+    // (none by default: output timing comes from the cadence, not the wake).
+    explicit DeadlineWait(int64_t spinTail100ns = 0) : timer_(CreateWaitableTimerExW(
         nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS)), spinTail100ns_(spinTail100ns) {}
     ~DeadlineWait() { if (timer_) CloseHandle(timer_); }
     DeadlineWait(const DeadlineWait&) = delete;
@@ -20,7 +22,6 @@ public:
         while (keepRunning()) {
             const auto remaining = deadline100ns - monotonicNow100ns();
             if (remaining <= 0) return;
-            // Encoder uses a 0.2 ms spin tail; idle capture uses no spin tail.
             if (remaining > spinTail100ns_) {
                 LARGE_INTEGER due {};
                 due.QuadPart = -(remaining - spinTail100ns_);

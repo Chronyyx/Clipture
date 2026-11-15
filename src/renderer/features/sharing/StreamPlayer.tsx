@@ -1,5 +1,5 @@
-import { Check, LibraryBig, Play, RotateCcw, TimerOff, Trash2, WifiOff, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, LibraryBig, Play, RotateCcw, TimerOff, Trash2, Volume2, VolumeX, WifiOff, X } from "lucide-react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { SharedClip, SharingDownload, StreamUrls } from "../../../shared/sharing";
 import { clipture } from "../../platform";
 import { MediaPlayer } from "../player";
@@ -123,6 +123,8 @@ export function StreamPlayer({
   // Nothing connects to the friend's PC until the viewer presses play;
   // selecting a clip (or opening Friends) only shows it.
   const [startedFor, setStartedFor] = useState<string>();
+  // Volume can be set before playing; the player starts at it.
+  const [volume, setVolume] = useState(0.8);
   const started = startedFor === clip.shareId;
   const now = useNow();
   const expired = !clip.saved && windowClosed(clip.availableUntilMs, now);
@@ -182,6 +184,20 @@ export function StreamPlayer({
               <Play size={26} aria-hidden="true" />
             </button>
             <p>Plays from {possessive(clip.friendName)} PC when you press play.</p>
+            <div className="share-idle-transport">
+              <button className="share-idle-play" type="button" onClick={() => setStartedFor(clip.shareId)}
+                aria-label={`Play ${clip.title}`}>
+                <Play size={14} aria-hidden="true" />
+              </button>
+              <span className="share-idle-track" aria-hidden="true" />
+              <span className="share-idle-time">{formatDuration(clip.durationSeconds)}</span>
+              <label className="share-idle-volume">
+                {volume === 0 ? <VolumeX size={15} aria-hidden="true" /> : <Volume2 size={15} aria-hidden="true" />}
+                <input type="range" min={0} max={1} step={0.05} value={volume} aria-label="Volume"
+                  style={{ "--volume": `${volume * 100}%` } as CSSProperties}
+                  onChange={(event) => setVolume(Number(event.target.value))} />
+              </label>
+            </div>
           </div>
         ) : failure ? (
           <div className="share-screen-message">
@@ -206,6 +222,7 @@ export function StreamPlayer({
                 aspectWidth={aspectWidth || 16}
                 aspectHeight={aspectHeight || 9}
                 onVideo={setVideo}
+                initialVolume={volume}
               />
             )}
             {(connecting || !ready) && (

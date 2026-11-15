@@ -3,6 +3,7 @@
 #include "clipture/PacketRingBuffer.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <condition_variable>
 #include <map>
@@ -15,10 +16,17 @@
 namespace clipture {
 
 class AudioReplayCoordinator;
+class ProcessSnapshotFeed;
 
 class AudioCaptureWorker {
 public:
-    explicit AudioCaptureWorker(PacketRingBuffer& packets, AudioReplayCoordinator* replayCoordinator = nullptr);
+    // `processFeed`: where a capture thread waiting for its process to start
+    // reads the process list; without one each waiting thread lists the
+    // processes itself.
+    explicit AudioCaptureWorker(
+        PacketRingBuffer& packets,
+        AudioReplayCoordinator* replayCoordinator = nullptr,
+        ProcessSnapshotFeed* processFeed = nullptr);
     ~AudioCaptureWorker();
 
     AudioCaptureWorker(const AudioCaptureWorker&) = delete;
@@ -31,6 +39,9 @@ public:
     void setMicSettings(float volume, bool isolation, float isolationWeight, bool noiseGateEnabled, bool autoNoiseGate, float noiseGateThreshold, int noiseGateDebounceMs, const std::string& micDeviceId, const std::string& micDeviceMatchKey, const std::string& micDeviceName);
 
     bool running() const;
+    // Captures system loopback and the microphone only while a track records
+    // them; callable before start() and while running.
+    void setCoreSources(bool systemAudio, bool microphone);
     int packetsCaptured() const;
     std::string status() const;
     std::string microphoneStatus() const;
@@ -42,7 +53,7 @@ private:
         std::thread thread;
     };
 
-    void runCapture(bool loopback, const std::string& sourceId);
+    void runCapture(bool loopback, const std::string& sourceId, std::shared_ptr<std::atomic<bool>> stopRequested);
     void runMicrophoneCapture();
     void runDeviceNotificationLoop();
     void signalMicRefresh();
@@ -54,14 +65,27 @@ private:
         std::uint32_t processId,
         std::shared_ptr<std::atomic<bool>> stopRequested);
     void startAppCaptureThreadLocked(const std::string& processName);
+    // Sleeps an app capture thread; false once it should stop.
+    bool waitUnlessStopping(const std::atomic<bool>& stopRequested, std::chrono::milliseconds duration);
+    // Wakes app capture threads that sleep or wait for a process list.
+    void wakeAppCaptureThreads();
     void startMicThreadLocked();
     void stopMicThread();
+    void startSystemThreadLocked();
+    void stopSystemThread();
     void publishPacket(EncodedPacket packet);
 
     PacketRingBuffer& packets_;
     AudioReplayCoordinator* replayCoordinator_ = nullptr;
+    ProcessSnapshotFeed* processFeed_ = nullptr;
+    std::mutex appWaitMutex_;
+    std::condition_variable appWaitCv_;
     std::vector<std::thread> coreThreads_;
     std::thread micThread_;
+    std::thread systemThread_;
+    std::shared_ptr<std::atomic<bool>> systemStopRequested_;
+    bool wantSystem_ = true;
+    bool wantMic_ = true;
     std::thread notificationThread_;
     std::shared_ptr<std::atomic<bool>> micStopRequested_;
     std::map<std::string, AppCaptureThread> appThreads_;

@@ -46,6 +46,11 @@ struct CapturePipelinePolicy {
     // WGC MinUpdateInterval in 100 ns (CLIPTURE_WGC_MIN_UPDATE_100NS). -1: half
     // the recording frame period (ADR 0031); 0: every frame the source presents.
     long long wgcMinUpdateInterval100ns = -1;
+    // Busy-wait before each encoder tick after the high-resolution timer
+    // (CLIPTURE_ENCODER_SPIN_TAIL_100NS). It was 0.2 ms: about 12 ms of CPU a
+    // second at 60 fps on an MMCSS Games thread, for a wake that only decides
+    // which already-timestamped frame is taken.
+    long long encoderSpinTail100ns = 0;
 };
 inline const CapturePipelinePolicy& capturePipelinePolicy() {
     static const auto policy = [] {
@@ -90,6 +95,14 @@ inline const CapturePipelinePolicy& capturePipelinePolicy() {
             if (count > 0 && count < 16) {
                 const long long parsed = _wtoi64(value);
                 if (parsed >= 0 && parsed <= 10'000'000) result.wgcMinUpdateInterval100ns = parsed;
+            }
+        }
+        {
+            wchar_t value[16] {};
+            const auto count = GetEnvironmentVariableW(L"CLIPTURE_ENCODER_SPIN_TAIL_100NS", value, 16);
+            if (count > 0 && count < 16) {
+                const long long parsed = _wtoi64(value);
+                if (parsed >= 0 && parsed <= 20'000) result.encoderSpinTail100ns = parsed;
             }
         }
         return result;

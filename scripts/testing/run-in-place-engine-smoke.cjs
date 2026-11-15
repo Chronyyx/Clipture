@@ -74,7 +74,12 @@ const watchdog = setTimeout(() => child.kill(), 90000);
     assert.ok(Date.now() - failureStarted < 5000, 'native errors must return valid JSON without a timeout');
     const recovered = await save();
     assert.ok(recovered.durationSeconds >= 1 && recovered.durationSeconds <= 3, 'failed save must not consume its window');
+    // Saves in place discard the footage they consumed (1.7.0), so the opt-out
+    // cannot bring it back; it restores overlap from then on: a save straight
+    // after another gets the full window again.
     await request('configure', { ...config, saveInPlace: false });
+    await delay(6000);
+    assert.equal((await save()).durationSeconds, 5, 'opt-out save gets the full window');
     assert.equal((await save()).durationSeconds, 5, 'opt-out restores full overlapping window');
     assert.equal(new Set(results.map(clip => clip.filePath)).size, results.length, 'rapid saves must not overwrite an earlier clip');
     const ffmpeg = require('ffmpeg-static');

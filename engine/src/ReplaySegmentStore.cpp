@@ -293,6 +293,7 @@ struct ReplaySegmentStore::Impl {
         bool persistenceQueued = false;
         bool rehomeQueued = false;
         std::size_t payloadBytes = 0;
+        std::chrono::steady_clock::time_point queuedAt {};
     };
 
     struct ActiveSegment {
@@ -490,12 +491,21 @@ struct ReplaySegmentStore::Impl {
         return result;
     }
 
+    // A waiter ends any write coalescing at once.
+    struct IdleWaiter {
+        const Impl& impl;
+        explicit IdleWaiter(const Impl& owner) : impl(owner) { ++impl.idleWaiters; impl.wake.notify_all(); }
+        ~IdleWaiter() { --impl.idleWaiters; }
+    };
+
     bool waitUntilIdle(std::chrono::milliseconds timeout) const {
+        IdleWaiter waiter(*this);
         std::unique_lock lock(mutex);
         return idle.wait_for(lock, timeout, [this] { return pending.empty() || !running.load(); });
     }
 
     bool waitUntilRehomed(std::chrono::milliseconds timeout) const {
+        IdleWaiter waiter(*this);
         std::unique_lock lock(mutex);
         return idle.wait_for(lock, timeout, [this] {
             return (pending.empty() && rehomeQueue.empty() && !rehomeInFlight) || !running.load();
@@ -668,6 +678,7 @@ struct ReplaySegmentStore::Impl {
             }
             const auto bytes = static_cast<uint64_t>(entry->packet.payload->size());
             entry->persistenceQueued = true;
+            entry->queuedAt = std::chrono::steady_clock::now();
             pending.push_back(entry);
             ++queuedPackets;
             queuedBytes += bytes;
@@ -822,6 +833,72 @@ struct ReplaySegmentStore::Impl {
         return true;
     }
 
+    uint64_t pendingRunBytesLocked() const {
+        uint64_t bytes = 0;
+        for (const auto& entry : pending) bytes += entry->payloadBytes;
+        return bytes;
+    }
+
+    // Persists consecutive pending packets with one archive write; a packet
+    // the run could not take goes through writeEntry (archive, then segment
+    // spill) as before.
+    bool writeRun(const std::vector<std::shared_ptr<Entry>>& run) {
+        std::vector<EncodedPacket> packets;
+        std::vector<std::size_t> owners;
+        {
+            std::lock_guard lock(mutex);
+            for (std::size_t i = 0; i < run.size(); ++i) {
+                const auto& entry = run[i];
+                if (entry->retired.load(std::memory_order_relaxed) || !entry->packet.payload ||
+                    entry->packet.payload->empty()) continue;
+                packets.push_back(entry->packet);
+                owners.push_back(i);
+            }
+        }
+        std::vector<std::optional<EncodedPacket>> archived;
+        {
+            std::lock_guard segmentLock(segmentMutex);
+            if (inPlaceArchive && !packets.empty()) archived = inPlaceArchive->persistRun(packets);
+            if (!archived.empty()) {
+                std::lock_guard lock(mutex);
+                for (std::size_t k = 0; k < archived.size(); ++k) {
+                    if (!archived[k]) continue;
+                    const auto& entry = run[owners[k]];
+                    if (entry->retired.load(std::memory_order_relaxed)) continue;
+                    const auto bytes = entry->packet.payload ? entry->packet.payload->size() : 0;
+                    entry->packet = std::move(*archived[k]);
+                    residentPayloadBytes -= std::min<uint64_t>(residentPayloadBytes, bytes);
+                    queuedResidentBytes -= std::min<uint64_t>(queuedResidentBytes, bytes);
+                    if (residentPackets > 0) --residentPackets;
+                    ++diskBackedPackets;
+                    ++persistedPackets;
+                }
+                scheduleSpillsLocked();
+                healthy = true;
+            }
+        }
+        for (const auto& entry : run) {
+            bool done = entry->retired.load(std::memory_order_relaxed);
+            if (!done) {
+                std::lock_guard lock(mutex);
+                done = !entry->packet.payload && entry->packet.payloadReader;
+            }
+            if (done || writeEntry(entry)) {
+                discardCompletedPending(entry);
+                continue;
+            }
+            {
+                std::lock_guard segmentLock(segmentMutex);
+                healthy = false;
+                ++writeFailures;
+                closeActive();
+                cleanupSegments();
+            }
+            return false;  // The run loop retries the rest after its delay.
+        }
+        return true;
+    }
+
     void discardCompletedPending(const std::shared_ptr<Entry>& entry) {
         {
             std::lock_guard lock(mutex);
@@ -862,6 +939,7 @@ struct ReplaySegmentStore::Impl {
         const bool backgroundMode = SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) != FALSE;
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
+        std::vector<std::shared_ptr<Entry>> run;
         while (true) {
             std::shared_ptr<Entry> entry;
             {
@@ -922,9 +1000,39 @@ struct ReplaySegmentStore::Impl {
                     if (rehomeQueue.empty()) idle.notify_all();
                     continue;
                 }
+                // In-place archive: let live packets gather briefly and write
+                // them as one run (one WriteFile instead of one per packet).
+                // They stay resident and readable meanwhile.
+                if (archiveActive.load(std::memory_order_relaxed) && idleWaiters.load() == 0 &&
+                    pending.size() < kRunPackets && pendingRunBytesLocked() < kRunBytes) {
+                    const auto due = pending.front()->queuedAt + kCoalesceWindow;
+                    if (std::chrono::steady_clock::now() < due) {
+                        wake.wait_until(lock, due, [this] {
+                            return stopRequested || idleWaiters.load() != 0 || pending.size() >= kRunPackets ||
+                                rotationRequested.load(std::memory_order_relaxed);
+                        });
+                        continue;
+                    }
+                }
+                if (archiveActive.load(std::memory_order_relaxed)) {
+                    for (const auto& next : pending) {
+                        if (run.size() >= kRunPackets) break;
+                        run.push_back(next);
+                    }
+                }
                 entry = pending.front();
             }
 
+            if (run.size() > 1) {
+                const bool written = writeRun(run);
+                run.clear();
+                if (written) continue;
+                std::unique_lock lock(mutex);
+                wake.wait_for(lock, kRetryDelay, [this] { return stopRequested; });
+                if (stopRequested) break;
+                continue;
+            }
+            run.clear();
             if (entry->retired.load(std::memory_order_relaxed) || writeEntry(entry)) {
                 discardCompletedPending(entry);
                 continue;
@@ -955,6 +1063,13 @@ struct ReplaySegmentStore::Impl {
 
     ReplaySegmentStoreOptions options;
     std::shared_ptr<replay::InPlacePacketArchive> inPlaceArchive;
+    // Mirrors inPlaceArchive != nullptr for the writer, which holds `mutex`
+    // and so cannot take segmentMutex.
+    std::atomic<bool> archiveActive { false };
+    mutable std::atomic<int> idleWaiters { 0 };
+    static constexpr std::size_t kRunPackets = 64;
+    static constexpr uint64_t kRunBytes = 4u * 1024u * 1024u;
+    static constexpr auto kCoalesceWindow = std::chrono::milliseconds(200);
     std::atomic<bool> running { false };
     mutable std::mutex mutex;
     mutable std::mutex segmentMutex;
@@ -969,7 +1084,7 @@ struct ReplaySegmentStore::Impl {
     mutable std::mutex lastSegmentViewMutex;
     mutable SegmentView lastSegmentView;
     mutable std::condition_variable idle;
-    std::condition_variable wake;
+    mutable std::condition_variable wake;
     std::thread worker;
     bool stopRequested = false;
     bool healthy = false;
@@ -1015,6 +1130,7 @@ void ReplaySegmentStore::setResidentPayloadBudget(std::size_t bytes) {
 void ReplaySegmentStore::setInPlaceArchive(std::shared_ptr<replay::InPlacePacketArchive> archive) {
     std::lock_guard lock(impl_->segmentMutex);
     impl_->inPlaceArchive = std::move(archive);
+    impl_->archiveActive.store(impl_->inPlaceArchive != nullptr);
 }
 void ReplaySegmentStore::push(const EncodedPacket& packet) { impl_->push(packet); }
 void ReplaySegmentStore::scheduleInPlaceRehome(double rateMultiplier) { impl_->scheduleRehome(rateMultiplier); }

@@ -2862,7 +2862,7 @@ function windowAppearance(settings: ClipSettings): { backgroundColor: string; sy
       : isGlitten
         ? "#e8decd"
         : isAero
-          ? "#d3e9f8"
+          ? "#0a4cc4"
         : isMaidCafe
           ? "#ffe3ec"
         : isHalloween
@@ -2870,7 +2870,7 @@ function windowAppearance(settings: ClipSettings): { backgroundColor: string; sy
         : settings.uiTheme === "custom"
           ? settings.customMainColor
           : "#101114",
-    symbolColor: isGlitten ? "#4d4035" : isAero ? "#1e395b" : isMaidCafe ? "#7a3f63" : isHalloween ? "#f3ead8" : isLight ? "#465265" : "#a5adba"
+    symbolColor: isGlitten ? "#4d4035" : isAero ? "#ffffff" : isMaidCafe ? "#7a3f63" : isHalloween ? "#f3ead8" : isLight ? "#465265" : "#a5adba"
   };
 }
 

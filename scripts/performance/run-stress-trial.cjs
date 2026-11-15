@@ -36,7 +36,8 @@ const USAGE = `Usage: node scripts/performance/run-stress-trial.cjs [options]
   --daily-audio         capture audio like the daily app (sources from %APPDATA%\Clipture\data\settings.json)
   --env KEY=VALUE       engine environment override; repeatable
   --layer-ms <ms>       pin GPU load calibration (default: baseline's, else measured)
-  --baseline <report>   compare against an earlier report.json`;
+  --baseline <report>   compare against an earlier report.json
+  --save-at <s,...>     save a clip at these seconds into the measurement and report game frame times around each`;
 
 function parseArgs(argv) {
   const options = { label: 'trial', engine: path.join(release, 'clipture_engine.exe'), fps: 120,
@@ -62,10 +63,13 @@ function parseArgs(argv) {
     else if (arg === '--vram-mb') options.vramMb = Number(value());
     else if (arg === '--max-latency') options.maxLatency = Number(value());
     else if (arg === '--gpu-memory') options.gpuMemory = path.resolve(value());
+    else if (arg === '--preset') options.preset = Number(value());
+    else if (arg === '--bitrate') options.bitrate = Number(value());
     else if (arg === '--no-solo') options.noSolo = true;
     else if (arg === '--env') { const [key, ...rest] = value().split('='); options.env[key] = rest.join('='); }
     else if (arg === '--layer-ms') options.layerMs = Number(value());
     else if (arg === '--baseline') options.baseline = path.resolve(value());
+    else if (arg === '--save-at') options.saveAt = value().split(',').map(Number);
     else throw Error(USAGE);
   }
   if (![30, 60, 120, 144, 240].includes(options.fps)) throw Error('Use --fps 30, 60, 120, 144 or 240.');
@@ -124,6 +128,28 @@ function startWindow(args) {
   return { child, exited, waitFor, stderr: () => stderr };
 }
 
+// Game frame times in the 3 s after each mid-run save against the 3 s before
+// it. Offsets count from the first timeline frame, which the window presents
+// right after measurement starts.
+function saveImpact(saves, frames) {
+  const list = [...frames.values()].sort((a, b) => a.presentUs - b.presentUs);
+  const start = list.find(frame => frame.phase >= 1)?.presentUs;
+  if (start === undefined) return [];
+  const window = (fromUs, toUs) => {
+    const intervals = [];
+    for (let i = 1; i < list.length; ++i) {
+      if (list[i].presentUs >= fromUs && list[i].presentUs < toUs) intervals.push((list[i].presentUs - list[i - 1].presentUs) / 1000);
+    }
+    intervals.sort((a, b) => a - b);
+    const pick = q => intervals.length ? Number(intervals[Math.min(intervals.length - 1, Math.floor(q * (intervals.length - 1)))].toFixed(2)) : null;
+    return { frames: intervals.length, p50Ms: pick(0.5), p99Ms: pick(0.99), maxMs: pick(1) };
+  };
+  return saves.map(save => {
+    const at = start + save.atMs * 1000;
+    return { ...save, before: window(at - 3e6, at), after: window(at, at + 3e6) };
+  });
+}
+
 function otherEngines() {
   const list = spawnSync('tasklist', ['/FI', 'IMAGENAME eq clipture_engine*', '/FO', 'CSV', '/NH'], { encoding: 'utf8' });
   return (list.stdout || '').split(/\r?\n/).filter(line => line.startsWith('"clipture'));
@@ -175,8 +201,10 @@ async function main() {
     const seconds = Math.ceil(timelineSeconds(options.timeline)) + 1;
     engine = await probe(options.engine, options.fps, path.join(directory, 'engine'), seconds, options.env,
       { ...(options.dailyAudio ? dailyAudioConfiguration() : {}),
-        ...(options.gpuMemory ? { gpuPriorityMemoryPath: options.gpuMemory } : {}) },
-      { onMeasureStart: () => trialWindow.child.stdin.write('start\n'), saveSeconds: seconds + 2 });
+        ...(options.gpuMemory ? { gpuPriorityMemoryPath: options.gpuMemory } : {}),
+        ...(options.preset ? { nvencPreset: options.preset } : {}),
+        ...(options.bitrate ? { bitrateMbps: options.bitrate } : {}) },
+      { onMeasureStart: () => trialWindow.child.stdin.write('start\n'), saveSeconds: seconds + 2, saveAtSeconds: options.saveAt });
   } finally {
     trialWindow.child.stdin.end();
     await trialWindow.exited;
@@ -211,6 +239,7 @@ async function main() {
       .map(([key, value]) => [key, value - engine.before[key]])),
     score: scoreTrial({ stamps, frames, summary: trialSummary, captureFps: options.fps }),
     windowCost: soloSummary ? windowCost(soloSummary, trialSummary) : [],
+    midSaves: saveImpact(engine.midSaves || [], frames),
   };
   if (baseline) report.versusBaseline = compareReports(baseline, report);
   fs.writeFileSync(path.join(directory, 'report.json'), JSON.stringify(report, null, 2));

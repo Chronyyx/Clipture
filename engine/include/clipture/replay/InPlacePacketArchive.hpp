@@ -12,6 +12,9 @@ public:
     ~InPlacePacketArchive();
     void configure(const std::filesystem::path& folder, bool enabled, uint64_t maximumBytes);
     std::optional<EncodedPacket> persist(const EncodedPacket& packet);
+    // Several live packets in one contiguous write (each keeps its own lease).
+    // An entry is nullopt where that packet was not persisted.
+    std::vector<std::optional<EncodedPacket>> persistRun(std::span<const EncodedPacket> packets);
     // Overlap backfill: a packet still leased from a detached (saved) file is
     // copied into the active arena so a later save can reuse it without copying.
     bool isDetached(const EncodedPacket& packet) const;

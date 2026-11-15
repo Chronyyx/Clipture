@@ -696,6 +696,23 @@ public:
         return false;
     }
 
+    bool isInitialized() const {
+        return initialized_;
+    }
+
+    // First failing removed reason of the encoder's or capture's device.
+    HRESULT deviceRemovedReason() const {
+        if (device_) {
+            const HRESULT hr = device_->GetDeviceRemovedReason();
+            if (FAILED(hr)) return hr;
+        }
+        if (captureDevice_) {
+            const HRESULT hr = captureDevice_->GetDeviceRemovedReason();
+            if (FAILED(hr)) return hr;
+        }
+        return S_OK;
+    }
+
     int outputWidth() const {
         return width_;
     }
@@ -2892,6 +2909,18 @@ int EncoderWorker::framesEncoded() const {
     return framesEncoded_;
 }
 
+uint64_t EncoderWorker::encoderSetups() const {
+    return encoderSetups_.load();
+}
+
+long EncoderWorker::deviceRemovedHr() const {
+    return deviceRemovedHr_.load(std::memory_order_acquire);
+}
+
+void EncoderWorker::setSetupObserver(std::function<void()> observer) {
+    setupObserver_ = std::move(observer);
+}
+
 int EncoderWorker::queuedEncodeFrames() const {
     std::lock_guard lock(submitMutex_);
     return static_cast<int>(std::min<std::size_t>(pendingOutputFrames_, INT_MAX));
@@ -3063,11 +3092,11 @@ EncoderRecentPerformance EncoderWorker::recentPerformance() const {
     result.queueResidence = recentQueueResidenceLatency_.snapshot(now100ns);
     result.inputPtsInterval = recentInputPtsInterval_.snapshot(now100ns);
     result.outputPtsInterval = recentOutputPtsInterval_.snapshot(now100ns);
-    const auto distinctSourceEvents = recentDistinctSourceOutputEvents_.snapshot(now100ns);
-    const auto repeatedSourceEvents = recentRepeatedSourceOutputEvents_.snapshot(now100ns);
-    const auto unknownSourceEvents = recentUnknownSourceOutputEvents_.snapshot(now100ns);
-    const auto motionOutputEvents = recentMotionOutputEvents_.snapshot(now100ns);
-    const auto motionRepeatEvents = recentMotionRepeatEvents_.snapshot(now100ns);
+    const auto distinctSourceEvents = recentDistinctSourceOutputEvents_.recentCount(now100ns);
+    const auto repeatedSourceEvents = recentRepeatedSourceOutputEvents_.recentCount(now100ns);
+    const auto unknownSourceEvents = recentUnknownSourceOutputEvents_.recentCount(now100ns);
+    const auto motionOutputEvents = recentMotionOutputEvents_.recentCount(now100ns);
+    const auto motionRepeatEvents = recentMotionRepeatEvents_.recentCount(now100ns);
     result.inputPreparation = recentInputPreparationLatency_.snapshot(now100ns);
     result.inputMap = recentInputMapLatency_.snapshot(now100ns);
     result.encodeCall = recentNvencCallLatency_.snapshot(now100ns);
@@ -3084,7 +3113,7 @@ EncoderRecentPerformance EncoderWorker::recentPerformance() const {
             static_cast<double>(observationWindow100ns);
         result.outputFps = static_cast<double>(result.outputLock.samples) * 10'000'000.0 /
             static_cast<double>(observationWindow100ns);
-        const double rawDistinctFps = static_cast<double>(distinctSourceEvents.samples) *
+        const double rawDistinctFps = static_cast<double>(distinctSourceEvents) *
             10'000'000.0 / static_cast<double>(observationWindow100ns);
 
         // Fast Attack, Smooth Decay: Instant snap-back on motion, gentle curve on entering smoke
@@ -3100,10 +3129,10 @@ EncoderRecentPerformance EncoderWorker::recentPerformance() const {
         lastSmoothedFpsTime100ns_ = now100ns;
         result.distinctSourceOutputFps = smoothedDistinctFps_;
     }
-    result.repeatedSourceOutputFrames = repeatedSourceEvents.samples;
-    result.unknownSourceOutputFrames = unknownSourceEvents.samples;
-    result.motionFramesTotal = motionOutputEvents.samples;
-    result.motionFramesRepeated = motionRepeatEvents.samples;
+    result.repeatedSourceOutputFrames = repeatedSourceEvents;
+    result.unknownSourceOutputFrames = unknownSourceEvents;
+    result.motionFramesTotal = motionOutputEvents;
+    result.motionFramesRepeated = motionRepeatEvents;
     return result;
 }
 
@@ -3164,7 +3193,7 @@ void EncoderWorker::run() {
     nameCurrentThread(L"encoder-scheduler");
     MmcssThreadRegistration mmcss(L"Games", AVRT_PRIORITY_HIGH);
     EncoderCadence cadence(std::clamp(targetFps_.load(std::memory_order_relaxed), 24, 240), monotonicNow100ns());
-    DeadlineWait wait;
+    DeadlineWait wait(capturePipelinePolicy().encoderSpinTail100ns);
     std::optional<CapturedFrame> heldFrame;
     uint64_t previousSequence = 0;
     uint64_t previousEpoch = 0;
@@ -3412,6 +3441,7 @@ void EncoderWorker::encodeLoop() {
         packets.clear();
     };
 
+    uint64_t deviceChecks = 0;
     while (true) {
         EncodeJob job;
         {
@@ -3506,6 +3536,12 @@ void EncoderWorker::encodeLoop() {
         }
         bool encoderInitialized = false;
         bool encoded = false;
+        const bool settingUp = nvencRuntimeLoaded_ && !session->isInitialized();
+        if (settingUp && setupObserver_) setupObserver_();
+        if (++deviceChecks % 60 == 0 && deviceRemovedHr_.load(std::memory_order_relaxed) == 0) {
+            const HRESULT removed = session->deviceRemovedReason();
+            if (FAILED(removed)) deviceRemovedHr_.store(static_cast<long>(removed), std::memory_order_release);
+        }
         if (nvencRuntimeLoaded_ && session->initialize(
                 frameForTick.texture.Get(),
                 frameForTick.width,
@@ -3519,6 +3555,7 @@ void EncoderWorker::encodeLoop() {
                 job.nvencPreset,
                 sessionStatus)) {
             encoderInitialized = true;
+            if (settingUp) ++encoderSetups_;
             outputWidth_ = session->outputWidth();
             outputHeight_ = session->outputHeight();
             scalingActive_ = frameForTick.width != session->outputWidth() ||

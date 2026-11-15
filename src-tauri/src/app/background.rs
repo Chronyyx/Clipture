@@ -27,7 +27,7 @@ pub fn start(app: AppHandle) {
         tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                let Ok(diagnostics) = diagnostics_engine.diagnostics().await else { continue };
+                let Ok(diagnostics) = diagnostics_engine.sample_diagnostics().await else { continue };
                 // An admin game the hotkey cannot reach: tell the player once, in game.
                 let settings = notice_settings.get();
                 if let Some(game) = admin_hotkey.notice_due(&settings, &diagnostics) {

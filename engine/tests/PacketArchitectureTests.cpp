@@ -604,8 +604,20 @@ bool testLatencyWindowIsBoundedAndRecent() {
         return false;
     }
 
+    if (!require(window.recentCount(20, 5) == 4 && window.recentCount(20, 100) == 8,
+            "counting recent samples should agree with the snapshot")) {
+        return false;
+    }
+    // A sample recorded late by another thread, older than its neighbours but
+    // inside the horizon, still counts.
+    window.record(16, 1);
+    if (!require(window.snapshot(20, 5).samples == 5, "an out-of-order sample inside the horizon should count")) {
+        return false;
+    }
+
     window.clear();
-    return require(window.snapshot(20, 100).samples == 0, "clearing latency telemetry should remove samples");
+    return require(window.snapshot(20, 100).samples == 0 && window.recentCount(20, 100) == 0,
+        "clearing latency telemetry should remove samples");
 }
 
 bool testRefreshRateSamplerMaintainsTargetCadence() {

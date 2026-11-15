@@ -388,13 +388,22 @@ bool CaptureSession::preferMonitor() {
     return impl_->startTarget(nullptr, {});
 }
 
+long CaptureSession::deviceRemovedHr() const {
+    return impl_->shared->deviceRemovedHr.load(std::memory_order_acquire);
+}
+
 void CaptureSession::setHybridGameWindow(void* window) {
-    impl_->shared->hybridGameWindow.store(window, std::memory_order_release);
+    if (impl_->shared->hybridGameWindow.exchange(window, std::memory_order_acq_rel) != window) {
+        impl_->shared->wakeBackend();
+    }
 }
 
 void CaptureSession::setTargetFps(int fps) {
     if (impl_ && impl_->shared) {
-        impl_->shared->targetFps.store(std::clamp(fps, 1, 240), std::memory_order_relaxed);
+        const int clamped = std::clamp(fps, 1, 240);
+        if (impl_->shared->targetFps.exchange(clamped, std::memory_order_relaxed) != clamped) {
+            impl_->shared->wakeBackend();
+        }
     }
 }
 
@@ -435,6 +444,14 @@ const SlotPoolUsage& CaptureSession::captureTextureSlots() const {
 
 uint64_t CaptureSession::sourceFramesSuperseded() const {
     return impl_->shared->sourceFramesSuperseded.load(std::memory_order_relaxed);
+}
+
+uint64_t CaptureSession::publishedFrames() const {
+    return impl_->shared->publishedFrames.load(std::memory_order_relaxed);
+}
+
+uint64_t CaptureSession::desktopPresents() const {
+    return impl_->shared->desktopPresents.load(std::memory_order_relaxed);
 }
 
 uint64_t CaptureSession::callbackErrors() const {

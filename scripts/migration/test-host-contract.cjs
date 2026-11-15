@@ -84,6 +84,22 @@ for (const command of engineFixture.commands) {
     assert.ok(engineSource.includes(field), `${command.type}.${field}: missing from C++ parser`);
   }
 }
+// Commands and fields only the Tauri host sends. The engine answers hosts that
+// leave them out as before, so the Electron reference does not carry them.
+const tauriEngineSource = ["watchdog.rs", "control.rs"]
+  .map((file) => read(`src-tauri/src/engine/client/${file}`)).join("\n");
+for (const command of engineFixture.tauriCommands) {
+  assert.ok(tauriEngineSource.includes(JSON.stringify(command.type)), `${command.type}: missing from Tauri engine client`);
+  assert.ok(engineSource.includes(JSON.stringify(command.type)), `${command.type}: missing from C++ engine`);
+  assertUnique(command.fields, `${command.type} Tauri fields`);
+  for (const field of command.fields) {
+    assert.ok(tauriEngineSource.includes(JSON.stringify(field)), `${command.type}.${field}: missing from Tauri request`);
+    assert.ok(engineSource.includes(JSON.stringify(field)), `${command.type}.${field}: missing from C++ parser`);
+  }
+}
+for (const field of Object.keys(engineFixture.examples.progress.payload)) {
+  assert.ok(read("engine/src/Engine.cpp").includes(`\\"${field}\\"`), `progress.${field}: missing from C++ engine`);
+}
 for (const event of engineFixture.events) {
   assert.ok(mainSource.includes(JSON.stringify(event.event)), `${event.event}: missing from Electron event client`);
   assert.ok(engineSource.includes(event.event), `${event.event}: missing from C++ engine`);

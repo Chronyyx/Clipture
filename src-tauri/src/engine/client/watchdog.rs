@@ -10,10 +10,18 @@ const WATCHDOG_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// A process stuck inside the driver may not exit at once; after this the
 /// host stops waiting for it and moves on.
 const TERMINATION_GRACE: Duration = Duration::from_secs(5);
-/// The watchdog's own probe. Every other request (saves, configure, device
-/// lists that a slow driver can hold for seconds) delays the engine's single
-/// request loop by design, so while one is in flight silence is not a hang.
-const PROBE_REQUEST: &str = "getDiagnostics";
+/// The watchdog's own probe: a handful of counters, answered without
+/// building diagnostics.
+const PROBE_REQUEST: &str = "getProgress";
+/// The probe an engine from before `getProgress` understands. Diagnostics
+/// carry the same counters among everything else.
+const LEGACY_PROBE_REQUEST: &str = "getDiagnostics";
+/// Requests that do not mark the engine busy. Every other request (saves,
+/// configure, device lists that a slow driver can hold for seconds) delays the
+/// engine's single request loop by design, so while one is in flight silence
+/// is not a hang. Diagnostics are sampled every two seconds in the background;
+/// counted as busy they would keep a hung engine from ever being seen.
+const QUICK_REQUESTS: [&str; 2] = [PROBE_REQUEST, LEGACY_PROBE_REQUEST];
 
 pub(super) const HALTED_MESSAGE: &str =
     "Recording stopped: the GPU encoder stopped responding twice. Restart Clipture to record again.";
@@ -29,7 +37,7 @@ pub(super) struct LongRequestGuard<'a>(&'a LongRequests);
 
 impl LongRequests {
     pub(super) fn enter(&self, command: &str) -> Option<LongRequestGuard<'_>> {
-        if command == PROBE_REQUEST {
+        if QUICK_REQUESTS.contains(&command) {
             return None;
         }
         self.started.fetch_add(1, Ordering::AcqRel);
@@ -82,6 +90,7 @@ impl EngineClient {
 
     async fn watch_encoder(self: Arc<Self>, generation: u64) {
         let mut watchdog = EncoderWatchdog::default();
+        let mut probe = PROBE_REQUEST;
         loop {
             tokio::time::sleep(WATCHDOG_INTERVAL).await;
             if self.shutting_down.load(Ordering::Acquire) || self.running_generation() != Some(generation) {
@@ -95,10 +104,16 @@ impl EngineClient {
                 watchdog.seed_scheduling_class(class);
             }
             let started = self.long_requests.started();
-            let sample = self
-                .call::<EncoderProgress>("getDiagnostics", &(), WATCHDOG_REQUEST_TIMEOUT)
-                .await
-                .ok();
+            let mut answer = self
+                .call::<EncoderProgress>(probe, &(), WATCHDOG_REQUEST_TIMEOUT)
+                .await;
+            if probe == PROBE_REQUEST && answer.as_ref().is_err_and(is_unknown_command) {
+                probe = LEGACY_PROBE_REQUEST;
+                answer = self
+                    .call::<EncoderProgress>(probe, &(), WATCHDOG_REQUEST_TIMEOUT)
+                    .await;
+            }
+            let sample = answer.ok();
             if self.running_generation() != Some(generation) {
                 return;
             }
@@ -149,14 +164,44 @@ impl EngineClient {
     }
 }
 
+/// The engine's answer to a request type it does not have.
+fn is_unknown_command(error: &AppError) -> bool {
+    matches!(error, AppError::Engine(message) if message == "Unknown engine command.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn only_an_unknown_command_answer_selects_the_legacy_probe() {
+        assert!(is_unknown_command(&AppError::Engine("Unknown engine command.".into())));
+        assert!(!is_unknown_command(&AppError::Engine("Engine request timed out: getProgress".into())));
+    }
+
+    #[test]
+    fn the_progress_probe_answer_is_read_from_the_protocol_fixture() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../scripts/migration/fixtures/engine-protocol.v1.json"
+        ))
+        .unwrap();
+        let progress: EncoderProgress =
+            serde_json::from_value(fixture["examples"]["progress"]["payload"].clone()).unwrap();
+        assert!(progress.engine_running);
+        assert_eq!(progress.encoder_output_packets, 1200);
+        assert_eq!(progress.encoder_accepted_frames, 1201);
+        assert_eq!(progress.nvenc_in_flight_frames, 1);
+        assert_eq!(progress.queued_frames, 0);
+        assert_eq!(progress.gpu_scheduling_class, "normal");
+        let tauri_only = fixture["tauriCommands"].as_array().unwrap();
+        assert!(tauri_only.iter().any(|command| command["type"] == PROBE_REQUEST));
+    }
+
+    #[test]
     fn every_request_but_the_probe_marks_the_engine_busy() {
         let requests = LongRequests::default();
         assert!(requests.enter(PROBE_REQUEST).is_none());
+        assert!(requests.enter(LEGACY_PROBE_REQUEST).is_none());
         for command in ["saveClip", "configure", "listAudioInputDevices", "listRunningProcesses", "configureHotkey"] {
             let started = requests.started();
             let guard = requests.enter(command);

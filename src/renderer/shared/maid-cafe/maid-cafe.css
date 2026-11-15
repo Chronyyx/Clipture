@@ -101,7 +101,7 @@
   content: "";
   position: absolute;
   top: -9px;
-  left: -8px;
+  left: 2px;
   width: 26px;
   height: 18px;
   transform: rotate(-18deg);
@@ -206,7 +206,7 @@
 :root[data-theme="maid-cafe"] .library-heading-default { display: none; }
 :root[data-theme="maid-cafe"] .library-heading-cafe { display: inline; }
 :root[data-theme="maid-cafe"] .library-title-icon { display: none; }
-:root[data-theme="maid-cafe"] .library-title h1 { color: var(--text-strong); font-size: 30px; }
+:root[data-theme="maid-cafe"] .library-title h1 { color: var(--text-strong); font-size: 28px; }
 :root[data-theme="maid-cafe"] .library-title h1::after {
   content: "✦";
   margin-left: 6px;
@@ -221,7 +221,6 @@
   flex: 0 0 auto;
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'%3E%3Cg stroke='%235b2a4e' stroke-width='2' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M6 14h19v7a8 8 0 0 1-8 8h-3a8 8 0 0 1-8-8z' fill='%23fff'/%3E%3Cpath d='M25 16h2.5a3.5 3.5 0 0 1 0 7H24' fill='none'/%3E%3Cpath d='M3 30h26' /%3E%3C/g%3E%3Cpath d='M15.5 24.5c-3-2.2-4.4-3.8-4.4-5.4a2.2 2.2 0 0 1 4.4-.7 2.2 2.2 0 0 1 4.4.7c0 1.6-1.4 3.2-4.4 5.4z' fill='%23ff6f9f'/%3E%3Cpath d='M12 11c-1.5-2 1.5-3 0-6M18 11c-1.5-2 1.5-3 0-6' fill='none' stroke='%23ffb3cb' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
 }
-:root[data-theme="maid-cafe"] .library-save-button { height: 46px; }
 
 :root[data-theme="maid-cafe"] .library-tabs { gap: 6px; border-bottom: 0; }
 :root[data-theme="maid-cafe"] .library-tab {
@@ -247,7 +246,7 @@
 }
 :root[data-theme="maid-cafe"] .diagnostics-search { border: 2px solid var(--border); border-radius: 999px; background: #fff; }
 :root[data-theme="maid-cafe"] :is(.library-search, .diagnostics-search) svg { color: var(--accent); }
-:root[data-theme="maid-cafe"] .library-search:focus-within { outline-color: var(--accent); }
+:root[data-theme="maid-cafe"] :is(.library-search, .diagnostics-search):focus-within { outline-color: var(--accent); }
 
 /* --- Surfaces: apron white with pink stitching just inside the edge. --- */
 :root[data-theme="maid-cafe"] :is(.panel, .settings-group, .modal) { border-radius: 20px; }
@@ -378,7 +377,8 @@
 :root[data-theme="maid-cafe"] .modal-backdrop { background: rgb(91 42 78 / 28%); }
 :root[data-theme="maid-cafe"] .metric { border: 2px solid var(--border); border-radius: 18px; background: #fff; }
 :root[data-theme="maid-cafe"] .metric strong { color: var(--accent-text); }
-:root[data-theme="maid-cafe"] .topbar h1 { color: var(--text-strong); font-size: 28px; }
+:root[data-theme="maid-cafe"] :is(.topbar, .share-header) h1 { color: var(--text-strong); font-size: 28px; }
+:root[data-theme="maid-cafe"] :is(.share-people, .share-stage, .share-intro) { border-radius: 20px; }
 :root[data-theme="maid-cafe"] .topbar h1::after { content: "✦"; margin-left: 6px; color: #ffc94d; font-size: 0.6em; vertical-align: 0.7em; }
 
 :root[data-theme="maid-cafe"] .library-empty-state h2 { color: var(--text-strong); font-size: 24px; }

@@ -80,9 +80,18 @@ async function probe(executable, fps, directory, seconds = 10, overrides = {}, c
     if (!before.captureReady || !before.engineRunning) throw Error(before.status || 'Capture not ready');
     const cpuStart = cpu();
     hooks.onMeasureStart?.();
+    const measureStartMs = performance.now();
     const samples = [];
+    const midSaves = [];
     for (let second = 0; second < seconds; ++second) {
       await delay(1000);
+      // hooks.saveAtSeconds: saves while the workload runs, to see what a save
+      // costs the game (offsets are from measurement start).
+      if ((hooks.saveAtSeconds || []).includes(second + 1)) {
+        const at = performance.now() - measureStartMs;
+        const save = await request({ type: 'saveClip', durationSeconds: 10, saveFolder: directory });
+        midSaves.push({ atMs: at, ms: performance.now() - measureStartMs - at, ok: !!save.ok });
+      }
       const diagnostics = await request({ type: 'getDiagnostics' });
       samples.push({ elapsed: (performance.now() - diagnosticStart) / 1000, diagnostics });
     }
@@ -90,11 +99,11 @@ async function probe(executable, fps, directory, seconds = 10, overrides = {}, c
     const after = await request({ type: 'getDiagnostics' });
     const diagnosticElapsed = (performance.now() - diagnosticStart) / 1000;
     result = { executable, startedAt, measuredFrom, measuredUntil: new Date().toISOString(), fps, elapsed, diagnosticElapsed, cpuCoreEquivalents: (cpuEnd.cpu - cpuStart.cpu) / elapsed,
-      before, after, samples, save: await request({ type: 'saveClip', durationSeconds: hooks.saveSeconds ?? 3, saveFolder: directory }) };
+      before, after, samples, midSaves, save: await request({ type: 'saveClip', durationSeconds: hooks.saveSeconds ?? 3, saveFolder: directory }) };
     if (!result.save.ok) throw Error(result.save.message);
     const decoded = spawnSync(path.join(root, 'node_modules/ffmpeg-static/ffmpeg.exe'),
       ['-v', 'error', '-nostdin', '-threads', '2', '-i', result.save.clip.filePath, '-an', '-f', 'null', '-'],
-      { windowsHide: true, encoding: 'utf8', timeout: 20000 });
+      { windowsHide: true, encoding: 'utf8', timeout: 120000 }); // A 2-minute 1440p clip takes ~17 s
     result.decode = { ok: decoded.status === 0, error: decoded.stderr };
     result.outputFps = (after.encoderOutputPackets - before.encoderOutputPackets) / diagnosticElapsed;
     result.queueDrops = after.encoderQueueDrops - before.encoderQueueDrops;

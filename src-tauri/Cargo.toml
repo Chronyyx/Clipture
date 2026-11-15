@@ -1,8 +1,10 @@
 [package]
 name = "clipture"
-version = "1.8.9"
+version = "1.9.0"
 description = "Low-footprint native host for Clipture"
 authors = ["Clipture"]
+# MIT with the Commons Clause condition; no SPDX expression covers it.
+license-file = "../LICENSE"
 edition = "2021"
 rust-version = "1.91"
 

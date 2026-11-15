@@ -25,11 +25,47 @@ target_compile_features(clipture_json_fields PUBLIC cxx_std_20)
 
 add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 
+# RNNoise as upstream builds it: the int8 network (DISABLE_DEBUG_FLOAT; the
+# float copy of the weights is a training/debug aid) with SSE4.1 or AVX2
+# kernels picked at run time (CPUID; MSVC defines no __SSE2__ on x64). The
+# float build streamed 11 MB of weights per 10 ms frame: about 1 ms of a Pro
+# Audio priority thread for every 10 ms of microphone.
+add_library(clipture_rnnoise STATIC
+  third_party/rnnoise/src/celt_lpc.c
+  third_party/rnnoise/src/denoise.c
+  third_party/rnnoise/src/kiss_fft.c
+  third_party/rnnoise/src/pitch.c
+  third_party/rnnoise/src/rnn.c
+  third_party/rnnoise/src/nnet.c
+  third_party/rnnoise/src/nnet_default.c
+  third_party/rnnoise/src/parse_lpcnet_weights.c
+  third_party/rnnoise/src/rnnoise_tables.c
+  third_party/rnnoise/src/rnnoise_data.c
+  third_party/rnnoise/src/x86/x86cpu.c
+  third_party/rnnoise/src/x86/x86_dnn_map.c
+  third_party/rnnoise/src/x86/nnet_sse4_1.c
+  third_party/rnnoise/src/x86/nnet_avx2.c
+)
+target_include_directories(clipture_rnnoise PUBLIC third_party/rnnoise/include PRIVATE third_party/rnnoise/src)
+if(MSVC)
+  target_compile_definitions(clipture_rnnoise PRIVATE
+    DISABLE_DEBUG_FLOAT RNN_ENABLE_X86_RTCD OPUS_X86_MAY_HAVE_SSE OPUS_X86_MAY_HAVE_SSE2
+    __SSE__ __SSE2__)
+  target_compile_options(clipture_rnnoise PRIVATE /W3)
+  set_property(SOURCE third_party/rnnoise/src/x86/nnet_sse4_1.c APPEND PROPERTY
+    COMPILE_DEFINITIONS __SSSE3__ __SSE4_1__)
+  set_property(SOURCE third_party/rnnoise/src/x86/nnet_avx2.c APPEND PROPERTY
+    COMPILE_DEFINITIONS __SSSE3__ __SSE4_1__ __FMA__)
+  set_property(SOURCE third_party/rnnoise/src/x86/nnet_avx2.c APPEND PROPERTY
+    COMPILE_OPTIONS /arch:AVX2)
+endif()
+
 add_executable(clipture_engine
   src/main.cpp
   src/AacEncoderSession.cpp
   src/AudioCaptureWorker.cpp
   src/AudioReplayCoordinator.cpp
+  src/AudioSessionWatcher.cpp
   src/CaptureBackend.cpp
   src/CaptureSession.cpp
   src/DesktopDuplicationBackend.cpp
@@ -75,19 +111,10 @@ add_executable(clipture_engine
   src/OverlayWindowCapture.cpp
   src/WgcCaptureBackend.cpp
   src/WgcFramePreparation.cpp
-  third_party/rnnoise/src/celt_lpc.c
-  third_party/rnnoise/src/denoise.c
-  third_party/rnnoise/src/kiss_fft.c
-  third_party/rnnoise/src/pitch.c
-  third_party/rnnoise/src/rnn.c
-  third_party/rnnoise/src/nnet.c
-  third_party/rnnoise/src/nnet_default.c
-  third_party/rnnoise/src/parse_lpcnet_weights.c
-  third_party/rnnoise/src/rnnoise_tables.c
-  third_party/rnnoise/src/rnnoise_data.c
 )
 
-target_include_directories(clipture_engine PRIVATE include ../third_party/nv-codec-headers/include third_party/rnnoise/include)
+
+target_include_directories(clipture_engine PRIVATE include ../third_party/nv-codec-headers/include)
 target_compile_features(clipture_engine PRIVATE cxx_std_20)
 target_compile_definitions(clipture_engine PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 
@@ -97,7 +124,7 @@ if(MSVC)
   target_compile_options(clipture_engine PRIVATE /W4 /permissive- /MP8)
 endif()
 
-target_link_libraries(clipture_engine PRIVATE clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject pdh ole32 oleaut32 taskschd shell32 avrt mfplat mfreadwrite mfuuid winmm user32 dwmapi bcrypt)
+target_link_libraries(clipture_engine PRIVATE clipture_rnnoise clipture_selection_trace clipture_json_fields dxgi d3d11 d3dcompiler windowsapp runtimeobject pdh ole32 oleaut32 taskschd shell32 avrt mfplat mfreadwrite mfuuid winmm user32 dwmapi bcrypt)
 
 if(BUILD_TESTING)
   add_executable(clipture_selection_trace_tests tests/FrameSelectionTraceTests.cpp)
@@ -115,6 +142,16 @@ if(BUILD_TESTING)
   target_include_directories(clipture_gpu_starvation_tests PRIVATE include)
   target_compile_features(clipture_gpu_starvation_tests PRIVATE cxx_std_20)
   add_test(NAME clipture_gpu_starvation COMMAND clipture_gpu_starvation_tests)
+  add_executable(clipture_gpu_raise_policy_tests tests/GpuRaisePolicyTests.cpp)
+  target_include_directories(clipture_gpu_raise_policy_tests PRIVATE include)
+  target_compile_features(clipture_gpu_raise_policy_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_gpu_raise_policy COMMAND clipture_gpu_raise_policy_tests)
+  add_executable(clipture_rnnoise_kernel_tests tests/audio/RnnoiseKernelTests.cpp)
+  target_link_libraries(clipture_rnnoise_kernel_tests PRIVATE clipture_rnnoise)
+  target_include_directories(clipture_rnnoise_kernel_tests PRIVATE third_party/rnnoise/src)
+  target_compile_definitions(clipture_rnnoise_kernel_tests PRIVATE DISABLE_DEBUG_FLOAT RNN_ENABLE_X86_RTCD)
+  target_compile_features(clipture_rnnoise_kernel_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_rnnoise_kernel COMMAND clipture_rnnoise_kernel_tests)
   add_executable(clipture_gpu_priority_memory_tests tests/GpuPriorityMemoryTests.cpp src/GpuPriorityMemory.cpp)
   target_include_directories(clipture_gpu_priority_memory_tests PRIVATE include)
   target_compile_features(clipture_gpu_priority_memory_tests PRIVATE cxx_std_20)
@@ -207,6 +244,25 @@ if(BUILD_TESTING)
   target_include_directories(clipture_loopback_silence_tests PRIVATE include)
   target_compile_features(clipture_loopback_silence_tests PRIVATE cxx_std_20)
   add_test(NAME clipture_loopback_silence COMMAND clipture_loopback_silence_tests)
+  add_executable(clipture_audio_session_watcher_tests tests/audio/AudioSessionWatcherTests.cpp src/AudioSessionWatcher.cpp)
+  target_include_directories(clipture_audio_session_watcher_tests PRIVATE include)
+  target_compile_features(clipture_audio_session_watcher_tests PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_audio_session_watcher_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_audio_session_watcher_tests PRIVATE ole32)
+  add_test(NAME clipture_audio_session_watcher COMMAND clipture_audio_session_watcher_tests)
+  add_executable(clipture_process_list_tests tests/ProcessListTests.cpp)
+  target_include_directories(clipture_process_list_tests PRIVATE include)
+  target_compile_features(clipture_process_list_tests PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_process_list_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  add_test(NAME clipture_process_list COMMAND clipture_process_list_tests)
+  add_executable(clipture_packets_in_flight_tests tests/PacketsInFlightSamplerTests.cpp
+    src/platform/windows/GpuAdapterFacts.cpp)
+  target_include_directories(clipture_packets_in_flight_tests PRIVATE include)
+  target_compile_features(clipture_packets_in_flight_tests PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_packets_in_flight_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_packets_in_flight_tests PRIVATE dxgi pdh)
+  add_test(NAME clipture_packets_in_flight COMMAND clipture_packets_in_flight_tests)
+  set_tests_properties(clipture_packets_in_flight PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20)
   add_executable(clipture_packet_tests
     tests/PacketArchitectureTests.cpp
     tests/audio/AudioMixerIntegrationTests.cpp
@@ -237,6 +293,34 @@ if(BUILD_TESTING)
   add_subdirectory(tests/replay)
 
   # Synthetic capture workload for frame-stability trials; never staged or shipped.
+  # Audio replay CPU bench (tools/audio-load-bench); never staged or shipped.
+  add_executable(clipture_audio_load_bench
+    tools/audio-load-bench/main.cpp
+    src/AacEncoderSession.cpp
+    src/AudioReplayCoordinator.cpp
+    src/ReplaySegmentStore.cpp
+    src/H264PacketAnalyzer.cpp
+    src/Mp4Muxer.cpp
+    src/replay/Mp4SamplePacker.cpp
+    src/replay/PayloadLayoutPlan.cpp
+    src/mux/PreparedVideoLayout.cpp
+    src/mux/InPlaceMp4Header.cpp
+    src/replay/InPlaceMediaBuffer.cpp
+    src/replay/InPlacePacketArchive.cpp
+    src/replay/ConsumedWindow.cpp
+    src/platform/windows/InPlaceFile.cpp
+  )
+  target_include_directories(clipture_audio_load_bench PRIVATE include)
+  target_compile_features(clipture_audio_load_bench PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_audio_load_bench PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_audio_load_bench PRIVATE clipture_selection_trace ole32 mfplat mfreadwrite mfuuid winmm)
+
+  # Bare WGC session (tools/capture-floor): the cost of capture itself.
+  add_executable(clipture_capture_floor tools/capture-floor/main.cpp)
+  target_compile_features(clipture_capture_floor PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_capture_floor PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_capture_floor PRIVATE d3d11 dxgi windowsapp)
+
   add_executable(clipture_stress_window
     tools/stress-window/main.cpp
     tools/stress-window/StressRenderer.cpp

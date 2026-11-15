@@ -29,6 +29,9 @@ pub fn open_main(app: &AppHandle) -> AppResult<()> {
             .inner_size(1240.0, 780.0)
             .min_inner_size(980.0, 640.0)
             .visible(false)
+            // Aero clears its background so the desktop shows round its shell;
+            // every other theme paints the window opaque.
+            .transparent(true)
             .on_page_load(|window, payload| {
                 #[cfg(debug_assertions)]
                 if payload.event() == tauri::webview::PageLoadEvent::Finished {

@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -72,6 +73,13 @@ public:
     bool nvencRuntimeLoaded() const;
     int framesAccepted() const;
     int framesEncoded() const;
+    // NVENC sessions set up so far; each one allocates its surfaces anew.
+    uint64_t encoderSetups() const;
+    // The GPU reported the encoder's device removed (driver reset): 0 while fine.
+    long deviceRemovedHr() const;
+    // Called on the encode thread just before an NVENC session is set up.
+    // Set before start().
+    void setSetupObserver(std::function<void()> observer);
     int queuedEncodeFrames() const;
     int queuedFreshEncodeFrames() const;
     int queuedRepeatEncodeFrames() const;
@@ -155,6 +163,9 @@ private:
     std::atomic<bool> nvencRuntimeLoaded_ = false;
     std::atomic<int> framesAccepted_ = 0;
     std::atomic<int> framesEncoded_ = 0;
+    std::atomic<uint64_t> encoderSetups_ = 0;
+    std::atomic<long> deviceRemovedHr_ = 0;
+    std::function<void()> setupObserver_;
     std::atomic<int> schedulerDroppedFrames_ = 0;
     std::atomic<int> schedulerRepeatedFrames_ = 0;
     std::atomic<uint64_t> presentLatchWaits_ = 0;

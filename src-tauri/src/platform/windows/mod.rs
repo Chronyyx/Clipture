@@ -15,8 +15,10 @@ mod reveal;
 mod system_info;
 mod terminate;
 mod wave_sound;
+mod window_region;
 
 pub(crate) use caption::style_main_caption;
+pub(crate) use window_region::{hide_window_border, set_window_region};
 pub(crate) use move_file::move_file;
 pub(crate) use replace_file::replace_file;
 pub(crate) use shortcut::{shortcut_target, write_shortcut};

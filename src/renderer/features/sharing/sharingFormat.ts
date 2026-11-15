@@ -20,5 +20,5 @@ export function codeGroups(code: string) {
 }
 
 export function possessive(name: string) {
-  return name.endsWith("s") ? `${name}'` : `${name}'s`;
+  return name.endsWith("s") ? `${name}’` : `${name}’s`;
 }

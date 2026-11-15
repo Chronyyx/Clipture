@@ -16,6 +16,10 @@
     { "type": "configure", "fields": ["fps", "bitrateMbps", "nvencPreset", "clipLengthSeconds", "monitorId", "targetWidth", "targetHeight", "includeMixedAudio", "includeSystemAudio", "includeMicrophoneAudio", "captureGameAudio", "captureForegroundSystemAudio", "appAudioProcesses", "systemAudioProcesses", "micVolume", "micIsolation", "micIsolationWeight", "noiseGateEnabled", "autoNoiseGate", "noiseGateThreshold", "noiseGateDebounceMs", "micDeviceId", "micDeviceMatchKey", "micDeviceName", "saveInPlace", "saveFolder", "gpuPriorityBoost", "gpuPriorityMemoryPath"] },
     { "type": "saveClip", "fields": ["durationSeconds", "saveFolder", "analyzeIo"] }
   ],
+  "tauriCommands": [
+    { "type": "getProgress", "fields": [] },
+    { "type": "getDiagnostics", "fields": ["gpuUsage"] }
+  ],
   "events": [
     { "event": "hotkey", "fields": ["source"] }
   ],
@@ -30,6 +34,7 @@
     } } },
     "request": { "id": 1, "type": "getDiagnostics" },
     "success": { "id": 1, "payload": { "engineRunning": true } },
+    "progress": { "id": 4, "payload": { "engineRunning": true, "encoderOutputPackets": 1200, "encoderAcceptedFrames": 1201, "nvencInFlightFrames": 1, "queuedFrames": 0, "gpuSchedulingClass": "normal" } },
     "error": { "id": 2, "error": "Synthetic fixture error." },
     "event": { "event": "hotkey", "source": "fixture" }
   }

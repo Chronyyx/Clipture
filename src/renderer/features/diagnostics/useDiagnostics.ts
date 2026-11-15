@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useState } from 'react';
 import { clipture } from '../../platform';
+import { startVisibleInterval } from '../../shared/visibleInterval';
 import { diagnosticsSnapshot, initialDiagnosticsSnapshot } from './diagnosticsSnapshot';
 
 export function useDiagnostics(onNotice: (message: string, durationMs?: number) => void) {
@@ -20,8 +21,9 @@ export function useDiagnostics(onNotice: (message: string, durationMs?: number) 
       finally { pending = false; }
     };
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 2000);
-    return () => { active = false; window.clearInterval(timer); };
+    // Paused while the window is minimized; nothing reads it then.
+    const stop = startVisibleInterval(() => void refresh(), 2000);
+    return () => { active = false; stop(); };
   }, []);
 
   async function exportDiagnostics() {

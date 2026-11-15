@@ -1,4 +1,5 @@
 #include "clipture/Engine.hpp"
+#include "clipture/ProcessVerdictCache.hpp"
 #include "clipture/replay/BackfillPace.hpp"
 #include "clipture/platform/ThreadName.hpp"
 #include "clipture/platform/windows/AdminHotkeyRelay.hpp"
@@ -30,6 +31,7 @@
 #include <iomanip>
 #include <memory>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <regex>
@@ -46,6 +48,18 @@
 
 namespace clipture {
 namespace {
+
+// The whole-system loopback and the microphone feed only their own tracks
+// (and the mixed track); with those off they are not captured at all.
+bool coreSystemAudioNeeded(const clipture::EngineSettings& settings) {
+    return settings.includeSystemAudio || settings.includeMixedAudio;
+}
+bool coreMicrophoneNeeded(const clipture::EngineSettings& settings) {
+    return settings.includeMicrophoneAudio || settings.includeMixedAudio;
+}
+
+// Distinct from a crash in the host log: the GPU removed a device (driver reset).
+constexpr UINT kDeviceRemovedExitCode = 75;
 
 // How long an app keeps its track capture after its audio session goes quiet.
 constexpr auto kAutoAppGrace = std::chrono::seconds(30);
@@ -267,14 +281,29 @@ std::string extractQuotedField(const std::string& text, const std::string& field
 
 struct GameInstall {
     std::string name;
-    std::filesystem::path root;
+    // Lower-case normalized install folder with a trailing separator, compared
+    // as a prefix; empty when the folder is unknown.
+    std::string rootPrefix;
+    // Length of the folder as its manifest wrote it: the longest match wins.
+    std::size_t rootLength = 0;
 };
 
-bool pathStartsWith(const std::filesystem::path& child, const std::filesystem::path& parent) {
-    const auto childText = lowerAscii(child.lexically_normal().string());
-    auto parentText = lowerAscii(parent.lexically_normal().string());
-    if (!parentText.empty() && parentText.back() != '/' && parentText.back() != '\\') parentText.push_back('\\');
-    return childText.rfind(parentText, 0) == 0;
+// Normalized once per path; matching runs for every process and game.
+std::string comparablePath(const std::filesystem::path& path) {
+    try {
+        return lowerAscii(path.lexically_normal().string());
+    } catch (const std::exception&) {
+        return {};  // not representable in the process code page
+    }
+}
+
+GameInstall makeGameInstall(std::string name, const std::filesystem::path& root) {
+    GameInstall install { std::move(name), comparablePath(root), 0 };
+    if (!install.rootPrefix.empty()) {
+        if (install.rootPrefix.back() != '/' && install.rootPrefix.back() != '\\') install.rootPrefix.push_back('\\');
+        try { install.rootLength = root.string().size(); } catch (const std::exception&) { install.rootPrefix.clear(); }
+    }
+    return install;
 }
 
 std::vector<std::filesystem::path> steamLibraries() {
@@ -295,11 +324,7 @@ std::vector<std::filesystem::path> steamLibraries() {
 }
 
 std::vector<GameInstall> scanInstalledGames() {
-    static std::vector<GameInstall> cachedGames;
-    static bool hasScanned = false;
-    if (hasScanned) return cachedGames;
-    hasScanned = true;
-
+    std::vector<GameInstall> cachedGames;
     for (const auto& library : steamLibraries()) {
         const auto steamApps = library / "steamapps";
         std::error_code ignored;
@@ -309,7 +334,9 @@ std::vector<GameInstall> scanInstalledGames() {
             const auto text = readTextFile(entry.path());
             const auto name = extractQuotedField(text, "name");
             const auto installDir = extractQuotedField(text, "installdir");
-            if (!name.empty() && !installDir.empty()) cachedGames.push_back({ name, steamApps / "common" / installDir });
+            if (!name.empty() && !installDir.empty()) {
+                cachedGames.push_back(makeGameInstall(name, steamApps / "common" / installDir));
+            }
         }
     }
 
@@ -323,27 +350,34 @@ std::vector<GameInstall> scanInstalledGames() {
             const auto text = readTextFile(entry.path());
             const auto name = extractQuotedField(text, "DisplayName");
             const auto installLocation = extractQuotedField(text, "InstallLocation");
-            if (!name.empty() && !installLocation.empty()) cachedGames.push_back({ name, installLocation });
+            if (!name.empty() && !installLocation.empty()) {
+                cachedGames.push_back(makeGameInstall(name, installLocation));
+            }
         }
     }
     return cachedGames;
 }
 
+// Scanned once per engine run.
+const std::vector<GameInstall>& installedGames() {
+    static const std::vector<GameInstall> games = scanInstalledGames();
+    return games;
+}
+
 std::string detectInstalledGameByPath(const std::string& processPath) {
     if (processPath.empty()) return {};
-    const std::filesystem::path path(processPath);
-    const auto games = scanInstalledGames();
+    const auto path = comparablePath(std::filesystem::path(processPath));
+    if (path.empty()) return {};
     std::size_t bestLength = 0;
-    std::string bestName;
-    for (const auto& game : games) {
-        if (game.root.empty() || !pathStartsWith(path, game.root)) continue;
-        const auto length = game.root.string().size();
-        if (length > bestLength) {
-            bestLength = length;
-            bestName = game.name;
+    const std::string* bestName = nullptr;
+    for (const auto& game : installedGames()) {
+        if (game.rootPrefix.empty() || !path.starts_with(game.rootPrefix)) continue;
+        if (game.rootLength > bestLength) {
+            bestLength = game.rootLength;
+            bestName = &game.name;
         }
     }
-    return bestName;
+    return bestName ? *bestName : std::string();
 }
 
 std::string friendlyProcessName(const std::string& processName) {
@@ -532,8 +566,28 @@ bool isKnownGameProcess(const std::string& exeName, const std::string& processPa
     return false;
 }
 
-std::pair<std::string, bool> detectForegroundAppInfo(HMONITOR activeMonitor = nullptr) {
-    HWND window = GetForegroundWindow();
+// The window in front and its process. A detection pass reads it once and
+// every check in the pass uses that one reading.
+struct ForegroundProcess {
+    HWND window = nullptr;
+    DWORD processId = 0;
+    std::string path;
+    std::string exeName;
+};
+
+ForegroundProcess readForegroundProcess() {
+    ForegroundProcess foreground;
+    foreground.window = GetForegroundWindow();
+    if (!foreground.window) return foreground;
+    GetWindowThreadProcessId(foreground.window, &foreground.processId);
+    foreground.path = RunningProcessSnapshot::queryProcessPath(foreground.processId);
+    const auto slash = foreground.path.find_last_of("\\/");
+    foreground.exeName = slash == std::string::npos ? foreground.path : foreground.path.substr(slash + 1);
+    return foreground;
+}
+
+std::pair<std::string, bool> detectForegroundAppInfo(const ForegroundProcess& foreground, HMONITOR activeMonitor) {
+    const HWND window = foreground.window;
     if (!window) return {"Foreground app", false};
 
     if (activeMonitor) {
@@ -543,20 +597,8 @@ std::pair<std::string, bool> detectForegroundAppInfo(HMONITOR activeMonitor = nu
         }
     }
 
-    DWORD processId = 0;
-    GetWindowThreadProcessId(window, &processId);
-    std::string processPath;
-    if (processId != 0) {
-        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
-        if (process) {
-            wchar_t path[MAX_PATH] {};
-            DWORD size = MAX_PATH;
-            if (QueryFullProcessImageNameW(process, 0, path, &size) && size > 0) {
-                processPath = narrowWide(path);
-            }
-            CloseHandle(process);
-        }
-    }
+    const DWORD processId = foreground.processId;
+    const std::string& processPath = foreground.path;
 
     if (!processPath.empty()) {
         const auto installedGame = detectInstalledGameByPath(processPath);
@@ -601,53 +643,67 @@ bool experimentalGameWindowCaptureEnabled() {
     return enabled;
 }
 
-ForegroundGameCaptureTarget detectForegroundGameCaptureTarget(HMONITOR activeMonitor) {
-    HWND window = GetForegroundWindow();
+// `isKnownGame`: the foreground process is a known game (see the detection loop).
+ForegroundGameCaptureTarget detectForegroundGameCaptureTarget(
+    const ForegroundProcess& foreground,
+    bool isKnownGame,
+    HMONITOR activeMonitor) {
+    const HWND window = foreground.window;
     if (!window || !IsWindowVisible(window) || IsIconic(window)) return {};
 
     if (activeMonitor) {
         const HMONITOR windowMonitor = MonitorFromWindow(window, MONITOR_DEFAULTTONULL);
         if (windowMonitor && windowMonitor != activeMonitor) return {};
     }
-
-    DWORD processId = 0;
-    GetWindowThreadProcessId(window, &processId);
-    if (processId == 0) return {};
-
-    const auto processPath = RunningProcessSnapshot::queryProcessPath(processId);
-    if (processPath.empty()) return {};
-
-    const auto exeName = std::filesystem::path(processPath).filename().string();
-    if (isIgnoredForegroundProcess(exeName) ||
-        !isKnownGameProcess(exeName, processPath, processId, window)) {
-        return {};
-    }
-    return { window, getGameName(exeName) };
+    if (!isKnownGame) return {};
+    return { window, getGameName(foreground.exeName) };
 }
 
 // GPU priority needs the game even when no audio option runs the detection
 // pass (ADR 0029): the known game in front, and the name of every running
 // process. Only a game that once starved recording matches the per-game memory,
 // and a raised game only needs to be found by name.
-void detectGamesForGpuPriority(std::string& foregroundGameExe, std::vector<std::string>& runningExes) {
-    HWND window = GetForegroundWindow();
-    DWORD processId = 0;
-    if (window && foregroundGameExe.empty()) GetWindowThreadProcessId(window, &processId);
-    if (processId != 0) {
-        const auto processPath = RunningProcessSnapshot::queryProcessPath(processId);
-        if (!processPath.empty()) {
-            const auto exeName = std::filesystem::path(processPath).filename().string();
-            if (!isIgnoredForegroundProcess(exeName) && isKnownGameProcess(exeName, processPath, processId, window)) {
-                foregroundGameExe = exeName;
-            }
-        }
-    }
-    const auto snapshot = RunningProcessSnapshot::captureNameOnly();
+void detectGamesForGpuPriority(
+    const ForegroundProcess& foreground,
+    bool foregroundIsKnownGame,
+    const RunningProcessSnapshot& processes,
+    std::string& foregroundGameExe,
+    std::vector<std::string>& runningExes) {
+    if (foregroundGameExe.empty() && foregroundIsKnownGame) foregroundGameExe = foreground.exeName;
     std::unordered_set<std::string> seen;
-    for (const auto& entry : snapshot.entries()) {
+    for (const auto& entry : processes.entries()) {
         if (seen.insert(entry.lowerExeName).second) runningExes.push_back(entry.exeName);
     }
 }
+
+// Lower-case process names of a list of audio source specs, for testing many
+// process names against the same list.
+class ProcessNameSet {
+public:
+    explicit ProcessNameSet(const std::vector<std::string>& sourceSpecs) {
+        for (const auto& sourceSpec : sourceSpecs) names_.insert(lowerAscii(captureProcessName(sourceSpec)));
+    }
+
+    // As containsProcessName(): a process without a name counts as listed.
+    bool contains(const std::string& lowerExeName) const {
+        return lowerExeName.empty() || names_.contains(lowerExeName);
+    }
+
+private:
+    std::unordered_set<std::string> names_;
+};
+
+// Whether a process is a game, remembered while it runs (ProcessVerdictCache).
+struct GameVerdict {
+    enum class Kind { NotGame, Game, Unreadable };
+    Kind kind = Kind::NotGame;
+    // Unreadable: when to ask for the path again.
+    std::chrono::steady_clock::time_point retryAt {};
+};
+
+// A process whose path could not be read is asked again this often: its
+// protection can change after it starts.
+constexpr auto kUnreadablePathRetry = std::chrono::seconds(30);
 std::pair<int, int> parseResolution(const std::string& resolution) {
     const auto marker = resolution.find('x');
     if (marker == std::string::npos) return { 1920, 1080 };
@@ -813,7 +869,13 @@ Engine::Engine()
           frameQueue_,
           videoPackets_,
           videoReplayStore_.get())),
-      audioCaptureWorker_(std::make_unique<AudioCaptureWorker>(audioPackets_, audioReplayCoordinator_.get())) {}
+      audioCaptureWorker_(std::make_unique<AudioCaptureWorker>(
+          audioPackets_,
+          audioReplayCoordinator_.get(),
+          &processSnapshotFeed_)) {
+    // NVENC allocates at setup; never let that happen at realtime.
+    encoderWorker_->setSetupObserver([this] { gpuPriority_.encoderSetupStarting(); });
+}
 
 Engine::~Engine() {
     gameDetectionRunning_ = false;
@@ -821,6 +883,7 @@ Engine::~Engine() {
     if (gameDetectionThread_.joinable()) {
         gameDetectionThread_.join();
     }
+    audioSessionWatcher_.reset();
     if (audioCaptureWorker_) audioCaptureWorker_->stop();
     if (audioReplayCoordinator_) audioReplayCoordinator_->stop();
     if (captureSession_) captureSession_->stop();
@@ -867,10 +930,9 @@ void Engine::refreshAudioRouting() {
 // The foreground game's name when it runs as administrator, which keeps this
 // engine's hotkey from seeing its keys. A full-screen window this engine may
 // not even query (anti-cheat) counts too, named by its title.
-static std::string foregroundAdminGame(const std::string& name, bool isGame) {
-    const HWND window = GetForegroundWindow();
-    DWORD processId = 0;
-    if (!window || !GetWindowThreadProcessId(window, &processId) || !platform::runsAboveCurrentProcess(processId)) return {};
+static std::string foregroundAdminGame(const ForegroundProcess& foreground, const std::string& name, bool isGame) {
+    const HWND window = foreground.window;
+    if (!window || foreground.processId == 0 || !platform::runsAboveCurrentProcess(foreground.processId)) return {};
     if (isGame) return name;
     RECT bounds {};
     MONITORINFO monitor { sizeof(monitor) };
@@ -898,13 +960,52 @@ void Engine::gameDetectionLoop() {
     if (audioCaptureWorker_) audioCaptureWorker_->startConfiguredAppSources();
 
     std::size_t detectionPasses = 0;
+    // Foreground, GPU priority and device checks keep a fixed cadence (GPU
+    // priority counts passes); an audio session change reruns only the audio
+    // source pass, at once.
+    constexpr auto kFullPassInterval = std::chrono::seconds(2);
+    constexpr auto kMinAudioPassSpacing = std::chrono::milliseconds(100);
+    auto nextFullPass = std::chrono::steady_clock::now();
+    // A full pass lists the running processes once and publishes the list; an
+    // audio-only pass reuses it while it still names every sounding process.
+    ProcessSnapshotFeed::Snapshot processList;
+    ProcessVerdictCache<GameVerdict> gameVerdicts;
     while (gameDetectionRunning_) {
-        {
+        const auto passStartedAt = std::chrono::steady_clock::now();
+        const bool fullPass = passStartedAt >= nextFullPass;
+        const bool audioPass = (settings_.captureGameAudio || settings_.captureForegroundSystemAudio) && audioCaptureWorker_;
+        ForegroundProcess foreground;
+        bool foregroundIsKnownGame = false;
+        if (fullPass || audioPass) {
+            foreground = readForegroundProcess();
+            foregroundIsKnownGame = !foreground.path.empty() && !isIgnoredForegroundProcess(foreground.exeName) &&
+                isKnownGameProcess(foreground.exeName, foreground.path, foreground.processId, foreground.window);
+        }
+        // Read once per pass, when first needed.
+        std::optional<std::vector<DWORD>> soundingIdsOfPass;
+        const auto soundingIds = [&]() -> const std::vector<DWORD>& {
+            if (!soundingIdsOfPass) soundingIdsOfPass = soundingAudioProcessIds();
+            return *soundingIdsOfPass;
+        };
+        if (fullPass) {
+            processList = processSnapshotFeed_.publish(RunningProcessSnapshot::captureNameOnly());
+        } else if (audioPass) {
+            const auto& sounding = soundingIds();
+            const bool listNamesThem = processList &&
+                std::all_of(sounding.begin(), sounding.end(), [&](DWORD processId) {
+                    return findProcessInfo(*processList, processId) != nullptr;
+                });
+            if (!listNamesThem) processList = processSnapshotFeed_.publish(RunningProcessSnapshot::captureNameOnly());
+        }
+        if (fullPass) {
             HMONITOR activeMonitor = captureSession_ ? static_cast<HMONITOR>(captureSession_->activeMonitor()) : nullptr;
-            auto [fgApp, fgIsGame] = detectForegroundAppInfo(activeMonitor);
-            if (adminHotkeyRelay_) adminHotkeyRelay_->observeForegroundGame(foregroundAdminGame(fgApp, fgIsGame));
+            auto [fgApp, fgIsGame] = detectForegroundAppInfo(foreground, activeMonitor);
+            if (adminHotkeyRelay_) {
+                adminHotkeyRelay_->observeForegroundGame(foregroundAdminGame(foreground, fgApp, fgIsGame));
+            }
             if (experimentalGameWindowCaptureEnabled()) {
-                const auto gameCaptureTarget = detectForegroundGameCaptureTarget(activeMonitor);
+                const auto gameCaptureTarget =
+                    detectForegroundGameCaptureTarget(foreground, foregroundIsKnownGame, activeMonitor);
                 if (captureSession_ && gameCaptureTarget.window) {
                     captureSession_->preferGameWindow(gameCaptureTarget.window, gameCaptureTarget.name);
                     activeGameCaptureWindow_ = gameCaptureTarget.window;
@@ -919,7 +1020,8 @@ void Engine::gameDetectionLoop() {
                 activeGameCaptureWindow_ = nullptr;
             } else if (captureSession_ && capturePipelinePolicy().hybridGameCapture) {
                 // The backend decides per frame whether the window covers the monitor.
-                const auto gameCaptureTarget = detectForegroundGameCaptureTarget(activeMonitor);
+                const auto gameCaptureTarget =
+                    detectForegroundGameCaptureTarget(foreground, foregroundIsKnownGame, activeMonitor);
                 if (gameCaptureTarget.window) {
                     hybridGameWindow_ = gameCaptureTarget.window;
                 } else if (hybridGameWindow_ && !IsWindow(static_cast<HWND>(hybridGameWindow_))) {
@@ -942,10 +1044,13 @@ void Engine::gameDetectionLoop() {
         // The game in front and every running game, for GPU priority.
         std::string foregroundGameExe;
         std::vector<std::string> runningGameExes;
-        if ((settings_.captureGameAudio || settings_.captureForegroundSystemAudio) && audioCaptureWorker_) {
-            const auto detectionStartedAt = std::chrono::steady_clock::now();
-            const auto processSnapshot = RunningProcessSnapshot::captureNameOnly();
-            std::size_t pathQueries = 0;
+        if (audioPass) {
+            // Timed from the start of the pass: the process list is part of it.
+            const auto detectionStartedAt = passStartedAt;
+            const RunningProcessSnapshot& processSnapshot = *processList;
+            const ProcessNameSet appAudioNames(settings_.appAudioProcesses);
+            const ProcessNameSet systemAudioNames(settings_.systemAudioProcesses);
+            std::size_t pathQueries = foreground.processId != 0 ? 1 : 0;
             std::vector<std::string> dynamicSources;
             std::vector<std::string> detectedGames;
             std::vector<std::string> foregroundSystemApps;
@@ -1005,70 +1110,58 @@ void Engine::gameDetectionLoop() {
                 gameCandidates.push_back({ processId, exeName, getGameName(exeName) });
             };
             
-            HWND foreground = GetForegroundWindow();
-            if (foreground) {
-                DWORD fgPid = 0;
-                GetWindowThreadProcessId(foreground, &fgPid);
-                if (fgPid > 0) {
-                    ++pathQueries;
-                    const auto narrowPath = RunningProcessSnapshot::queryProcessPath(fgPid);
-                    if (!narrowPath.empty()) {
-                        auto slashPos = narrowPath.find_last_of("\\/");
-                        std::string fgExeName = (slashPos != std::string::npos) ? narrowPath.substr(slashPos + 1) : narrowPath;
+            if (!foreground.path.empty() && !isIgnoredForegroundProcess(foreground.exeName)) {
+                const DWORD fgPid = foreground.processId;
+                const std::string& fgExeName = foreground.exeName;
+                const bool isGame = foregroundIsKnownGame;
+                if (isGame) foregroundGameExe = fgExeName;
+                if (settings_.captureGameAudio && isGame &&
+                    !containsProcessName(settings_.appAudioProcesses, fgExeName) &&
+                    !containsProcessName(settings_.systemAudioProcesses, fgExeName) &&
+                    !std::any_of(gameCandidates.begin(), gameCandidates.end(), [&](const GameCaptureCandidate& candidate) {
+                        return candidate.processId == fgPid;
+                    })) {
+                    rememberGameCandidate(fgPid, fgExeName);
+                } else if (settings_.captureForegroundSystemAudio && !isGame &&
+                    !containsProcessName(settings_.appAudioProcesses, fgExeName) &&
+                    !containsProcessName(settings_.systemAudioProcesses, fgExeName)) {
+                    const auto foregroundSpec = appPidSourceSpec(fgPid, fgExeName);
+                    const auto foregroundSource = foregroundSpec.empty() ? fgExeName : foregroundSpec;
+                    rememberForegroundSystemSource(foregroundSource);
+                    dynamicTrackAliases[sourceIdForProcessSpec(foregroundSource)] = "system-loopback-pcm";
+                    foregroundSystemApps.push_back(fgExeName);
 
-                        if (!isIgnoredForegroundProcess(fgExeName)) {
-                            const bool isGame = isKnownGameProcess(fgExeName, narrowPath, fgPid, foreground);
-                            if (isGame) foregroundGameExe = fgExeName;
-                            if (settings_.captureGameAudio && isGame &&
-                                !containsProcessName(settings_.appAudioProcesses, fgExeName) &&
-                                !containsProcessName(settings_.systemAudioProcesses, fgExeName) &&
-                                !std::any_of(gameCandidates.begin(), gameCandidates.end(), [&](const GameCaptureCandidate& candidate) {
-                                    return candidate.processId == fgPid;
-                                })) {
-                                rememberGameCandidate(fgPid, fgExeName);
-                            } else if (settings_.captureForegroundSystemAudio && !isGame &&
-                                !containsProcessName(settings_.appAudioProcesses, fgExeName) &&
-                                !containsProcessName(settings_.systemAudioProcesses, fgExeName)) {
-                                const auto foregroundSpec = appPidSourceSpec(fgPid, fgExeName);
-                                const auto foregroundSource = foregroundSpec.empty() ? fgExeName : foregroundSpec;
-                                rememberForegroundSystemSource(foregroundSource);
-                                dynamicTrackAliases[sourceIdForProcessSpec(foregroundSource)] = "system-loopback-pcm";
-                                foregroundSystemApps.push_back(fgExeName);
-
-                                for (const auto audioProcessId : activeAudioSessionProcessIds()) {
-                                    if (audioProcessId == fgPid) continue;
-                                    const auto* audioProcess = findProcessInfo(processSnapshot, audioProcessId);
-                                    if (!audioProcess || audioProcess->exeName.empty()) continue;
-                                    if (isIgnoredForegroundProcess(audioProcess->exeName) ||
-                                        containsProcessName(settings_.appAudioProcesses, audioProcess->exeName) ||
-                                        containsProcessName(settings_.systemAudioProcesses, audioProcess->exeName)) {
-                                        continue;
-                                    }
-
-                                    const bool relatedByTree =
-                                        processHasAncestor(processSnapshot, audioProcessId, fgPid) ||
-                                        processHasAncestor(processSnapshot, fgPid, audioProcessId);
-                                    const bool alreadyCoveredByForegroundTree =
-                                        processHasAncestor(processSnapshot, audioProcessId, fgPid);
-                                    const bool relatedBySameExe = lowerAscii(audioProcess->exeName) == lowerAscii(fgExeName);
-                                    const bool alreadyCoveredByName = containsProcessName(dynamicSources, audioProcess->exeName);
-                                    if (alreadyCoveredByForegroundTree) continue;
-                                    if (alreadyCoveredByName && (!relatedBySameExe || relatedByTree)) continue;
-                                    const bool relatedToForeground = relatedByTree || relatedBySameExe;
-                                    if (!relatedToForeground) continue;
-
-                                    const auto helperSpec = appPidSourceSpec(audioProcessId, audioProcess->exeName);
-                                    if (helperSpec.empty()) continue;
-                                    rememberForegroundSystemSource(helperSpec);
-                                    dynamicTrackAliases[sourceIdForProcessSpec(helperSpec)] = "system-loopback-pcm";
-                                    foregroundSystemApps.push_back(audioProcess->exeName);
-                                }
-                            }
+                    for (const auto audioProcessId : soundingIds()) {
+                        if (audioProcessId == fgPid) continue;
+                        const auto* audioProcess = findProcessInfo(processSnapshot, audioProcessId);
+                        if (!audioProcess || audioProcess->exeName.empty()) continue;
+                        if (isIgnoredForegroundProcess(audioProcess->exeName) ||
+                            containsProcessName(settings_.appAudioProcesses, audioProcess->exeName) ||
+                            containsProcessName(settings_.systemAudioProcesses, audioProcess->exeName)) {
+                            continue;
                         }
+
+                        const bool relatedByTree =
+                            processHasAncestor(processSnapshot, audioProcessId, fgPid) ||
+                            processHasAncestor(processSnapshot, fgPid, audioProcessId);
+                        const bool alreadyCoveredByForegroundTree =
+                            processHasAncestor(processSnapshot, audioProcessId, fgPid);
+                        const bool relatedBySameExe = lowerAscii(audioProcess->exeName) == lowerAscii(fgExeName);
+                        const bool alreadyCoveredByName = containsProcessName(dynamicSources, audioProcess->exeName);
+                        if (alreadyCoveredByForegroundTree) continue;
+                        if (alreadyCoveredByName && (!relatedBySameExe || relatedByTree)) continue;
+                        const bool relatedToForeground = relatedByTree || relatedBySameExe;
+                        if (!relatedToForeground) continue;
+
+                        const auto helperSpec = appPidSourceSpec(audioProcessId, audioProcess->exeName);
+                        if (helperSpec.empty()) continue;
+                        rememberForegroundSystemSource(helperSpec);
+                        dynamicTrackAliases[sourceIdForProcessSpec(helperSpec)] = "system-loopback-pcm";
+                        foregroundSystemApps.push_back(audioProcess->exeName);
                     }
                 }
             }
-            
+
             if (settings_.captureGameAudio) {
                 static const std::unordered_set<std::string> kSystemExes = {
                     "svchost.exe", "conhost.exe", "csrss.exe", "services.exe", "lsass.exe",
@@ -1079,11 +1172,16 @@ void Engine::gameDetectionLoop() {
                     "explorer.exe", "searchindexer.exe", "wudfhost.exe"
                 };
 
+                // A process's executable does not change while it runs, so each
+                // process is asked for its path and matched against the
+                // installed games once, not on every pass.
+                const auto sweepStartedAt = std::chrono::steady_clock::now();
+                gameVerdicts.beginPass();
                 for (const auto& entry : processSnapshot.entries()) {
                     const auto& exeName = entry.exeName;
-                    if (kSystemExes.contains(lowerAscii(exeName)) ||
-                        containsProcessName(settings_.appAudioProcesses, exeName) ||
-                        containsProcessName(settings_.systemAudioProcesses, exeName) ||
+                    if (kSystemExes.contains(entry.lowerExeName) ||
+                        appAudioNames.contains(entry.lowerExeName) ||
+                        systemAudioNames.contains(entry.lowerExeName) ||
                         std::any_of(gameCandidates.begin(), gameCandidates.end(), [&](const GameCaptureCandidate& candidate) {
                             return candidate.processId == entry.processId;
                         })) {
@@ -1091,18 +1189,60 @@ void Engine::gameDetectionLoop() {
                     }
 
                     bool isGame = false;
-                    ++pathQueries;
-                    const auto processPath = RunningProcessSnapshot::queryProcessPath(entry.processId);
-                    if (!processPath.empty()) {
-                        isGame = isKnownGameProcess(exeName, processPath, entry.processId);
+                    const auto classify = [&] {
+                        ++pathQueries;
+                        const auto processPath = RunningProcessSnapshot::queryProcessPath(entry.processId);
+                        if (processPath.empty()) return GameVerdict::Kind::Unreadable;
+                        return isKnownGameProcess(exeName, processPath, entry.processId)
+                            ? GameVerdict::Kind::Game
+                            : GameVerdict::Kind::NotGame;
+                    };
+                    if (entry.lowerExeName == "robloxplayerbeta.exe") {
+                        // Roblox counts as a game only while its window is up.
+                        isGame = classify() == GameVerdict::Kind::Game;
+                    } else if (const auto* known =
+                                   gameVerdicts.find(entry.processId, entry.parentProcessId, entry.lowerExeName);
+                               known && (known->kind != GameVerdict::Kind::Unreadable || sweepStartedAt < known->retryAt)) {
+                        isGame = known->kind == GameVerdict::Kind::Game;
+                    } else {
+                        const auto kind = classify();
+                        isGame = kind == GameVerdict::Kind::Game;
+                        gameVerdicts.store(entry.processId, entry.parentProcessId, entry.lowerExeName,
+                            { kind, sweepStartedAt + kUnreadablePathRetry });
                     }
 
                     if (isGame) {
                         rememberGameCandidate(entry.processId, exeName);
                     }
                 }
+                gameVerdicts.endPass();
 
                 for (const auto& candidate : gameCandidates) runningGameExes.push_back(candidate.exeName);
+
+                const auto now = std::chrono::steady_clock::now();
+                const DWORD selfProcessId = GetCurrentProcessId();
+                const auto& audioSessionProcessIds = soundingIds();
+                auto insideGame = [&](DWORD processId) {
+                    return std::any_of(gameCandidates.begin(), gameCandidates.end(), [&](const GameCaptureCandidate& game) {
+                        return processId == game.processId ||
+                            processHasAncestor(processSnapshot, processId, game.processId) ||
+                            processHasAncestor(processSnapshot, game.processId, processId);
+                    });
+                };
+                // Sounding processes inside a game stay bound through quiet
+                // stretches, so a silent moment does not rebind the game track.
+                for (const DWORD processId : audioSessionProcessIds) {
+                    const auto* info = findProcessInfo(processSnapshot, processId);
+                    if (info && processId != selfProcessId && insideGame(processId)) {
+                        gameAudioSessions_[processId] = { info->exeName, now };
+                    }
+                }
+                std::erase_if(gameAudioSessions_, [&](const auto& item) {
+                    const auto* info = findProcessInfo(processSnapshot, item.first);
+                    return !info || lowerAscii(info->exeName) != lowerAscii(item.second.exeName) ||
+                        now - item.second.lastActive > kAutoAppGrace;
+                });
+
                 std::map<std::string, std::vector<const GameCaptureCandidate*>> candidatesByGame;
                 for (const auto& candidate : gameCandidates) {
                     candidatesByGame[lowerAscii(candidate.gameName)].push_back(&candidate);
@@ -1120,10 +1260,24 @@ void Engine::gameDetectionLoop() {
                         if (found == candidates.end()) continue;
 
                         const auto& candidate = **found;
-                        const auto sourceSpec = gamePidSourceSpec(candidate.processId, candidate.exeName);
-                        if (sourceSpec.empty()) continue;
-                        dynamicSources.push_back(sourceSpec);
-                        dynamicTrackAliases[sourceIdForProcessSpec(sourceSpec)] = "game:" + candidate.gameName;
+                        // Audio comes from the processes that play it; the game
+                        // only names the track. Loopback does not reach through
+                        // every launcher level (Fortnite's bootstrapper and
+                        // launcher capture silence while its client plays), so
+                        // the top of the game's tree is never the target.
+                        std::vector<DWORD> soundingProcessIds;
+                        for (const auto& session : gameAudioSessions_) {
+                            const DWORD processId = session.first;
+                            if (processId == rootProcessId || processHasAncestor(processSnapshot, processId, rootProcessId)) {
+                                soundingProcessIds.push_back(processId);
+                            }
+                        }
+                        for (const DWORD processId : collapseProcessTreeRoots(processSnapshot.entries(), soundingProcessIds)) {
+                            const auto sourceSpec = gamePidSourceSpec(processId, gameAudioSessions_.at(processId).exeName);
+                            if (sourceSpec.empty() || containsExactSourceSpec(dynamicSources, sourceSpec)) continue;
+                            dynamicSources.push_back(sourceSpec);
+                            dynamicTrackAliases[sourceIdForProcessSpec(sourceSpec)] = "game:" + candidate.gameName;
+                        }
                         if (std::find(detectedGames.begin(), detectedGames.end(), candidate.gameName) == detectedGames.end()) {
                             detectedGames.push_back(candidate.gameName);
                         }
@@ -1135,9 +1289,7 @@ void Engine::gameDetectionLoop() {
                 // tree, none for silent apps. A session that goes quiet keeps its
                 // capture for a grace period, so pausing playback does not
                 // restart it.
-                const auto now = std::chrono::steady_clock::now();
-                const DWORD selfProcessId = GetCurrentProcessId();
-                for (const DWORD processId : activeAudioSessionProcessIds()) {
+                for (const DWORD processId : audioSessionProcessIds) {
                     const auto* info = findProcessInfo(processSnapshot, processId);
                     if (!info || processId == selfProcessId) continue;
                     const auto& exeName = info->exeName;
@@ -1145,12 +1297,7 @@ void Engine::gameDetectionLoop() {
                         containsProcessName(settings_.appAudioProcesses, exeName)) {
                         continue;
                     }
-                    const bool insideGame = std::any_of(gameCandidates.begin(), gameCandidates.end(), [&](const GameCaptureCandidate& game) {
-                        return processId == game.processId ||
-                            processHasAncestor(processSnapshot, processId, game.processId) ||
-                            processHasAncestor(processSnapshot, game.processId, processId);
-                    });
-                    if (!insideGame) autoAppSessions_[processId] = { exeName, now };
+                    if (!insideGame(processId)) autoAppSessions_[processId] = { exeName, now };
                 }
                 std::erase_if(autoAppSessions_, [&](const auto& item) {
                     const auto* info = findProcessInfo(processSnapshot, item.first);
@@ -1271,24 +1418,77 @@ void Engine::gameDetectionLoop() {
                           << std::endl;
             }
         }
-        // Raises the engine's GPU class only on PCs where a game starves it.
-        // The audio pass lists running games only with game audio on.
-        if (!settings_.captureGameAudio || !audioCaptureWorker_) {
-            detectGamesForGpuPriority(foregroundGameExe, runningGameExes);
+        if (fullPass) {
+            // Raises the engine's GPU class only on PCs where a game starves it.
+            // The audio pass lists running games only with game audio on.
+            if (!settings_.captureGameAudio || !audioCaptureWorker_) {
+                detectGamesForGpuPriority(
+                    foreground, foregroundIsKnownGame, *processList, foregroundGameExe, runningGameExes);
+            }
+            GpuPriorityControl::PipelineProgress pipeline;
+            if (encoderWorker_) {
+                pipeline.encoderSetups = encoderWorker_->encoderSetups();
+                pipeline.framesEncoded = static_cast<uint64_t>(std::max(0, encoderWorker_->framesEncoded()));
+            }
+            gpuPriority_.observe(
+                foregroundGameExe, runningGameExes, videoDropTotal(), monotonicNow100ns(), settings_.fps, pipeline);
+            // A removed device is final for this process; the host restarts the
+            // engine on exit, and a fresh process gets fresh devices. Dead GPU
+            // state cannot be trusted to tear down cleanly.
+            const long captureRemoved = captureSession_ ? captureSession_->deviceRemovedHr() : 0;
+            const long encoderRemoved = encoderWorker_ ? encoderWorker_->deviceRemovedHr() : 0;
+            if (captureRemoved != 0 || encoderRemoved != 0) {
+                std::cerr << "[engine] GPU device removed (capture 0x" << std::hex << static_cast<unsigned long>(captureRemoved)
+                          << ", encoder 0x" << static_cast<unsigned long>(encoderRemoved) << std::dec
+                          << "); exiting so the host restarts recording." << std::endl;
+                std::fflush(nullptr);
+                ExitProcess(kDeviceRemovedExitCode);
+            }
+            nextFullPass = std::chrono::steady_clock::now() + kFullPassInterval;
         }
-        gpuPriority_.observe(foregroundGameExe, runningGameExes, videoDropTotal(), monotonicNow100ns(), settings_.fps);
 
         std::unique_lock lock(gameDetectionWaitMutex_);
-        gameDetectionWaitCv_.wait_for(lock, std::chrono::seconds(2), [this] {
-            return !gameDetectionRunning_.load();
+        if (!fullPass) {
+            gameDetectionWaitCv_.wait_until(lock, std::min(nextFullPass, passStartedAt + kMinAudioPassSpacing), [this] {
+                return !gameDetectionRunning_.load();
+            });
+        }
+        gameDetectionWaitCv_.wait_until(lock, nextFullPass, [this] {
+            return !gameDetectionRunning_.load() || audioSessionsChanged_;
         });
+        audioSessionsChanged_ = false;
     }
 }
 
-const Diagnostics& Engine::diagnostics() {
+std::vector<DWORD> Engine::soundingAudioProcessIds() const {
+    if (!audioSessionWatcher_ || !audioSessionWatcher_->ready()) return activeAudioSessionProcessIds();
+    const auto processIds = audioSessionWatcher_->soundingProcessIds();
+    return { processIds.begin(), processIds.end() };
+}
+
+void Engine::onAudioSessionsChanged() {
+    {
+        std::lock_guard lock(gameDetectionWaitMutex_);
+        audioSessionsChanged_ = true;
+    }
+    gameDetectionWaitCv_.notify_all();
+}
+
+std::string Engine::progressJson() {
+    std::ostringstream json;
+    json << "{\"engineRunning\":" << (diagnostics_.engineRunning ? "true" : "false")
+         << ",\"encoderOutputPackets\":" << (encoderWorker_ ? encoderWorker_->framesEncoded() : 0)
+         << ",\"encoderAcceptedFrames\":" << (encoderWorker_ ? encoderWorker_->framesAccepted() : 0)
+         << ",\"nvencInFlightFrames\":" << (encoderWorker_ ? encoderWorker_->nvencInFlightFrames() : 0)
+         << ",\"queuedFrames\":" << frameQueue_.size()
+         << ",\"gpuSchedulingClass\":\"" << jsonEscape(gpuPriority_.schedulingClass()) << "\"}";
+    return json.str();
+}
+
+const Diagnostics& Engine::diagnostics(bool sampleGpuUsage) {
     refreshPacketCounts();
     gpuPriority_.publish(diagnostics_);
-    gpuPriority_.refreshMemory(diagnostics_);
+    gpuPriority_.refreshUsage(diagnostics_, sampleGpuUsage);
     if (adminHotkeyRelay_) {
         diagnostics_.adminGame = adminHotkeyRelay_->elevatedGame();
         diagnostics_.adminGameInFront = adminHotkeyRelay_->gameInFront();
@@ -1372,6 +1572,9 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
     settings_.includeMixedAudio = settings.includeMixedAudio;
     settings_.includeSystemAudio = settings.includeSystemAudio;
     settings_.includeMicrophoneAudio = settings.includeMicrophoneAudio;
+    if (audioCaptureWorker_) {
+        audioCaptureWorker_->setCoreSources(coreSystemAudioNeeded(settings_), coreMicrophoneNeeded(settings_));
+    }
     settings_.captureGameAudio = settings.captureGameAudio;
     settings_.captureForegroundSystemAudio = settings.captureForegroundSystemAudio;
     if (!settings_.captureForegroundSystemAudio) {
@@ -1510,6 +1713,7 @@ const Diagnostics& Engine::configure(const EngineSettings& settings) {
         armed_ = true;
         arm();
         gameDetectionRunning_ = true;
+        audioSessionWatcher_ = std::make_unique<AudioSessionWatcher>([this] { onAudioSessionsChanged(); });
         gameDetectionThread_ = std::thread([this] { gameDetectionLoop(); });
     }
     refreshPacketCounts();
@@ -1771,18 +1975,20 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
             sample.oldestFrameAge100ns = frameQueue_.oldestFrameAge100ns();
             sample.encoderQueueDepth = encoderWorker_ ? encoderWorker_->queuedFreshEncodeFrames() : 0;
             sample.nvencInFlight = encoderWorker_ ? encoderWorker_->nvencInFlightFrames() : 0;
-            const auto captureStats = captureSession_
-                ? captureSession_->runtimeStats()
-                : CaptureRuntimeStats {};
+            // Sampled before every write: two counters, never runtimeStats(),
+            // whose latency windows share locks with the capture threads this
+            // low-priority thread must not hold up.
+            const uint64_t publishedFrames = captureSession_ ? captureSession_->publishedFrames() : 0;
+            const uint64_t desktopPresents = captureSession_ ? captureSession_->desktopPresents() : 0;
             sample.captureGap100ns = captureSession_ ? captureSession_->lastFrameInterval100ns() : 0;
             sample.capturePublicationAge100ns = captureSession_
                 ? captureSession_->lastPublishedAge100ns()
                 : 0;
             const bool captureWasActive =
-                captureStats.publishedFrames > previousPublishedFrames ||
-                captureStats.desktopPresents > previousDesktopPresents;
-            previousPublishedFrames = captureStats.publishedFrames;
-            previousDesktopPresents = captureStats.desktopPresents;
+                publishedFrames > previousPublishedFrames ||
+                desktopPresents > previousDesktopPresents;
+            previousPublishedFrames = publishedFrames;
+            previousDesktopPresents = desktopPresents;
             const int currentDroppedFrames = currentVideoDropCount();
             const bool newFrameDrop = currentDroppedFrames > previousDroppedFrames;
             previousDroppedFrames = currentDroppedFrames;
@@ -2291,7 +2497,7 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
     }
 
     HMONITOR activeMonitor = captureSession_ ? static_cast<HMONITOR>(captureSession_->activeMonitor()) : nullptr;
-    auto [fgApp, fgIsGame] = detectForegroundAppInfo(activeMonitor);
+    auto [fgApp, fgIsGame] = detectForegroundAppInfo(readForegroundProcess(), activeMonitor);
     std::vector<std::string> focusedApps;
     {
         std::lock_guard<std::mutex> lock(historyMutex_);
@@ -2462,6 +2668,7 @@ void Engine::arm() {
     diagnostics_.status = captureStarted ? captureSession_->status() : captureSession_->status();
     refreshAudioRouting();
     audioReplayCoordinator_->start();
+    audioCaptureWorker_->setCoreSources(coreSystemAudioNeeded(settings_), coreMicrophoneNeeded(settings_));
     audioCaptureWorker_->start(false);
     diagnostics_.audioReady = audioCaptureWorker_->running();
     refreshPacketCounts();

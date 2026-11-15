@@ -172,8 +172,13 @@ int main() {
         const JsonFields& request = *parsed;
         const std::string type = request.string("type").value_or(std::string{});
         try {
+            if (type == "getProgress") {
+                respond(id, engine.progressJson());
+                continue;
+            }
+
             if (type == "getDiagnostics") {
-                respond(id, clipture::toJson(engine.diagnostics()));
+                respond(id, clipture::toJson(engine.diagnostics(extractBool(request, "gpuUsage", true))));
                 continue;
             }
 

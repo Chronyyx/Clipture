@@ -6,7 +6,7 @@
 #include "clipture/MediaClock.hpp"
 #include "clipture/PcmSampleConverter.hpp"
 #include "clipture/AudioReplayCoordinator.hpp"
-#include "clipture/ProcessSnapshot.hpp"
+#include "clipture/ProcessSnapshotFeed.hpp"
 
 #include <Windows.h>
 #include <audioclient.h>
@@ -520,8 +520,25 @@ WAVEFORMATEX* getDefaultRenderMixFormat() {
 
 }  // namespace
 
-AudioCaptureWorker::AudioCaptureWorker(PacketRingBuffer& packets, AudioReplayCoordinator* replayCoordinator)
-    : packets_(packets), replayCoordinator_(replayCoordinator) {}
+AudioCaptureWorker::AudioCaptureWorker(
+    PacketRingBuffer& packets,
+    AudioReplayCoordinator* replayCoordinator,
+    ProcessSnapshotFeed* processFeed)
+    : packets_(packets), replayCoordinator_(replayCoordinator), processFeed_(processFeed) {}
+
+bool AudioCaptureWorker::waitUnlessStopping(
+    const std::atomic<bool>& stopRequested,
+    std::chrono::milliseconds duration) {
+    std::unique_lock lock(appWaitMutex_);
+    return !appWaitCv_.wait_for(lock, duration, [&] { return !running_.load() || stopRequested.load(); });
+}
+
+void AudioCaptureWorker::wakeAppCaptureThreads() {
+    // Through the mutex, so a thread about to sleep cannot miss the wake.
+    { std::lock_guard lock(appWaitMutex_); }
+    appWaitCv_.notify_all();
+    if (processFeed_) processFeed_->wake();
+}
 
 AudioCaptureWorker::~AudioCaptureWorker() {
     stop();
@@ -529,10 +546,11 @@ AudioCaptureWorker::~AudioCaptureWorker() {
 
 void AudioCaptureWorker::start(bool startConfiguredApps) {
     if (running_.exchange(true)) return;
-    coreThreads_.emplace_back(&AudioCaptureWorker::runCapture, this, true, "system-loopback-pcm");
     {
         std::lock_guard lock(configMutex_);
-        startMicThreadLocked();
+        // A source no track records is not captured (its packets were dropped).
+        if (wantSystem_) startSystemThreadLocked();
+        if (wantMic_) startMicThreadLocked();
     }
     notificationThread_ = std::thread(&AudioCaptureWorker::runDeviceNotificationLoop, this);
     std::vector<std::string> appProcessNames;
@@ -566,6 +584,7 @@ void AudioCaptureWorker::stop() {
     notificationCv_.notify_all();
     micRefreshCv_.notify_all();
     stopMicThread();
+    stopSystemThread();
     std::vector<std::thread> appThreadsToJoin;
     {
         std::lock_guard lock(configMutex_);
@@ -578,6 +597,7 @@ void AudioCaptureWorker::stop() {
         }
         appThreads_.clear();
     }
+    wakeAppCaptureThreads();
     for (auto& thread : coreThreads_) {
         if (thread.joinable()) thread.join();
     }
@@ -648,6 +668,7 @@ void AudioCaptureWorker::configureAppSources(const std::vector<std::string>& pro
         }
     }
 
+    if (!removedThreads.empty()) wakeAppCaptureThreads();
     for (auto& thread : removedThreads) {
         if (thread.joinable()) thread.join();
     }
@@ -722,6 +743,38 @@ void AudioCaptureWorker::publishPacket(EncodedPacket packet) {
     } else {
         packets_.push(std::move(packet));
     }
+}
+
+void AudioCaptureWorker::setCoreSources(bool systemAudio, bool microphone) {
+    bool stopSystem = false, stopMic = false;
+    {
+        std::lock_guard lock(configMutex_);
+        wantSystem_ = systemAudio;
+        wantMic_ = microphone;
+        if (!microphone) microphoneStatus_ = "Microphone track off";
+        if (running_) {
+            if (systemAudio) startSystemThreadLocked(); else stopSystem = systemThread_.joinable();
+            if (microphone) startMicThreadLocked(); else stopMic = micThread_.joinable();
+        }
+    }
+    if (stopSystem) stopSystemThread();
+    if (stopMic) stopMicThread();
+}
+
+void AudioCaptureWorker::startSystemThreadLocked() {
+    if (systemThread_.joinable()) return;
+    systemStopRequested_ = std::make_shared<std::atomic<bool>>(false);
+    systemThread_ = std::thread(&AudioCaptureWorker::runCapture, this, true, "system-loopback-pcm", systemStopRequested_);
+}
+
+void AudioCaptureWorker::stopSystemThread() {
+    {
+        std::lock_guard lock(configMutex_);
+        if (systemStopRequested_) systemStopRequested_->store(true);
+    }
+    if (systemThread_.joinable()) systemThread_.join();
+    std::lock_guard lock(configMutex_);
+    systemStopRequested_.reset();
 }
 
 void AudioCaptureWorker::startMicThreadLocked() {
@@ -1069,7 +1122,10 @@ void AudioCaptureWorker::runMicrophoneCapture() {
     if (coInitialized) CoUninitialize();
 }
 
-void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) {
+void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId,
+                                    std::shared_ptr<std::atomic<bool>> stopRequested) {
+    nameCurrentThread(L"audio-system");
+    const auto keepRunning = [&] { return running_.load() && !(stopRequested && stopRequested->load()); };
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool coInitialized = SUCCEEDED(hr);
 
@@ -1173,7 +1229,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
     float currentGateGain = 1.0f;
     int gateHoldFrames = 0;
 
-    while (running_) {
+    while (keepRunning()) {
         if (!waitForWasapiCapture(captureEvent.get(), loopback ? 10 : 50)) break;
         UINT32 packetFrames = 0;
         if (FAILED(captureClient->GetNextPacketSize(&packetFrames))) break;
@@ -1340,7 +1396,7 @@ void AudioCaptureWorker::runCapture(bool loopback, const std::string& sourceId) 
             const UINT32 silenceFrames = std::max<UINT32>(1, mixFormat->nSamplesPerSec / 100);
             const int64_t silenceDuration = static_cast<int64_t>(silenceFrames) * 10'000'000 / mixFormat->nSamplesPerSec;
             int fills = 0;
-            while (running_ && loopbackSilenceDue(nextPts100ns, wallNow, silenceDuration) && fills < 5) {
+            while (keepRunning() && loopbackSilenceDue(nextPts100ns, wallNow, silenceDuration) && fills < 5) {
                 const UINT32 frames = silenceFrames;
                 EncodedPacket packet;
                 packet.kind = PacketKind::Audio;
@@ -1378,22 +1434,43 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
 
     std::cerr << "[audio] Process loopback supervisor started for: " << captureName
               << " as " << sourceId << std::endl;
+    const auto findTarget = [&](const RunningProcessSnapshot& snapshot) -> DWORD {
+        if (!captureSpec.pidSpecific) return preferredProcessTreeRootForName(snapshot.entries(), captureName);
+        const auto found = std::find_if(
+            snapshot.entries().begin(),
+            snapshot.entries().end(),
+            [&](const RunningProcessInfo& entry) {
+                return entry.processId == captureSpec.processId &&
+                    _stricmp(entry.exeName.c_str(), captureName.c_str()) == 0;
+            });
+        return found != snapshot.entries().end() ? found->processId : 0;
+    };
+    const auto stopping = [&] { return !running_.load() || stopRequested->load(); };
+    // Listing every process costs milliseconds. The first look after a start
+    // or a finished capture lists them itself. A thread whose process is not
+    // running then waits for the detection loop's next lists (one every 2 s),
+    // each taken moments before it is read, instead of listing them again.
+    constexpr auto kOwnListInterval = std::chrono::milliseconds(2000);
+    constexpr auto kNextListWait = std::chrono::milliseconds(2500);
     bool waitingLogged = false;
+    bool waitForNextList = false;
+    std::uint64_t seenList = 0;
     DWORD previousProcessId = 0;
-    while (running_ && !stopRequested->load()) {
-        const auto snapshot = RunningProcessSnapshot::captureNameOnly();
+    while (!stopping()) {
         DWORD processId = 0;
-        if (captureSpec.pidSpecific) {
-            const auto found = std::find_if(
-                snapshot.entries().begin(),
-                snapshot.entries().end(),
-                [&](const RunningProcessInfo& entry) {
-                    return entry.processId == captureSpec.processId &&
-                        _stricmp(entry.exeName.c_str(), captureName.c_str()) == 0;
-                });
-            if (found != snapshot.entries().end()) processId = found->processId;
+        ProcessSnapshotFeed::Snapshot shared;
+        if (waitForNextList && processFeed_) {
+            shared = processFeed_->waitForNewer(seenList, kNextListWait, stopping);
+            if (stopping()) break;
+        } else if (waitForNextList && !waitUnlessStopping(*stopRequested, kOwnListInterval)) {
+            break;
+        }
+        if (shared) {
+            processId = findTarget(*shared);
         } else {
-            processId = preferredProcessTreeRootForName(snapshot.entries(), captureName);
+            // Lists published before this one may be older than it.
+            if (processFeed_) seenList = processFeed_->generation();
+            processId = findTarget(RunningProcessSnapshot::captureNameOnly());
         }
 
         if (processId == 0) {
@@ -1401,11 +1478,10 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
                 std::cerr << "[audio] Waiting for configured audio process: " << captureName << std::endl;
                 waitingLogged = true;
             }
-            for (int slice = 0; slice < 20 && running_ && !stopRequested->load(); ++slice) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
+            waitForNextList = true;
             continue;
         }
+        waitForNextList = false;
 
         if (waitingLogged || previousProcessId != processId) {
             std::cerr << "[audio] Bound " << captureName << " process tree at PID " << processId << std::endl;
@@ -1417,9 +1493,7 @@ void AudioCaptureWorker::runProcessLoopbackCapture(const std::string& processNam
         if (!running_ || stopRequested->load()) break;
         std::cerr << "[audio] Process loopback session ended for " << captureName
                   << "; waiting to rebind." << std::endl;
-        for (int slice = 0; slice < 10 && running_ && !stopRequested->load(); ++slice) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
+        if (!waitUnlessStopping(*stopRequested, std::chrono::milliseconds(1000))) break;
     }
     std::cerr << "[audio] Process loopback supervisor stopped for: " << captureName << std::endl;
 }

@@ -88,12 +88,14 @@
 }
 
 /* --- Titles: a cinematic serif, a crescent, and a candle on Settings. --- */
-:root[data-theme="halloween"] :is(.library-title h1, .topbar h1) {
+:root[data-theme="halloween"] :is(.settings-group, .panel:not(.player)) { border-radius: 14px; }
+:root[data-theme="halloween"] :is(.library-title h1, .topbar h1, .share-header h1) {
   color: #f4ecdf;
   font-size: 36px;
   line-height: 1;
   text-shadow: 0 0 28px rgb(232 144 74 / 14%);
 }
+:root[data-theme="halloween"] :is(.topbar, .share-header) h1 { line-height: 40px; }
 :root[data-theme="halloween"] .library-heading-default { display: none; }
 :root[data-theme="halloween"] .library-heading-halloween { display: inline; }
 :root[data-theme="halloween"] .library-title-icon { display: none; }

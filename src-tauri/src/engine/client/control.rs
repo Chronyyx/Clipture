@@ -14,6 +14,25 @@ impl EngineClient {
         Ok(self.remember_diagnostics(diagnostics))
     }
 
+    /// Diagnostics for the host's own background sampling (frame-drop history,
+    /// admin-game notice). Leaves out how busy the GPU is: reading it costs the
+    /// engine a counter collection, and nothing in the background uses it.
+    pub async fn sample_diagnostics(self: &Arc<Self>) -> AppResult<EngineDiagnostics> {
+        if self.paths.test_mode {
+            return Ok(EngineDiagnostics::unavailable(
+                "Engine diagnostics are disabled by CLIPTURE_TEST_MODE.",
+            ));
+        }
+        let diagnostics: EngineDiagnostics = self
+            .call(
+                "getDiagnostics",
+                &serde_json::json!({ "gpuUsage": false }),
+                DEFAULT_REQUEST_TIMEOUT,
+            )
+            .await?;
+        Ok(self.remember_diagnostics(diagnostics))
+    }
+
     pub async fn list_audio_input_devices(self: &Arc<Self>) -> AppResult<Vec<AudioInputDevice>> {
         if self.paths.test_mode {
             return Ok(Vec::new());

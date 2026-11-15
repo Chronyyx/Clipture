@@ -10,6 +10,8 @@ const root = resolve(__dirname, "..", "..");
 assert.match(FFMPEG.version, /^\d+\.\d+(\.\d+)?$/);
 assert.match(FFMPEG.archiveSha256, /^[a-f0-9]{64}$/);
 assert.match(FFMPEG.executableSha256, /^[a-f0-9]{64}$/);
+assert.match(FFMPEG.licenseSha256, /^[a-f0-9]{64}$/);
+assert.match(FFMPEG.readmeSha256, /^[a-f0-9]{64}$/);
 assert.equal(
   FFMPEG.url,
   `https://github.com/GyanD/codexffmpeg/releases/download/${FFMPEG.version}/ffmpeg-${FFMPEG.version}-essentials_build.zip`

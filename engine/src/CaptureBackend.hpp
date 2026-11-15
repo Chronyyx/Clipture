@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -71,6 +72,8 @@ struct CaptureSharedState {
     std::atomic<uint64_t> recreationAttempts = 0;
     std::atomic<uint64_t> recreationSuccesses = 0;
     std::atomic<uint64_t> fallbackCount = 0;
+    // First failing GetDeviceRemovedReason seen on a capture device; 0 while fine.
+    std::atomic<long> deviceRemovedHr = 0;
     std::atomic<bool> running = false;
     std::atomic<bool> hdrTonemappingActive = false;
     SlotPoolUsage captureTextureSlots;
@@ -105,6 +108,16 @@ struct CaptureSharedState {
     uint64_t activeBackendPublishedBaseline = 0;
     mutable double smoothedFreshFps = 0.0;
     mutable int64_t lastSmoothedFreshTime100ns = 0;
+
+    // A backend's control loop sleeps between polls; this wakes it at once
+    // when something it acts on changed (hybrid game window, recording rate,
+    // a failure).
+    std::mutex backendWakeMutex;
+    std::condition_variable_any backendWakeCondition;
+    bool backendWakePending = false;
+    void wakeBackend();
+    // Returns at wakeBackend(), a stop request or `timeout`.
+    void waitForBackendWake(std::stop_token stopToken, std::chrono::milliseconds timeout);
 
     void resetForStart(
         FrameQueue* queue,

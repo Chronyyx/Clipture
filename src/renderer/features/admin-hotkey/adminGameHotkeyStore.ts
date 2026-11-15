@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import type { AdminGameHotkey, AdminGameHotkeyChange } from '../../../shared/types';
 import { clipture } from '../../platform';
+import { startVisibleInterval } from '../../shared/visibleInterval';
 
 export type AdminGameHotkeyPhase = 'idle' | 'waiting' | AdminGameHotkeyChange['outcome'];
 
@@ -11,11 +12,12 @@ interface Snapshot {
 }
 
 // One poll for every view that shows it (the card and its setting), only
-// while one is on screen. The host keeps the truth; this only mirrors it.
+// while one is on screen and the window is not minimized. The host keeps
+// the truth; this only mirrors it.
 const POLL_MS = 2000;
 let snapshot: Snapshot = { state: null, phase: 'idle', message: '' };
 const listeners = new Set<() => void>();
-let timer: number | undefined;
+let stopPolling: () => void = () => undefined;
 
 function publish(next: Partial<Snapshot>) {
   snapshot = { ...snapshot, ...next };
@@ -31,11 +33,11 @@ function subscribe(listener: () => void) {
   listeners.add(listener);
   if (listeners.size === 1) {
     void refresh();
-    timer = window.setInterval(() => void refresh(), POLL_MS);
+    stopPolling = startVisibleInterval(() => void refresh(), POLL_MS);
   }
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) window.clearInterval(timer);
+    if (listeners.size === 0) stopPolling();
   };
 }
 

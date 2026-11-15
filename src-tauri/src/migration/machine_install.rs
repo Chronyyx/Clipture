@@ -9,6 +9,9 @@ use std::{ffi::OsString, path::{Path, PathBuf}};
 const FLAG: &str = "--remove-machine-install";
 const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Clipture";
 const FILES: [&str; 6] = ["clipture.exe", "clipture_engine.exe", "ffmpeg.exe", r"assets\default.mp3", r"assets\option2.wav", "uninstall.exe"];
+// License notices installers place beside the runtime (THIRD_PARTY_NOTICES.md).
+const NOTICES: [&str; 5] = [r"licenses\LICENSE.txt", r"licenses\THIRD_PARTY_NOTICES.md", r"licenses\FFmpeg-LICENSE.txt",
+    r"licenses\FFmpeg-README.txt", r"licenses\DEPENDENCY-LICENSES.txt"];
 
 pub fn command() -> Option<i32> {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -50,6 +53,11 @@ fn remove(machine: &Path) -> Result<(), String> {
             _ => {}
         }
     }
+    // Notices are not needed to run; a missing or locked one never fails the cleanup.
+    for name in NOTICES {
+        let _ = std::fs::remove_file(machine.join(name));
+    }
+    let _ = std::fs::remove_dir(machine.join("licenses"));
     let _ = std::fs::remove_dir(machine.join("assets"));
     let _ = std::fs::remove_dir(&machine);
     remove_registrations(&machine)?;

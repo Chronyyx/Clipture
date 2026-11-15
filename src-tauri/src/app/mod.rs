@@ -1,4 +1,5 @@
 pub mod autostart;
+mod aero_outline;
 #[cfg(windows)]
 pub(crate) mod installer_startup;
 mod background;

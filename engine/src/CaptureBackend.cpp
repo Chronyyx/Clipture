@@ -404,6 +404,20 @@ void CaptureSharedState::setActiveBackend(CaptureBackendKind kind) {
     activeBackendPublishedBaseline = publishedFrames.load(std::memory_order_relaxed);
 }
 
+void CaptureSharedState::wakeBackend() {
+    {
+        std::lock_guard lock(backendWakeMutex);
+        backendWakePending = true;
+    }
+    backendWakeCondition.notify_all();
+}
+
+void CaptureSharedState::waitForBackendWake(std::stop_token stopToken, std::chrono::milliseconds timeout) {
+    std::unique_lock lock(backendWakeMutex);
+    backendWakeCondition.wait_for(lock, stopToken, timeout, [this] { return backendWakePending; });
+    backendWakePending = false;
+}
+
 bool CaptureSharedState::selectFrameTimestamp(
     int64_t sourceTimestamp100ns,
     int64_t& outputTimestamp100ns) {
