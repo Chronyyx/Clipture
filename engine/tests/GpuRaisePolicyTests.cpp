@@ -72,32 +72,31 @@ void rememberedGameInBackgroundDoesNotRaise() {
             "a remembered game raises as soon as it is in front");
 }
 
-void raisedGameLeavingTheFrontStepsDownAndComesBack() {
+void raisedGameKeepsRealtimeOutOfFocus() {
     Session session;
     session.memory.insert("game.exe");
     require(session.until(Action::Raise, 1, "game.exe", {"game.exe"}, 0) == 1, "remembered raise");
-    // A short alt-tab (two passes) keeps the raise.
-    require(session.until(Action::Lower, 2, "", {"game.exe"}, 0) == 0, "a short alt-tab must keep the raise");
-    require(session.until(Action::Lower, 1, "game.exe", {"game.exe"}, 0) == 0, "back before the limit");
-    // Three passes away steps down.
-    require(session.until(Action::Lower, 3, "other.exe", {"game.exe", "other.exe"}, 0) == 3 &&
-                reasonIs(session.last, "game in background"),
-            "a raised game in the background steps down after three passes");
-    require(!session.policy.raised(), "lowered while away");
-    require(session.until(Action::Raise, 1, "game.exe", {"game.exe", "other.exe"}, 0) == 1,
-            "the game raises again when it is back in front");
+    // Discord or a second monitor in front while the game keeps the GPU busy:
+    // focus alone never lowers, however long.
+    require(session.until(Action::Lower, 60, "", {"game.exe"}, 0, 300) == 0,
+            "a busy raised game keeps realtime at the desktop");
+    require(session.until(Action::Lower, 60, "other.exe", {"game.exe", "other.exe"}, 0, 300) == 0,
+            "a busy raised game keeps realtime behind another game");
+    require(session.policy.raised(), "still raised");
 }
 
-void armedSessionWithoutMemoryRaisesOnReturn() {
+void quietWhileAwayArmsTheSession() {
     Session session;
     // Queued drops raise a game the memory does not know.
     require(session.until(Action::Raise, 4, "game.exe", {"game.exe"}, 5, 60) > 0 &&
                 reasonIs(session.last, "queued drops"),
             "queued drops raise");
-    require(session.until(Action::Lower, 3, "", {"game.exe"}, 0) == 3, "steps down while away");
+    // Minimized: the queue drains and the quiet watch steps down.
+    require(session.until(Action::Lower, 40, "", {"game.exe"}, 0, 5) > 0 && reasonIs(session.last, "gpu quiet"),
+            "an idle game away from the front steps down on a quiet GPU");
     require(session.until(Action::Raise, 1, "game.exe", {"game.exe"}, 0) == 1 &&
                 reasonIs(session.last, "back in front"),
-            "a session that needed realtime raises at once when it returns, without new drops");
+            "quiet while away arms the session: it raises at once when it returns, without new drops");
     // A restart of the game ends the session mark.
     require(session.until(Action::Lower, 2, "", {}, 0) == 2 && reasonIs(session.last, "game closed"), "closed");
     require(session.until(Action::Raise, 3, "game.exe", {"game.exe"}, 0) == 0,
@@ -192,8 +191,8 @@ void startRaisedHoldsUntilReset() {
 
 int main() {
     rememberedGameInBackgroundDoesNotRaise();
-    raisedGameLeavingTheFrontStepsDownAndComesBack();
-    armedSessionWithoutMemoryRaisesOnReturn();
+    raisedGameKeepsRealtimeOutOfFocus();
+    quietWhileAwayArmsTheSession();
     ineffectiveRaiseIsUndone();
     effectiveRaiseStays();
     partialHelpStillCountsAsIneffectiveOnlyWhenLossRemainsHigh();

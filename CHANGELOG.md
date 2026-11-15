@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.2] - 2026-11-15
+
+### Recording
+
+- **No more drops when you alt-tab:** With "Prioritize recording on the GPU" raised for your game, switching to Discord, a browser or another monitor for a few seconds handed the GPU back while your game kept running at full speed, and on busier GPUs each switch dropped 10 to 40 frames from your clips. Recording now keeps its priority while your game keeps the GPU busy, whatever window is in front. It still steps down once the game goes idle or closes, and raises again the moment you are back in the game.
+
+### Telemetry
+
+- **Fewer false alarms:** A frame or two briefly waiting to be encoded is no longer reported as a warning. Recording absorbs those on its own; dropped frames still warn as before.
+- **Video memory without lost frames is not a problem:** Video memory near full no longer opens a problem report by itself; games that stream textures run there all the time. It is still reported alongside dropped frames.
+- **Readable CPU name:** Diagnostics and telemetry show your processor's name (for example "AMD Ryzen 7 5800X3D") instead of its family and model numbers.
+
 ## [1.9.1] - 2026-11-15
 
 ### Telemetry

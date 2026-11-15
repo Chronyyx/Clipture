@@ -39,12 +39,26 @@ impl SystemInfoProvider for HostSystemInfo {
             }
             .into(),
             total_memory_bytes: if memory_ok { memory.ullTotalPhys } else { 0 },
-            processor: std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "Unknown".into()),
+            processor: processor_name(),
             logical_processors: std::thread::available_parallelism()
                 .map(usize::from)
                 .unwrap_or(1),
         }
     }
+}
+
+/// The marketing name ("AMD Ryzen 7 5800X3D 8-Core Processor"), which the
+/// CPU reports itself; PROCESSOR_IDENTIFIER only carries family and model.
+fn processor_name() -> String {
+    use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+        .and_then(|key| key.get_value::<String, _>("ProcessorNameString"))
+        .map(|name| name.trim().to_string())
+        .ok()
+        .filter(|name| !name.is_empty())
+        .or_else(|| std::env::var("PROCESSOR_IDENTIFIER").ok())
+        .unwrap_or_else(|| "Unknown".into())
 }
 
 #[cfg(test)]
@@ -57,5 +71,6 @@ mod tests {
         assert!(info.total_memory_bytes > 0);
         assert!(info.release.split('.').count() == 3);
         assert!(info.logical_processors > 0);
+        assert!(!info.processor.contains("Family"), "the marketing name, not the identifier: {}", info.processor);
     }
 }

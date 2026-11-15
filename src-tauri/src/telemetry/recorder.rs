@@ -392,7 +392,10 @@ impl Recorder {
         }
         let pressure = diagnostics.capture_pressure;
         if self.pressure.is_some_and(|previous| previous != pressure) {
-            let level = if pressure == CapturePressure::Healthy { Level::Info } else { Level::Warn };
+            // Elevated is a frame or two queued for one pass; the recording
+            // absorbs it, and when it does not, drop_burst warns. Only
+            // critical is worth a warning on its own.
+            let level = if pressure == CapturePressure::Critical { Level::Warn } else { Level::Info };
             self.event(&mut out, now_ms, Event::new(level, "pressure_changed").with("to", pressure_name(pressure)));
         }
         self.pressure = Some(pressure);
@@ -457,7 +460,11 @@ impl Recorder {
             self.trigger(now_ms, "replay_ram_fallback");
         }
         let budget = number(diagnostics, "vramBudgetMb");
-        if budget > 0.0 && number(diagnostics, "vramAdapterUsageMb") >= budget * 0.95 {
+        // A full budget alone is normal for a game that streams textures
+        // (20 of 20 such incidents on a 3080 lost no frame): it opens one
+        // only with drops, and otherwise just tags an incident already open.
+        let vram_full = budget > 0.0 && number(diagnostics, "vramAdapterUsageMb") >= budget * 0.95;
+        if vram_full && (dropped > 0.0 || self.incident.is_some()) {
             self.trigger(now_ms, "vram_pressure");
         }
         let incident_done = match &mut self.incident {
@@ -682,6 +689,26 @@ mod tests {
     }
 
     #[test]
+    fn only_critical_pressure_warns() {
+        let mut recorder = Recorder::default();
+        recorder.observe(&sample(true, json!({})), T0, &scrubber(), || "s".into());
+        let level_at = |recorder: &mut Recorder, pressure: CapturePressure, at: i64| {
+            let mut changed = sample(true, json!({}));
+            changed.capture_pressure = pressure;
+            let out = recorder.observe(&changed, at, &scrubber(), || unreachable!());
+            out.iter()
+                .find_map(|record| match &record.body {
+                    Body::Event(event) if event.code == "pressure_changed" => Some(event.level),
+                    _ => None,
+                })
+                .expect("pressure_changed")
+        };
+        // Once per minute each: a minute apart.
+        assert_eq!(level_at(&mut recorder, CapturePressure::Elevated, T0 + 2_000), Level::Info);
+        assert_eq!(level_at(&mut recorder, CapturePressure::Critical, T0 + 70_000), Level::Warn);
+    }
+
+    #[test]
     fn minutes_split_time_and_drops_by_gpu_priority() {
         let mut recorder = Recorder::default();
         let at = |class: &str, dropped: u64, front: &str, wanted: bool| {
@@ -776,12 +803,27 @@ mod tests {
     }
 
     #[test]
-    fn vram_near_its_budget_and_starvation_open_incidents() {
+    fn vram_near_its_budget_opens_an_incident_only_with_drops() {
+        let mut recorder = Recorder::default();
+        // Full for a minute without a drop: nothing to look at.
+        let out = feed(&mut recorder, T0, 40, |i| {
+            let mut value = healthy(60.0, 140.0);
+            if i >= 12 {
+                value["vramAdapterUsageMb"] = json!(7900);
+            }
+            value
+        });
+        assert!(incidents(&out).is_empty());
+        assert!(!recorder.wants_detail());
+        // Full and dropping: the incident says so.
         let mut recorder = Recorder::default();
         let out = feed(&mut recorder, T0, 30, |i| {
             let mut value = healthy(60.0, 140.0);
             if i == 12 {
                 value["vramAdapterUsageMb"] = json!(7900);
+                value["droppedFrames"] = json!(2);
+            } else if i > 12 {
+                value["droppedFrames"] = json!(2);
             }
             value["gpuStarvationLossyWindows"] = json!(if i >= 13 { 1 } else { 0 });
             value

@@ -1,6 +1,6 @@
 [package]
 name = "clipture"
-version = "1.9.1"
+version = "1.9.2"
 description = "Low-footprint native host for Clipture"
 authors = ["Clipture"]
 # MIT with the Commons Clause condition; no SPDX expression covers it.

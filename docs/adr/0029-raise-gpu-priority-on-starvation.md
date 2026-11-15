@@ -83,6 +83,17 @@ stutter into clips.
   if drops raise it again, realtime itself shortened the queue and it stays
   raised until the game closes, so stutter cannot cycle into clips. It never
   steps down just to test.
+- Focus does not lower a raise (2026-11-15). 1.9.0 stepped a raised game
+  down after about 6 s out of the front and raised it again on its return.
+  Telemetry from a GTX 1080 in Deadlock and Fortnite showed every drop burst
+  of the evening in those gaps: the game kept rendering at full rate behind
+  Discord or on another monitor, and a few seconds at `normal` dropped 10-40
+  frames per alt-tab (57 in 40 s at worst), with none while it stayed raised.
+  A raised game now keeps `realtime` until it closes, the raise proves
+  ineffective, or the GPU queue goes quiet. A quiet step-down while the game
+  is out of the front (minimized, idle) does not use up the session's quiet
+  step-down: the session stays armed and raises again as soon as the game is
+  back in front.
 - Turning the setting off, or a hang recovery (ADR 0025), returns to `normal`.
   The host watchdog reads the class on every poll, so its 3 s threshold
   follows a raise.

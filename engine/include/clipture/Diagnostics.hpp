@@ -185,7 +185,7 @@ struct Diagnostics {
     // windows lost frames.
     std::string gpuPriorityReason;
     // Why the scheduling class last changed: a policy decision ("queued
-    // drops", "game in background", "raise ineffective", "gpu quiet", ...) or
+    // drops", "back in front", "raise ineffective", "gpu quiet", ...) or
     // a gate ("encoder setup", VRAM). Kept after a lower, unlike the reason
     // above. And the known game the last detection pass saw in front.
     std::string gpuSchedulingChangeReason;

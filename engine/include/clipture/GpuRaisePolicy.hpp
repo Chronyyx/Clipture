@@ -20,9 +20,13 @@ namespace clipture {
 //   comes to the front, not while it merely runs: a remembered game left in
 //   the background must not make another game, or the desktop, pay for
 //   realtime.
-// - A raised game that stays out of the front for kAwayPasses passes is
-//   stepped down; its session stays armed and raises again, without waiting
-//   for drops, the moment it is back in front. Short alt-tabs keep the raise.
+// - Focus never lowers. A raised game that leaves the front keeps realtime
+//   while it keeps the GPU busy: a game still rendering behind Discord or on
+//   another monitor starves capture as much as one in front, and a few
+//   seconds at normal dropped frames on a GTX 1080 at every alt-tab. Only
+//   pressure steps down (quiet GPU, raise ineffective) or the game closing.
+//   A quiet step-down while the game is away arms its session, so it raises
+//   again without waiting for drops the moment it is back in front.
 // - A raise that does not help is undone: after kEffectPasses passes at
 //   realtime, if recording still loses at least kLossyShare of its frames and
 //   at least half as many as at normal, the GPU was not what starved it
@@ -166,14 +170,7 @@ private:
         } else if (++missing_ >= kGoneGamePasses) {
             return lower("game closed");
         }
-        if (pass.foreground == game_) {
-            away_ = 0;
-        } else if (++away_ >= kAwayPasses) {
-            const auto game = game_;
-            auto decision = lower("game in background");
-            armed_ = game;
-            return decision;
-        }
+        away_ = pass.foreground == game_ ? 0 : away_ + 1;
         // Held at normal: the queue and drops say nothing about realtime yet.
         if (!pass.realtimeInEffect) return {};
         Decision decision;
@@ -195,8 +192,14 @@ private:
         }
         // One quiet step-down per game session (ADR 0029).
         if (game_ != quietGame_ && quiet_.observe(pass.inFlight, pass.now100ns)) {
-            quietGame_ = game_;
+            // Quiet because the game was left idle (minimized, paused behind
+            // another window) says nothing about how it loads the GPU when
+            // played: arm it instead of spending the session's quiet step-down.
+            const auto game = game_;
+            const bool away = away_ >= kAwayPasses;
+            if (!away) quietGame_ = game;
             auto lowered = lower("gpu quiet");
+            if (away) armed_ = game;
             lowered.rememberGame = decision.rememberGame;
             return lowered;
         }

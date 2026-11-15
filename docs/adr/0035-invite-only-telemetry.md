@@ -123,7 +123,7 @@ Event codes:
 | `replay_write_failure` | error | `replayArchiveWriteFailures` increased |
 | `pressure_changed` | info/warn | capture pressure changed (warn when not healthy) |
 | `degraded` | warn | engine reports degraded (start and end) |
-| `gpu_priority_changed` | info | scheduling class changed: from, to, the reason (a policy decision such as `game in background` or `raise ineffective`, or a gate such as `encoder setup`) and the known game's exe name the engine saw in front |
+| `gpu_priority_changed` | info | scheduling class changed: from, to, the reason (a policy decision such as `gpu quiet` or `raise ineffective`, or a gate such as `encoder setup`) and the known game's exe name the engine saw in front |
 | `encoder_hang` | warn | encoder watchdog recovered the encoder |
 | `recording_halted` | error | encoder watchdog gave up |
 | `engine_lost` | error | engine stopped running inside a run without a requested stop, or missed three samples in a row |
