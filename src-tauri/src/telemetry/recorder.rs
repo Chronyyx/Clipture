@@ -74,6 +74,11 @@ struct Bucket {
     replay_queued: f64,
     replay_ram_fallback: f64,
     gpu_scheduling_class: String,
+    realtime_ms: i64,
+    game_front_ms: i64,
+    held_ms: i64,
+    dropped_realtime: f64,
+    dropped_normal: f64,
 }
 
 struct Session {
@@ -108,6 +113,10 @@ pub struct Recorder {
 
 fn number(diagnostics: &EngineDiagnostics, key: &str) -> f64 {
     diagnostics.details.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+fn flag(diagnostics: &EngineDiagnostics, key: &str) -> bool {
+    diagnostics.details.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn text(diagnostics: &EngineDiagnostics, key: &str) -> String {
@@ -171,7 +180,16 @@ fn sample_of(diagnostics: &EngineDiagnostics, dropped: f64, reasons: &BTreeMap<&
         vram_budget_mb: number(diagnostics, "vramBudgetMb"),
         replay_queued_bytes: number(diagnostics, "replayArchiveQueuedBytes") as u64,
         gpu_scheduling_class: text(diagnostics, "gpuSchedulingClass"),
+        game_in_front: !text(diagnostics, "gpuPriorityForeground").is_empty(),
+        gpu_raise_wanted: flag(diagnostics, "gpuPriorityRaised"),
+        gpu_hold: text(diagnostics, "gpuPriorityHold"),
         gpu_busy_percent: detailed.then(|| round1(number(diagnostics, "gpuBusyPercent"))),
+    }
+}
+
+impl Bucket {
+    fn gpu_scheduling_class_is_realtime(&self, class: &str) -> bool {
+        class == "realtime"
     }
 }
 
@@ -385,7 +403,25 @@ impl Recorder {
         }
         let class = text(diagnostics, "gpuSchedulingClass");
         if !self.scheduling_class.is_empty() && !class.is_empty() && class != self.scheduling_class {
-            let event = Event::new(Level::Info, "gpu_priority_changed").with("from", self.scheduling_class.clone()).with("to", class.clone());
+            // Why it changed (a policy decision or a gate) and the known game
+            // the engine saw in front: what tells an alt-tab from a policy bug.
+            let mut event = Event::new(Level::Info, "gpu_priority_changed").with("from", self.scheduling_class.clone()).with("to", class.clone());
+            for (key, field) in [("reason", "gpuSchedulingChangeReason"), ("game", "gpuPriorityForeground"), ("hold", "gpuPriorityHold")] {
+                let value = text(diagnostics, field);
+                if !value.is_empty() {
+                    event = event.with(key, value);
+                }
+            }
+            // What "raise ineffective" was decided on: shares of frames lost
+            // before and during the raise.
+            if text(diagnostics, "gpuSchedulingChangeReason") == "raise ineffective" {
+                for (key, field) in [("lossBefore", "gpuPolicyIneffectiveBefore"), ("lossDuring", "gpuPolicyIneffectiveDuring")] {
+                    let value = number(diagnostics, field);
+                    if value >= 0.0 {
+                        event = event.with(key, (value * 10_000.0).round() / 10_000.0);
+                    }
+                }
+            }
             self.event(&mut out, now_ms, event);
         }
         if !class.is_empty() {
@@ -465,6 +501,20 @@ impl Recorder {
         max(&mut bucket.vram_adapter_mb, number(diagnostics, "vramAdapterUsageMb"));
         max(&mut bucket.replay_queued, number(diagnostics, "replayArchiveQueuedBytes"));
         max(&mut bucket.replay_ram_fallback, number(diagnostics, "replayArchiveRamFallbackBytes"));
+        // Where the minute's time and drops went, by GPU priority.
+        let realtime = bucket.gpu_scheduling_class_is_realtime(&class);
+        if realtime {
+            bucket.realtime_ms += interval;
+            bucket.dropped_realtime += dropped;
+        } else {
+            bucket.dropped_normal += dropped;
+        }
+        if !text(diagnostics, "gpuPriorityForeground").is_empty() {
+            bucket.game_front_ms += interval;
+        }
+        if flag(diagnostics, "gpuPriorityRaised") && !realtime {
+            bucket.held_ms += interval;
+        }
         bucket.gpu_scheduling_class = class;
         out
     }
@@ -501,6 +551,11 @@ impl Recorder {
             replay_queued_max_bytes: bucket.replay_queued as u64,
             replay_ram_fallback_max_bytes: bucket.replay_ram_fallback as u64,
             gpu_scheduling_class: bucket.gpu_scheduling_class,
+            realtime_seconds: (bucket.realtime_ms / 1000) as u32,
+            game_front_seconds: (bucket.game_front_ms / 1000) as u32,
+            held_seconds: (bucket.held_ms / 1000) as u32,
+            dropped_realtime: bucket.dropped_realtime as u64,
+            dropped_normal: bucket.dropped_normal as u64,
         };
         if let Some(session) = &mut self.session {
             session.minutes += 1;
@@ -612,15 +667,34 @@ mod tests {
     fn state_changes_are_events() {
         let mut recorder = Recorder::default();
         recorder.observe(&sample(true, json!({ "activeCaptureBackend": "WGC", "gpuSchedulingClass": "normal" })), T0, &scrubber(), || "s".into());
-        let mut changed = sample(true, json!({ "activeCaptureBackend": "DDA", "gpuSchedulingClass": "realtime" }));
+        let mut changed = sample(true, json!({ "activeCaptureBackend": "DDA", "gpuSchedulingClass": "realtime", "gpuSchedulingChangeReason": "queued drops", "gpuPriorityForeground": "fortniteclient-win64-shipping.exe" }));
         changed.capture_pressure = CapturePressure::Critical;
         changed.degraded = true;
         let out = recorder.observe(&changed, T0 + 2_000, &scrubber(), || unreachable!());
         assert_eq!(codes(&out), ["capture_backend_changed", "pressure_changed", "degraded", "gpu_priority_changed"]);
+        let Body::Event(priority) = &out[3].body else { panic!() };
+        assert_eq!(priority.data.get("reason"), Some(&json!("queued drops")));
+        assert_eq!(priority.data.get("game"), Some(&json!("fortniteclient-win64-shipping.exe")));
         let out = recorder.observe(&sample(true, json!({ "activeCaptureBackend": "DDA", "gpuSchedulingClass": "realtime" })), T0 + 64_000, &scrubber(), || unreachable!());
         let Body::Minute(minute) = &out[0].body else { panic!() };
         assert_eq!((minute.worst_pressure.as_str(), minute.degraded_seconds), ("critical", 2));
         assert_eq!(codes(&out)[1..], ["pressure_changed", "degraded"]);
+    }
+
+    #[test]
+    fn minutes_split_time_and_drops_by_gpu_priority() {
+        let mut recorder = Recorder::default();
+        let at = |class: &str, dropped: u64, front: &str, wanted: bool| {
+            json!({ "droppedFrames": dropped, "gpuSchedulingClass": class, "gpuPriorityForeground": front, "gpuPriorityRaised": wanted })
+        };
+        recorder.observe(&sample(true, at("normal", 0, "game.exe", false)), T0, &scrubber(), || "s".into());
+        recorder.observe(&sample(true, at("realtime", 2, "game.exe", true)), T0 + 2_000, &scrubber(), || unreachable!());
+        recorder.observe(&sample(true, at("normal", 10, "game.exe", true)), T0 + 4_000, &scrubber(), || unreachable!());
+        recorder.observe(&sample(true, at("normal", 10, "", false)), T0 + 6_000, &scrubber(), || unreachable!());
+        let out = recorder.end_session("quit");
+        let Body::Minute(minute) = &out[0].body else { panic!() };
+        assert_eq!((minute.realtime_seconds, minute.game_front_seconds, minute.held_seconds), (2, 6, 2));
+        assert_eq!((minute.dropped_realtime, minute.dropped_normal), (2, 8));
     }
 
     #[test]

@@ -113,6 +113,10 @@ private:
     std::optional<uint64_t> lastVramUsage_;
     uint64_t vramTotal_ = 0;
     std::string holdReason_;
+    // Why the scheduling class last changed (policy decision or gate), and
+    // the known game the last detection pass saw in front (empty when none).
+    std::string changeReason_;
+    std::string policyForeground_;
     GpuRaisePolicy policy_;
     // Touched only by refreshUsage().
     std::optional<double> lastBusy_;

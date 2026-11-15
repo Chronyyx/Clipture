@@ -184,6 +184,18 @@ struct Diagnostics {
     // games the per-game memory holds, and how many of the last 15 detection
     // windows lost frames.
     std::string gpuPriorityReason;
+    // Why the scheduling class last changed: a policy decision ("queued
+    // drops", "game in background", "raise ineffective", "gpu quiet", ...) or
+    // a gate ("encoder setup", VRAM). Kept after a lower, unlike the reason
+    // above. And the known game the last detection pass saw in front.
+    std::string gpuSchedulingChangeReason;
+    std::string gpuPriorityForeground;
+    // A raise the policy wants but a gate holds at normal ("encoder setup",
+    // "video memory moving"; empty when none), and the shares of frames lost
+    // before and during the last raise judged ineffective (-1 until one was).
+    std::string gpuPriorityHold;
+    double gpuPolicyIneffectiveBefore = -1;
+    double gpuPolicyIneffectiveDuring = -1;
     int gpuPriorityRememberedGames = 0;
     int gpuStarvationLossyWindows = 0;
     // Adapter 3D busy percent since the previous diagnostics that asked for

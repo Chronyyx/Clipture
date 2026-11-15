@@ -72,7 +72,7 @@ start of Clipture; `session` is one stretch of the replay buffer running
 | `run_start` | app start | version, previous version (an update), whether the previous run ended cleanly, Windows build, CPU model and threads, memory, GPU and driver, hardware GPU scheduling, displays (size, refresh, HDR, primary), recording settings (below) |
 | `run_end` | quit, update, restart | reason |
 | `session_start` / `session_end` | engine starts/stops recording | capture backend, encoder, codec, source/output resolution, target fps; at the end: minutes, frames dropped, saves, warnings, errors |
-| `minute` | each clock minute of a session, from the 2-second engine samples | samples; output, capture and desktop-present fps (mean and minimum); dropped frames and each non-zero counted reason (`frame_definitions.json`); dominant reason; worst capture pressure; seconds degraded; p95 maxima of NVENC call, encoder queue residence, capture processing and input mapping; process and adapter VRAM maxima (GPU busy is not sampled: reading it costs the engine a counter collection); replay archive queued and RAM-fallback bytes maxima; GPU scheduling class |
+| `minute` | each clock minute of a session, from the 2-second engine samples | samples; output, capture and desktop-present fps (mean and minimum); dropped frames and each non-zero counted reason (`frame_definitions.json`); dominant reason; worst capture pressure; seconds degraded; p95 maxima of NVENC call, encoder queue residence, capture processing and input mapping; process and adapter VRAM maxima (GPU busy is not sampled: reading it costs the engine a counter collection); replay archive queued and RAM-fallback bytes maxima; GPU scheduling class; seconds at realtime GPU priority, with a known game in front, and with a wanted raise held by a gate; dropped frames at realtime and at normal |
 | `event` | immediately when it happens | `level` (info, warn, error), `code`, optional scrubbed `message`, small `data` map |
 
 An `incident` carries the 2-second samples around a detected problem: the
@@ -83,8 +83,9 @@ and game (desktop present) fps, dropped frames by reason, capture pressure,
 NVENC, encoder-queue, capture and input-mapping latencies, the longest gaps
 between source frames, recorded frames and published frames, scheduler
 lateness, queued frames, NVENC frames and GPU packets in flight, process and
-adapter VRAM and the VRAM budget, replay bytes queued and the GPU scheduling
-class. Triggers, 10 seconds into a session:
+adapter VRAM and the VRAM budget, replay bytes queued, the GPU scheduling
+class, whether a known game was in front, whether the GPU policy wanted a
+raise, and the gate holding it. Triggers, 10 seconds into a session:
 
 | trigger | condition |
 | --- | --- |
@@ -122,7 +123,7 @@ Event codes:
 | `replay_write_failure` | error | `replayArchiveWriteFailures` increased |
 | `pressure_changed` | info/warn | capture pressure changed (warn when not healthy) |
 | `degraded` | warn | engine reports degraded (start and end) |
-| `gpu_priority_changed` | info | scheduling class changed |
+| `gpu_priority_changed` | info | scheduling class changed: from, to, the reason (a policy decision such as `game in background` or `raise ineffective`, or a gate such as `encoder setup`) and the known game's exe name the engine saw in front |
 | `encoder_hang` | warn | encoder watchdog recovered the encoder |
 | `recording_halted` | error | encoder watchdog gave up |
 | `engine_lost` | error | engine stopped running inside a run without a requested stop, or missed three samples in a row |

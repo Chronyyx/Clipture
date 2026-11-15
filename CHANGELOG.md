@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.1] - 2026-11-15
+
+### Telemetry
+
+- **Explains GPU priority:** For people who joined a telemetry server, each change of recording's GPU priority now says why it happened (the game went to the background, the raise did not help, a video-memory or encoder check held it) and which game was in front, and every minute records how long recording ran at each priority and how many frames it lost at each. That shows whether "Prioritize recording on the GPU" helps on a given PC and when it was switched off while it was needed.
+
 ## [1.9.0] - 2026-11-15
 
 ### Recording

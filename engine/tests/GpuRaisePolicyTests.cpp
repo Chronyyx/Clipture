@@ -114,6 +114,10 @@ void ineffectiveRaiseIsUndone() {
     const int loweredAt = session.until(Action::Lower, 30, "game.exe", {"game.exe"}, drops, 10);
     require(loweredAt == GpuRaisePolicy::kEffectPasses && reasonIs(session.last, "raise ineffective"),
             "a raise that leaves the loss unchanged is undone after the effect window");
+    // The decision keeps what it was based on: 5 % lost before and during.
+    require(session.policy.lastIneffectiveBefore() > 0.04 && session.policy.lastIneffectiveBefore() < 0.06 &&
+                session.policy.lastIneffectiveDuring() > 0.04 && session.policy.lastIneffectiveDuring() < 0.06,
+            "an ineffective raise records the loss before and during it");
     require(session.until(Action::Raise, 30, "game.exe", {"game.exe"}, drops, 10) == 0,
             "an ineffective game session is not raised again");
     require(session.until(Action::Lower, 2, "", {}, 0) == 0, "game exits while lowered");
@@ -123,6 +127,8 @@ void ineffectiveRaiseIsUndone() {
 
 void effectiveRaiseStays() {
     Session session;
+    require(session.policy.lastIneffectiveBefore() < 0 && session.policy.lastIneffectiveDuring() < 0,
+            "no ineffective raise yet: the recorded shares are unknown");
     require(session.until(Action::Raise, 20, "game.exe", {"game.exe"}, 6, 10) > 0, "steady drops raise");
     // Realtime cut the loss by more than half; occasional drops remain.
     require(session.until(Action::Lower, 60, "game.exe", {"game.exe"}, 2, 30) == 0,

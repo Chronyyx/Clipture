@@ -135,6 +135,14 @@ pub struct Minute {
     pub replay_queued_max_bytes: u64,
     pub replay_ram_fallback_max_bytes: u64,
     pub gpu_scheduling_class: String,
+    /// Seconds recording ran at realtime GPU priority, a known game was in
+    /// front, and a raise was wanted but held at normal by a gate.
+    pub realtime_seconds: u32,
+    pub game_front_seconds: u32,
+    pub held_seconds: u32,
+    /// Dropped frames split by the priority they happened at.
+    pub dropped_realtime: u64,
+    pub dropped_normal: u64,
 }
 
 /// The 2-second samples around a detected problem: up to 60 s before the
@@ -183,6 +191,11 @@ pub struct IncidentSample {
     pub vram_budget_mb: f64,
     pub replay_queued_bytes: u64,
     pub gpu_scheduling_class: String,
+    pub game_in_front: bool,
+    /// The GPU policy wants realtime (it may be held at normal by a gate).
+    pub gpu_raise_wanted: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub gpu_hold: String,
     /// Only measured after the trigger (it costs the engine a counter read).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_busy_percent: Option<f64>,
@@ -324,7 +337,8 @@ mod tests {
             "captureFpsMean", "captureProcessingP95MaxUs", "degradedSeconds", "desktopFpsMean", "dominantReason", "dropped",
             "encoderQueueP95MaxUs", "gpuSchedulingClass", "inputMapP95MaxUs", "minute",
             "nvencCallP95MaxUs", "outputFpsMean", "outputFpsMin", "reasons", "replayQueuedMaxBytes", "replayRamFallbackMaxBytes",
-            "samples", "vramAdapterMaxMb", "vramProcessMaxMb", "worstPressure",
+            "samples", "vramAdapterMaxMb", "vramProcessMaxMb", "worstPressure", "realtimeSeconds", "gameFrontSeconds",
+            "heldSeconds", "droppedRealtime", "droppedNormal",
         ];
         minute.sort_unstable();
         assert_eq!(keys(&serde_json::to_value(Minute::default()).unwrap()), minute);
@@ -334,10 +348,10 @@ mod tests {
             "encoderQueueP95Us", "encoderQueueMaxUs", "captureProcessingP95Us", "inputMapP95Us", "captureIntervalMaxUs",
             "outputIntervalMaxUs", "publishedIntervalMaxUs", "schedulerLatenessMaxUs", "queuedFrames", "nvencInFlight",
             "gpuPacketsInFlight", "vramProcessMb", "vramAdapterMb", "vramBudgetMb", "replayQueuedBytes", "gpuSchedulingClass",
-            "gpuBusyPercent",
+            "gpuBusyPercent", "gameInFront", "gpuRaiseWanted", "gpuHold",
         ];
         sample.sort_unstable();
-        let full = IncidentSample { gpu_busy_percent: Some(1.0), ..Default::default() };
+        let full = IncidentSample { gpu_busy_percent: Some(1.0), gpu_hold: "video memory moving".into(), ..Default::default() };
         assert_eq!(keys(&serde_json::to_value(full).unwrap()), sample);
     }
 

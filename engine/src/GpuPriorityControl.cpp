@@ -124,6 +124,7 @@ void GpuPriorityControl::observe(const std::string& foregroundGame,
     const auto vramUsage = gateMemory_->dedicatedUsageBytes();
     std::lock_guard lock(mutex_);
     lastInFlight_ = inFlight;
+    policyForeground_ = foreground;
     updateGatesLocked(pipeline, fps, vramUsage);
     if (!boost_ || override_) return;
     applyRaiseLocked();
@@ -149,6 +150,7 @@ void GpuPriorityControl::observe(const std::string& foregroundGame,
         vramWaitPasses_ = 0;
         applyRaiseLocked();
     } else if (decision.action == GpuRaisePolicy::Action::Lower) {
+        holdReason_.clear();
         setClassLocked(static_cast<int>(platform::GpuSchedulingClass::Normal), decision.reason);
     }
 }
@@ -168,6 +170,11 @@ void GpuPriorityControl::publish(Diagnostics& diagnostics) {
     diagnostics.gpuStarvationLossyWindows = policy_.lossyWindows();
     diagnostics.gpuPacketsInFlight = lastInFlight_.value_or(-1.0);
     diagnostics.gpuSchedulingRequested = requested_;
+    diagnostics.gpuSchedulingChangeReason = changeReason_;
+    diagnostics.gpuPriorityForeground = policyForeground_;
+    diagnostics.gpuPriorityHold = holdReason_;
+    diagnostics.gpuPolicyIneffectiveBefore = policy_.lastIneffectiveBefore();
+    diagnostics.gpuPolicyIneffectiveDuring = policy_.lastIneffectiveDuring();
     diagnostics.gpuSchedulingOverride = override_;
     diagnostics.gpuSchedulingClass = active_;
     diagnostics.gpuSchedulingStatus = setStatus_;
@@ -233,6 +240,7 @@ void GpuPriorityControl::setClassLocked(int requested, const char* reason) {
         GetCurrentProcess(), static_cast<platform::GpuSchedulingClass>(requested));
     realtimeApplied_ = requested == static_cast<int>(platform::GpuSchedulingClass::Realtime);
     requested_ = platform::gpuSchedulingClassName(requested);
+    changeReason_ = reason;
     active_ = result.available ? platform::gpuSchedulingClassName(result.active) : "unavailable";
     setStatus_ = static_cast<int64_t>(result.setStatus);
     std::cerr << "[engine] GPU scheduling class requested=" << requested_

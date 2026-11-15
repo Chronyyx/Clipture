@@ -74,6 +74,10 @@ public:
     const std::string& raisedGame() const { return game_; }
     const std::string& reason() const { return reason_; }
     int lossyWindows() const { return starvation_.lossyWindows(); }
+    // Shares of frames lost before and during the last raise judged
+    // ineffective (-1 until one was): what that decision was based on.
+    double lastIneffectiveBefore() const { return lastIneffectiveBefore_; }
+    double lastIneffectiveDuring() const { return lastIneffectiveDuring_; }
     // A pass reads packets in flight only when it can act on them: while raised
     // (memory and quiet step-down), or for a game in front that dropped frames
     // since the previous pass. Below a raise the queue matters only to the
@@ -181,6 +185,8 @@ private:
         if (beforeRate_ && during_.filled >= kEffectPasses) {
             const double rate = during_.rate();
             if (rate >= kLossyShare && rate >= 0.5 * *beforeRate_) {
+                lastIneffectiveBefore_ = *beforeRate_;
+                lastIneffectiveDuring_ = rate;
                 blocked_ = game_;
                 auto lowered = lower("raise ineffective");
                 lowered.rememberGame = decision.rememberGame;
@@ -237,6 +243,8 @@ private:
     DropRate before_;
     DropRate during_;
     std::optional<double> beforeRate_;
+    double lastIneffectiveBefore_ = -1;
+    double lastIneffectiveDuring_ = -1;
     GpuStarvationDetector starvation_;
     GpuQuietWatch quiet_;
     GpuRememberWatch remember_;
