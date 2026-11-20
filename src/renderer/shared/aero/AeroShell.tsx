@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { startWindowResize, watchWindowFill, type ResizeEdge } from '../../platform';
 import { SHELL_SLICES, drawAeroShell } from './shellArt';
+import { cachedShell, forgetShell, shellKey, storeShell } from './shellCache';
 
 function subscribe(onChange: () => void) {
   const observer = new MutationObserver(onChange);
@@ -93,7 +94,10 @@ function ShellArt() {
       if (width < 1 || height < 1 || key === drawn) return;
       const current = ++run;
       // Built from the module's own constants; nothing user-supplied enters it.
-      const url = URL.createObjectURL(new Blob([drawAeroShell(width, height, ratio)], { type: 'image/svg+xml' }));
+      const svg = drawAeroShell(width, height, ratio);
+      const shell = shellKey(svg);
+      const stored = cachedShell(shell);
+      const url = stored ?? URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
       try {
         const image = new Image();
         image.src = url;
@@ -104,10 +108,16 @@ function ShellArt() {
         target.height = Math.round(height * ratio + room * 2);
         const context = target.getContext('2d');
         if (!context) return;
-        context.shadowColor = 'rgb(4 12 60 / 50%)';
-        context.shadowBlur = 9 * ratio;
-        context.shadowOffsetY = 5 * ratio;
-        context.drawImage(image, room, room, width * ratio, height * ratio);
+        if (stored) {
+          // The stored bitmap is the finished canvas, shadow and all.
+          context.drawImage(image, 0, 0, target.width, target.height);
+        } else {
+          context.shadowColor = 'rgb(4 12 60 / 50%)';
+          context.shadowBlur = 9 * ratio;
+          context.shadowOffsetY = 5 * ratio;
+          context.drawImage(image, room, room, width * ratio, height * ratio);
+          storeShell(shell, target);
+        }
         cache.width = target.width;
         cache.height = target.height;
         cache.getContext('2d')?.drawImage(target, 0, 0);
@@ -116,9 +126,14 @@ function ShellArt() {
         // The interface is held hidden until its shell is first drawn.
         document.documentElement.dataset.shellReady = 'true';
       } catch {
-        // A failed decode leaves the last good art in place.
+        // A stored bitmap that will not decode is dropped and the art drawn
+        // afresh; a failed fresh decode leaves the last good art in place.
+        if (stored && current === run) {
+          forgetShell();
+          void draw();
+        }
       } finally {
-        URL.revokeObjectURL(url);
+        if (!stored) URL.revokeObjectURL(url);
       }
     };
 

@@ -80,7 +80,7 @@ impl UpdateService {
             return Ok(());
         }
         let lease = self.gate.reserve_installation().map_err(|reason| self.fail(app, UpdateError::Blocked(reason)))?;
-        let child = activation::prepare(&candidate).map_err(|error| self.fail(app, error))?;
+        let child = activation::prepare(&candidate, activation::Relaunch::Shown).map_err(|error| self.fail(app, error))?;
         child.commit().map_err(|error| self.fail(app, error))?;
         std::mem::forget(lease);
         self.gate.before_exit();
@@ -118,7 +118,7 @@ impl UpdateService {
         }
         // The supervisor verifies the stage before the lease stops capture,
         // so the only downtime is the rename and the new version's startup.
-        let child = inplace::supervisor::prepare(paths).map_err(|error| self.fail(app, error))?;
+        let child = inplace::supervisor::prepare(paths, activation::Relaunch::Shown).map_err(|error| self.fail(app, error))?;
         let lease = self.gate.reserve_installation().map_err(|reason| self.fail(app, UpdateError::Blocked(reason)))?;
         child.commit().map_err(|error| self.fail(app, error))?;
         std::mem::forget(lease);

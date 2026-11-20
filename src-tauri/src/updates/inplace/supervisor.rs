@@ -4,7 +4,7 @@
 //! version from the same path and commits once that version reports health.
 use super::{installation, journal::{self, Phase}, stage, transaction::{self, Paths}, RealDisk, LOCK};
 use super::super::{
-    activation::{self, HandoffChild},
+    activation::{self, HandoffChild, Relaunch},
     handoff_process::OwnedProcess,
     manifest::invalid,
     runtime_store,
@@ -18,11 +18,14 @@ const SWAP_PATIENCE: Duration = Duration::from_secs(15);
 const NO_WINDOW: u32 = 0x0800_0000;
 
 /// Starts a supervisor that has already verified the staged update.
-pub fn prepare(paths: &Paths) -> Result<HandoffChild, UpdateError> {
+pub fn prepare(paths: &Paths, relaunch: Relaunch) -> Result<HandoffChild, UpdateError> {
     activation::unelevated()?;
     let mut command = Command::new(std::env::current_exe()?);
     command.arg(FLAG).arg(std::process::id().to_string()).arg(paths.install());
-    forward_arguments(&mut command, &std::env::args().collect::<Vec<_>>());
+    // The supervisor passes its own arguments on to the new version, and to
+    // the previous one if it rolls back, so tray-or-window is decided here.
+    if relaunch.hidden() { command.arg("--hidden"); }
+    if let Some(invite) = activation::invite_link_argument(&std::env::args().collect::<Vec<_>>()) { command.arg(invite); }
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; command.creation_flags(NO_WINDOW); }
     let mut child = OwnedProcess::spawn(&mut command)?;

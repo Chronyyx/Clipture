@@ -75,7 +75,7 @@ pub fn activate_staged() -> Result<Option<bool>, UpdateError> {
     let Some(paths) = installation::managed() else { return Ok(None) };
     if let Some(manifest) = staged_upgrade(&paths) {
         tracing::info!(version = %manifest.version, "Applying staged update at launch");
-        supervisor::prepare(&paths)?.commit()?;
+        supervisor::prepare(&paths, activation::Relaunch::AsLaunched)?.commit()?;
         return Ok(Some(true));
     }
     let exe = std::env::current_exe()?.canonicalize()?;

@@ -106,7 +106,7 @@ pub fn activate_at_launch() -> Result<bool, UpdateError> {
         }
         if !candidate.manifest.newer_than(env!("CARGO_PKG_VERSION")) { continue; }
         runtime_store::atomic_signed(&root, "pending.json", &candidate.signed)?;
-        match prepare(&candidate).and_then(|child| child.commit()) {
+        match prepare(&candidate, Relaunch::AsLaunched).and_then(|child| child.commit()) {
             Ok(()) => return Ok(true),
             Err(error) => tracing::warn!(%error, "Runtime activation failed; retaining launcher"),
         }
@@ -115,6 +115,24 @@ pub fn activate_at_launch() -> Result<bool, UpdateError> {
 }
 
 pub struct HandoffChild(pub(super) OwnedProcess);
+
+/// How the updated version comes back. A launch that started hidden (at
+/// sign-in) applies a staged update and stays in the tray; an update the
+/// user installs from the open window brings the window back with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Relaunch {
+    AsLaunched,
+    Shown,
+}
+
+impl Relaunch {
+    /// Whether the next version starts in the tray.
+    pub(super) fn hidden(self) -> bool {
+        self == Relaunch::AsLaunched
+            && std::env::args().any(|arg| matches!(arg.as_str(), "--hidden" | "--background"))
+    }
+}
+
 impl HandoffChild {
     pub fn commit(mut self) -> Result<(), UpdateError> {
         self.0.send(b"activate\n")?;
@@ -124,12 +142,12 @@ impl HandoffChild {
     }
 }
 
-pub fn prepare(candidate: &VerifiedRuntime) -> Result<HandoffChild, UpdateError> {
+pub fn prepare(candidate: &VerifiedRuntime, relaunch: Relaunch) -> Result<HandoffChild, UpdateError> {
     unelevated()?;
     let mut command = Command::new(std::env::current_exe()?);
     command.arg("--runtime-supervisor").arg(std::process::id().to_string())
         .arg(candidate.manifest.directory_name());
-    if std::env::args().any(|arg| matches!(arg.as_str(), "--hidden" | "--background")) { command.arg("--hidden"); }
+    if relaunch.hidden() { command.arg("--hidden"); }
     if let Some(invite) = invite_link_argument(&std::env::args().collect::<Vec<_>>()) { command.arg(invite); }
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; command.creation_flags(0x0800_0000); }
@@ -241,4 +259,14 @@ pub fn ui_executable() -> Result<PathBuf, UpdateError> {
     let path = candidate.directory.join("clipture.exe");
     *slot = Some(candidate);
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Relaunch;
+
+    #[test]
+    fn an_update_installed_from_the_window_never_comes_back_hidden() {
+        assert!(!Relaunch::Shown.hidden());
+    }
 }

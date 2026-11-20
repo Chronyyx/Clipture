@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.9.4] - 2026-11-20
+
+### Updates
+
+- **Comes back after updating:** Installing an update from the window now reopens the window once the new version starts. When Clipture had started with Windows, the new version came back only in the tray, so it looked as if it had not restarted.
+
+### Interface
+
+- **Aero opens faster:** The Aero theme keeps its finished frame between launches, so opening the window or the app no longer waits for the frame to be redrawn from scratch each time.
+
 ## [1.9.3] - 2026-11-19
 
 ### Interface
