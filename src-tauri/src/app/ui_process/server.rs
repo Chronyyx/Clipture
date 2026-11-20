@@ -86,12 +86,22 @@ pub fn read(app: AppHandle, session: Arc<Session>, mut reader: impl Read) {
     // Not closed by the user or Clipture: the window process died or sent
     // something invalid. Leave a trace; this otherwise leaves none.
     if !session.closing.load(Ordering::Acquire) {
-        let ending = match session.exit_code() {
+        let code = session.exit_code();
+        // Shutdown or sign-out ends the window process with this code; that
+        // is the PC turning off, not a crash.
+        #[cfg(windows)]
+        let by_windows = code == Some(crate::platform::windows::ENDED_BY_WINDOWS);
+        #[cfg(not(windows))]
+        let by_windows = false;
+        let ending = match code {
+            _ if by_windows => "window process ended by Windows (shutdown or sign-out)".to_owned(),
             Some(code) => format!("window process ended unexpectedly (exit code {code:#x})"),
             None => "window process stopped answering or sent an invalid message".to_owned(),
         };
         tracing::warn!("{ending}");
-        crate::diagnostics::record_incident(&app.state::<AppState>().paths.data_dir, &ending);
+        if !by_windows {
+            crate::diagnostics::record_incident(&app.state::<AppState>().paths.data_dir, &ending);
+        }
     }
     session.stop();
     let state = app.state::<AppState>();

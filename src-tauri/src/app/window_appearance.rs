@@ -93,9 +93,9 @@ fn update_shape(window: &WebviewWindow) {
 pub fn apply(window: &WebviewWindow, settings: &ClipSettings) {
     #[cfg(windows)]
     {
-        // Light and Aero draw their own window controls, so they have no
-        // system frame.
-        let framed = !matches!(settings.ui_theme, UiTheme::Light | UiTheme::Aero);
+        // Aero draws its own window controls, so it has no system frame.
+        // Every other theme keeps the system caption, coloured to match.
+        let framed = !matches!(settings.ui_theme, UiTheme::Aero);
         let background = match settings.ui_theme {
             UiTheme::Light => 0xf1f1ed,
             UiTheme::Glitten => 0xe5dccb,

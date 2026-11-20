@@ -61,6 +61,17 @@ fn processor_name() -> String {
         .unwrap_or_else(|| "Unknown".into())
 }
 
+/// Whether Windows records games in the background (Settings → Gaming →
+/// Captures → "Record what happened"): both the capture switch and the
+/// background-recording switch on. It encodes on the same video engine as
+/// Clipture. None when the setting cannot be read.
+pub fn game_bar_background_recording() -> Option<bool> {
+    use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+    let key = RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Software\Microsoft\Windows\CurrentVersion\GameDVR").ok()?;
+    let on = |name: &str| key.get_value::<u32, _>(name).is_ok_and(|value| value != 0);
+    Some(on("AppCaptureEnabled") && on("HistoricalCaptureEnabled"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -16,6 +16,13 @@ pub fn install_crash_log(data_dir: &Path) {
     let path = data_dir.join(FILE_NAME);
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // Shutting down, Windows tears the window process down under its
+        // event loop (tao panics "cannot move state from Destroyed"); that is
+        // the PC turning off, not a crash.
+        if session_ending() {
+            previous(info);
+            return;
+        }
         let thread = std::thread::current();
         let entry = entry(
             thread.name().unwrap_or("unnamed"),
@@ -33,6 +40,9 @@ pub fn install_crash_log(data_dir: &Path) {
 /// Something went wrong without a panic (for example the window process
 /// died); recorded beside panics so one file tells the whole story.
 pub fn record_incident(data_dir: &Path, what: &str) {
+    if session_ending() {
+        return;
+    }
     let line = format!(
         "[{}] Clipture {} ({}) {what}\n",
         unix_seconds(),
@@ -49,6 +59,13 @@ fn entry(thread: &str, message: &str, location: &str) -> String {
         env!("CARGO_PKG_VERSION"),
         role(),
     )
+}
+
+fn session_ending() -> bool {
+    #[cfg(windows)]
+    return crate::platform::windows::session_ending();
+    #[cfg(not(windows))]
+    false
 }
 
 fn unix_seconds() -> u64 {

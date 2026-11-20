@@ -52,6 +52,10 @@ pub struct RunStart {
     pub hardware_gpu_scheduling: String,
     pub displays: Vec<Display>,
     pub settings: RecordingSettings,
+    /// Xbox Game Bar's "Record what happened": Windows recording games in
+    /// the background, a second encoder user alongside Clipture. Since 1.9.3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub game_bar_background_recording: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -119,6 +123,10 @@ pub struct Minute {
     pub output_fps_mean: f64,
     pub output_fps_min: f64,
     pub capture_fps_mean: f64,
+    /// The game's (or desktop's) present rate as capture sees it, measured
+    /// per 2-second sample. Before 1.9.3 this was the average since capture
+    /// started. Capture delivery is capped at twice the recording rate
+    /// (ADR 0031), so a faster game reads as that cap.
     pub desktop_fps_mean: f64,
     pub dropped: u64,
     /// Non-zero counted reasons, by their `frame_definitions.json` names.
@@ -143,6 +151,10 @@ pub struct Minute {
     /// Dropped frames split by the priority they happened at.
     pub dropped_realtime: u64,
     pub dropped_normal: u64,
+    /// The known game in front for most of the minute (its executable name,
+    /// lowercase), empty at the desktop or in other apps. Since 1.9.3.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub game: String,
 }
 
 /// The 2-second samples around a detected problem: up to 60 s before the

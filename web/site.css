@@ -769,11 +769,20 @@ h1 {
   .feature:hover .feature-icon { transform: translateY(-3px); }
 }
 
-/* The live dot breathes like the recorder's tally. */
-.motion .live-dot { animation: tally 2.4s ease-in-out infinite; }
-@keyframes tally {
-  50% { box-shadow: 0 0 0 6px rgb(240 120 54 / 0%); opacity: 0.7; }
+/* The live dot breathes like the recorder's tally. Only transform and
+   opacity move, so the compositor runs it without repainting the page. */
+.motion .live-dot { position: relative; isolation: isolate; box-shadow: none; animation: tally 2.4s ease-in-out infinite; }
+.motion .live-dot::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -3px;
+  border-radius: 50%;
+  background: rgb(240 120 54 / 22%);
+  animation: tally-ring 2.4s ease-in-out infinite;
 }
+@keyframes tally { 50% { opacity: 0.7; } }
+@keyframes tally-ring { 50% { transform: scale(1.6); opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
   .button::after,

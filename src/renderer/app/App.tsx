@@ -65,10 +65,10 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
     setFocusFriendId(friendId);
     setActiveTab("friends");
   };
-  // Light and Aero are drawn without the system frame: their own window
-  // keys, their own drag strip. Aero's shell is the whole window.
+  // Aero is drawn without the system frame: its own window keys, its own
+  // drag strip. Its shell is the whole window.
   const aero = useAeroTheme();
-  const ownFrame = drawsWindowControls && (settings?.uiTheme === "light" || settings?.uiTheme === "aero");
+  const ownFrame = drawsWindowControls && settings?.uiTheme === "aero";
   const { updateState, checkForUpdatesNow, downloadUpdate, installUpdate } = useUpdates(globalNotice);
   const updateControls = <TitlebarUpdateControls
     updateState={updateState}

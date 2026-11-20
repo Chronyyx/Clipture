@@ -79,6 +79,8 @@ struct Bucket {
     held_ms: i64,
     dropped_realtime: f64,
     dropped_normal: f64,
+    /// Time each known game was in front, to name the minute's game.
+    games: BTreeMap<String, i64>,
 }
 
 struct Session {
@@ -109,6 +111,8 @@ pub struct Recorder {
     last_incident_end_ms: Option<i64>,
     session_started_ms: i64,
     target_fps: u32,
+    /// The engine's cumulative present count at the last sample.
+    presents: Option<f64>,
 }
 
 fn number(diagnostics: &EngineDiagnostics, key: &str) -> f64 {
@@ -152,13 +156,13 @@ fn round1(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
 }
 
-fn sample_of(diagnostics: &EngineDiagnostics, dropped: f64, reasons: &BTreeMap<&'static str, f64>, detailed: bool) -> IncidentSample {
+fn sample_of(diagnostics: &EngineDiagnostics, game_fps: Option<f64>, dropped: f64, reasons: &BTreeMap<&'static str, f64>, detailed: bool) -> IncidentSample {
     let us = |key: &str| round1(number(diagnostics, key) / 10.0);
     IncidentSample {
         offset_ms: 0,
         output_fps: round1(number(diagnostics, "recentEncoderOutputFps")),
         capture_fps: round1(number(diagnostics, "recentPublishedFreshFps")),
-        desktop_fps: round1(number(diagnostics, "desktopPresentFps")),
+        desktop_fps: round1(game_fps.unwrap_or(0.0)),
         dropped: dropped as u64,
         reasons: reasons.iter().map(|(name, value)| (name.to_string(), *value as u64)).collect(),
         pressure: pressure_name(diagnostics.capture_pressure).into(),
@@ -308,6 +312,7 @@ impl Recorder {
                 out.extend(self.end_session("engine stopped"));
             }
             self.counters.clear();
+            self.presents = None;
             return out;
         }
         if self.session.is_none() {
@@ -342,6 +347,16 @@ impl Recorder {
         }
 
         let baseline = self.counters.is_empty();
+        // The game's present rate over this sample. The engine's own
+        // `desktopPresentFps` averages since capture started, so a minute's
+        // mean of it barely moves; the counter's step does. A smaller count
+        // means capture restarted: no rate for that sample.
+        let presents_now = number(diagnostics, "captureDesktopPresents");
+        let game_fps = self
+            .presents
+            .replace(presents_now)
+            .filter(|previous| presents_now >= *previous && interval > 0)
+            .map(|previous| (presents_now - previous) * 1000.0 / interval as f64);
         let dropped = self.delta(diagnostics, "droppedFrames");
         let mut reasons = BTreeMap::new();
         for (name, field) in REASONS {
@@ -433,7 +448,7 @@ impl Recorder {
 
         // Lag the minute average would hide: the game is presenting frames
         // but the recording falls behind, or the output stalls.
-        let sample = sample_of(diagnostics, dropped, &reasons, self.incident.as_ref().is_some_and(|i| i.after > 0) || self.wants_detail());
+        let sample = sample_of(diagnostics, game_fps, dropped, &reasons, self.incident.as_ref().is_some_and(|i| i.after > 0) || self.wants_detail());
         let target = f64::from(self.target_fps.max(1));
         let source_has_frames = sample.desktop_fps >= target * 0.9;
         let settled = now_ms - self.session_started_ms >= 10_000;
@@ -490,7 +505,9 @@ impl Recorder {
         bucket.samples += 1;
         bucket.output_fps.push(number(diagnostics, "recentEncoderOutputFps"));
         bucket.capture_fps.push(number(diagnostics, "recentPublishedFreshFps"));
-        bucket.desktop_fps.push(number(diagnostics, "desktopPresentFps"));
+        if let Some(fps) = game_fps {
+            bucket.desktop_fps.push(fps);
+        }
         bucket.dropped += dropped;
         for (name, value) in reasons {
             *bucket.reasons.entry(name).or_default() += value;
@@ -516,8 +533,10 @@ impl Recorder {
         } else {
             bucket.dropped_normal += dropped;
         }
-        if !text(diagnostics, "gpuPriorityForeground").is_empty() {
+        let game = text(diagnostics, "gpuPriorityForeground");
+        if !game.is_empty() {
             bucket.game_front_ms += interval;
+            *bucket.games.entry(game.to_lowercase()).or_default() += interval;
         }
         if flag(diagnostics, "gpuPriorityRaised") && !realtime {
             bucket.held_ms += interval;
@@ -563,6 +582,7 @@ impl Recorder {
             held_seconds: (bucket.held_ms / 1000) as u32,
             dropped_realtime: bucket.dropped_realtime as u64,
             dropped_normal: bucket.dropped_normal as u64,
+            game: bucket.games.iter().max_by_key(|(_, ms)| **ms).map(|(game, _)| game.clone()).unwrap_or_default(),
         };
         if let Some(session) = &mut self.session {
             session.minutes += 1;
@@ -755,12 +775,38 @@ mod tests {
     }
 
     /// Feeds `count` samples 2 s apart from `start`; returns everything recorded.
+    /// Feeds `count` samples 2 s apart. A sample's `desktopPresentFps` is
+    /// turned into the engine's cumulative present count, which is what the
+    /// recorder reads.
     fn feed(recorder: &mut Recorder, start: i64, count: usize, details: impl Fn(usize) -> Value) -> Vec<Out> {
         let mut out = Vec::new();
+        let mut presents = 0.0;
         for i in 0..count {
-            out.extend(recorder.observe(&sample(true, details(i)), start + i as i64 * 2_000, &scrubber(), || "s".into()));
+            let mut value = details(i);
+            presents += value["desktopPresentFps"].as_f64().unwrap_or(0.0) * 2.0;
+            value["captureDesktopPresents"] = json!(presents);
+            out.extend(recorder.observe(&sample(true, value), start + i as i64 * 2_000, &scrubber(), || "s".into()));
         }
         out
+    }
+
+    #[test]
+    fn game_fps_is_per_sample_and_minutes_name_their_game() {
+        let mut recorder = Recorder::default();
+        // A minute at 100 fps in Deadlock, then one at 50 fps on the desktop.
+        let start = T0 - T0 % 60_000;
+        let mut out = feed(&mut recorder, start, 60, |i| {
+            if i < 30 {
+                json!({ "fps": 60, "recentEncoderOutputFps": 60.0, "desktopPresentFps": 100.0, "gpuPriorityForeground": "Deadlock.exe" })
+            } else {
+                json!({ "fps": 60, "recentEncoderOutputFps": 60.0, "desktopPresentFps": 50.0 })
+            }
+        });
+        out.extend(recorder.end_session("quit"));
+        let minutes: Vec<&Minute> = out.iter().filter_map(|o| match &o.body { Body::Minute(m) => Some(m), _ => None }).collect();
+        assert_eq!(minutes.len(), 2);
+        assert_eq!((minutes[0].game.as_str(), minutes[0].desktop_fps_mean), ("deadlock.exe", 100.0));
+        assert_eq!((minutes[1].game.as_str(), minutes[1].desktop_fps_mean), ("", 50.0));
     }
 
     #[test]

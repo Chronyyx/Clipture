@@ -3,6 +3,7 @@
 //! it, signed, to the friend's server. Runs without any WebView.
 pub mod commands;
 mod enrollment;
+mod gpu_users;
 mod journal;
 mod log_layer;
 mod recorder;
@@ -205,7 +206,15 @@ impl TelemetryService {
             return;
         }
         let out = inner.recorder.observe(diagnostics, now_ms(), &self.scrubber, || random_id("s"));
+        // A burst (once a minute at most) is when to ask what else used the
+        // GPU; the probe runs on its own thread and reports back.
+        let burst = out.iter().any(|record| matches!(&record.body, Body::Event(event) if event.code == "drop_burst"));
         self.append_out(&mut inner, out);
+        drop(inner);
+        if burst {
+            let game = diagnostics.details.get("gpuPriorityForeground").and_then(serde_json::Value::as_str).unwrap_or_default();
+            gpu_users::probe(game.to_string());
+        }
     }
 
     /// True while an incident collects samples: the host then asks the

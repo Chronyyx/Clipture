@@ -46,7 +46,6 @@
 .window-control:active { filter: brightness(0.85); }
 .window-control:focus-visible { outline: 2px solid var(--selection-ring, rgb(0 0 0 / 30%)); outline-offset: 2px; }
 
-/* Room for the lights above the brand, and a drag strip the full width
-   (the system's buttons no longer take its right end). */
-:root[data-theme="light"] .app-shell:has(> .window-controls) .sidebar { padding-top: 44px; }
+/* A drag strip the full width (the system's buttons no longer take its
+   right end). */
 .app-shell:has(> .window-controls) > .titlebar-drag-region { right: 0; height: 36px; }

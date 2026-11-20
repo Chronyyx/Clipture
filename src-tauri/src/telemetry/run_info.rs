@@ -50,5 +50,9 @@ pub fn run_start(settings: &ClipSettings, displays: &[DisplayDevice], system: &O
             mic_isolation: configure.mic_isolation,
             noise_gate: configure.noise_gate_enabled,
         },
+        #[cfg(windows)]
+        game_bar_background_recording: crate::platform::windows::game_bar_background_recording(),
+        #[cfg(not(windows))]
+        game_bar_background_recording: None,
     }
 }

@@ -138,6 +138,12 @@
 :root[data-theme="aero"][data-window-fill="true"] body { background: var(--aero-sky); }
 :root[data-theme="aero"] .app-shell { grid-template-columns: 260px minmax(0, 1fr); background: transparent; isolation: isolate; font-size: 12px; font-variant-numeric: tabular-nums; }
 .aero-shell { display: none; }
+/* Aero's scrollers are see-through over the shell, so Chromium would scroll
+   them by repainting the whole interface, every shadow and gradient, each
+   frame. Asking for scroll-position keeps them on their own layer. */
+:root[data-theme="aero"] :is(.sidebar, .workspace, .workspace > .view, .clip-rail, .browse-surface > .library-player,
+  .share-rail-list, .share-people, .share-side-list, .share-pick-list, .process-picker-list, .telemetry-batch,
+  .modal-body, .process-list, .update-confirm-dialog) { will-change: scroll-position; }
 :root[data-theme="aero"] .aero-shell {
   display: block;
   position: absolute;

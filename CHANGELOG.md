@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+## [1.9.3] - 2026-11-19
+
+### Interface
+
+- **A title bar that matches:** The Light theme now uses the normal Windows title bar and buttons, coloured to match the theme, instead of the round coloured buttons in the top-left corner and a black bar above them.
+- **Smoother Aero:** Scrolling in the Aero theme no longer redraws the whole window every frame, which made it stutter on slower graphics cards.
+
+### Telemetry
+
+- **What else used the GPU:** When recording drops a burst of frames, Clipture notes which kinds of apps were using the GPU's video encoder, video decoder and 3D engine at that moment (for example Discord, a browser, or NVIDIA's overlay), so a lag spike explains itself without anyone having to remember what they were doing. Apps that are not on a fixed list are reported only as "other app"; no app names leave your PC.
+- **Spots Windows recording too:** Telemetry notes whether Xbox Game Bar's "Record what happened" is on. It records your games a second time on the same video encoder as Clipture, costing frames in both; the telemetry server's owner can then tell you to turn it off.
+- **Game and frame rate per minute:** Every minute now names the game you were in, and the game's frame rate is measured per minute instead of averaged since recording started.
+- **Shutting down is not a crash:** Turning off, restarting or signing out of Windows with Clipture's window open was reported as a crash, because Windows ends the window process mid-way. It is no longer reported; recording was never affected.
+
 ## [1.9.2] - 2026-11-15
 
 ### Recording
