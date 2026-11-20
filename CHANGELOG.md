@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.9.5] - 2026-11-20
+
+### Interface
+
+- **A stuck window fixes itself:** If Clipture's window got stuck (blank, see-through, or not coming up when you clicked the tray icon), it stayed that way until you restarted Clipture. The window now notices when its page has crashed or frozen, or never finished opening, and reopens on its own. Recording was never affected.
+
+### Recording
+
+- **GPU boost for every game:** "Prioritize recording on the GPU" only kicked in for games Clipture recognised, so a game it missed (for example one running as administrator) could make recordings drop frames with the boost never switching on. It now kicks in whenever recording starts dropping frames, whatever is in front.
+- **Remembers unrecognised games too:** A game that needed the boost is remembered so it gets it right away next time. This now works for apps Clipture does not recognise as games, by their program name.
+
 ## [1.9.4] - 2026-11-20
 
 ### Updates

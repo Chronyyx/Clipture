@@ -110,6 +110,7 @@ void GpuPriorityControl::apply(bool boost, const std::string& memoryPath, Diagno
 }
 
 void GpuPriorityControl::observe(const std::string& foregroundGame,
+                                 const std::string& foregroundApp,
                                  const std::vector<std::string>& runningGames,
                                  uint64_t droppedTotal,
                                  int64_t now100ns,
@@ -131,6 +132,7 @@ void GpuPriorityControl::observe(const std::string& foregroundGame,
 
     GpuRaisePolicy::Pass pass;
     pass.foreground = foreground;
+    pass.foregroundApp = lowerAscii(foregroundApp);
     pass.running.reserve(runningGames.size());
     for (const auto& game : runningGames) pass.running.push_back(lowerAscii(game));
     pass.droppedTotal = droppedTotal;

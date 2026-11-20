@@ -66,7 +66,8 @@ stutter into clips.
     passes (about 20 of 30 s) at least 2.5 % of the frames due, and at least
     3, were dropped. A stutter of several seconds or a loading screen does not
     raise it.
-  Drops while no game is in front are not counted.
+  Drops while no known game is in front count for the "no game" target
+  (since 2026-11-20, below).
 - A raised game is remembered once 40 or more packets have stayed in flight
   for 2 minutes in total in that session (`GpuRememberWatch`). A cutscene or
   one heavy moment ends before that and is not remembered; gameplay that
@@ -147,3 +148,37 @@ stutter into clips.
   without one.
 - The host watchdog's poll is now `getProgress` (ADR 0032); it still carries
   the class, so the 3 s threshold follows a raise as before.
+
+## Amendment 2026-11-20: starvation raises with no game in front
+
+Until now only a known game in front could raise. A friend playing Marvel
+Rivals as administrator recorded with `gameInFront=0` for most of a session
+and stayed at `normal` through a burst of 38 dropped frames, with Discord
+encoding and OBS on the same GPU. An elevated or unlisted game, a video or a
+stream starves recording just as a known game does, so the raise now follows
+the recording, not the game list:
+
+- With no known game in front, the app in front is the target, by its
+  executable name, and every rule for games applies to it: queued or steady
+  drops raise it, two minutes of a deep queue while raised remember it (so
+  its next session goes to realtime the moment it is in front), and it steps
+  down when it closes. The engine now lists every running process for the
+  policy, also with game audio on, so a raised app is seen closing.
+- `gpuPriorityForeground` (and telemetry's `gameInFront`) still name known
+  games only.
+- At the desktop or the Windows shell (Explorer, Start, search, lock
+  screen) the target is "no game" (`GpuRaisePolicy::noGame()`). It is never
+  remembered and never closes. It steps down for a quiet GPU queue (no
+  once-per-session limit, as there is no session) or when the raise is
+  ineffective, after which it waits about 5 minutes (`kNoGameRetryPasses`).
+- Moving between targets starts the drop history over, as moving between two
+  games already did.
+- Packets in flight count every process on the GPU, so an app in front can
+  be remembered for load that Discord or OBS added. That needs recording to
+  starve first and two minutes of a deep queue; a wrong entry costs game fps
+  while that app is in front, nothing else.
+- Packets in flight are read after any pass with drops, not only with a game
+  in front. Recording that runs cleanly still reads none.
+
+The cost argument above still holds: realtime is entered only when recording
+is already losing frames, and left as soon as the queue is quiet.

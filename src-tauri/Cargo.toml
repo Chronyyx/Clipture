@@ -1,6 +1,6 @@
 [package]
 name = "clipture"
-version = "1.9.4"
+version = "1.9.5"
 description = "Low-footprint native host for Clipture"
 authors = ["Clipture"]
 # MIT with the Commons Clause condition; no SPDX expression covers it.
@@ -16,9 +16,6 @@ crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-
-[target.'cfg(windows)'.dev-dependencies]
-webview2-com = "0.38.2"
 
 [dev-dependencies]
 minisign = "0.10"
@@ -65,6 +62,8 @@ flate2 = "1"
 tauri-plugin-updater = "2.11.0"
 
 [target.'cfg(windows)'.dependencies]
+# The same version Tauri uses, for the window's page-process watch.
+webview2-com = "0.38.2"
 auto-launch = "=0.5.0"
 winreg = "=0.55.0"
 png = "0.17"

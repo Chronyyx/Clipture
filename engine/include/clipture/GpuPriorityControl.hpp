@@ -50,7 +50,9 @@ public:
     void apply(bool boost, const std::string& memoryPath, Diagnostics& diagnostics);
     // One detection pass: the game in front (empty when none), every running
     // game and the engine's total dropped video frames. Any thread.
+    // `foregroundApp` is the app in front when no known game is (else empty).
     void observe(const std::string& foregroundGame,
+                 const std::string& foregroundApp,
                  const std::vector<std::string>& runningGames,
                  uint64_t droppedTotal,
                  int64_t now100ns,

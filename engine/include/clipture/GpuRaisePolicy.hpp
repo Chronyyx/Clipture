@@ -16,10 +16,17 @@ namespace clipture {
 // owns the platform calls, the boost setting and the gates that delay a raise.
 //
 // Rules, in order:
-// - A raise is always for the game in front. A remembered game raises when it
-//   comes to the front, not while it merely runs: a remembered game left in
-//   the background must not make another game, or the desktop, pay for
-//   realtime.
+// - A raise is for whatever is in front: a known game; else the app in front
+//   by executable name (an elevated or unlisted game, a video player), which
+//   is then treated exactly as a game, memory included; else, at the desktop
+//   or the Windows shell, the "no game" target. Recording that starves is
+//   worth realtime whatever starves it. The engine lists every running
+//   process, so a raised app is seen closing as a game is. A remembered game raises when it comes to the front, not
+//   while it merely runs: a remembered game left in the background must not
+//   make another game, or the desktop, pay for realtime.
+// - "No game" is never remembered and never closes: it steps down only for a
+//   quiet GPU or an ineffective raise. An ineffective one waits
+//   kNoGameRetryPasses before it may raise again, since no game exit ends it.
 // - Focus never lowers. A raised game that leaves the front keeps realtime
 //   while it keeps the GPU busy: a game still rendering behind Discord or on
 //   another monitor starves capture as much as one in front, and a few
@@ -37,6 +44,7 @@ class GpuRaisePolicy {
 public:
     struct Pass {
         std::string foreground;            // lowercase; empty when no game is in front
+        std::string foregroundApp;         // lowercase app in front when no game is; may be empty
         std::vector<std::string> running;  // lowercase running games
         uint64_t droppedTotal = 0;
         std::optional<double> inFlight;
@@ -57,9 +65,17 @@ public:
     static constexpr int kAwayPasses = 3;
     static constexpr int kEffectPasses = 15;
     static constexpr int kMinimumBeforePasses = 5;
+    static constexpr int kNoGameRetryPasses = 150;  // about 5 minutes
     static constexpr double kLossyShare = GpuStarvationDetector::kLossyShare;
 
-    Decision observe(const Pass& pass, const Remembered& remembered) {
+    // The target raised for when no known game is in front.
+    static const std::string& noGame() {
+        static const std::string name = "(no game)";
+        return name;
+    }
+
+    Decision observe(Pass pass, const Remembered& remembered) {
+        if (pass.foreground.empty()) pass.foreground = pass.foregroundApp.empty() ? noGame() : pass.foregroundApp;
         const auto drops = dropsSince(pass);
         if (raised_) return observeRaised(pass, drops);
         return observeLowered(pass, drops, remembered);
@@ -83,13 +99,13 @@ public:
     double lastIneffectiveBefore() const { return lastIneffectiveBefore_; }
     double lastIneffectiveDuring() const { return lastIneffectiveDuring_; }
     // A pass reads packets in flight only when it can act on them: while raised
-    // (memory and quiet step-down), or for a game in front that dropped frames
-    // since the previous pass. Below a raise the queue matters only to the
-    // queued-drops rule, which needs a drop in the same pass, so a game that
-    // records cleanly costs no reads (25 D3DKMT node reads per pass).
-    bool needsInFlight(const std::string& foreground, uint64_t droppedTotal) const {
+    // (memory and quiet step-down), or after frames were dropped since the
+    // previous pass. Below a raise the queue matters only to the queued-drops
+    // rule, which needs a drop in the same pass, so recording that runs
+    // cleanly costs no reads (25 D3DKMT node reads per pass).
+    bool needsInFlight(const std::string&, uint64_t droppedTotal) const {
         if (raised_) return !game_.empty();
-        return !foreground.empty() && lastAt_ && droppedTotal != lastDropped_;
+        return lastAt_ && droppedTotal != lastDropped_;
     }
 
 private:
@@ -165,7 +181,8 @@ private:
 
     Decision observeRaised(const Pass& pass, const Drops& drops) {
         if (game_.empty()) return {};
-        if (contains(pass.running, game_)) {
+        const bool noGameRaise = game_ == noGame();
+        if (noGameRaise || contains(pass.running, game_)) {
             missing_ = 0;
         } else if (++missing_ >= kGoneGamePasses) {
             return lower("game closed");
@@ -174,7 +191,7 @@ private:
         // Held at normal: the queue and drops say nothing about realtime yet.
         if (!pass.realtimeInEffect) return {};
         Decision decision;
-        if (reason_ != "remembered" && remember_.observe(pass.inFlight, pass.now100ns)) {
+        if (!noGameRaise && reason_ != "remembered" && remember_.observe(pass.inFlight, pass.now100ns)) {
             decision.rememberGame = true;
             decision.game = game_;
         }
@@ -185,12 +202,19 @@ private:
                 lastIneffectiveBefore_ = *beforeRate_;
                 lastIneffectiveDuring_ = rate;
                 blocked_ = game_;
+                if (noGameRaise) blockedPasses_ = kNoGameRetryPasses;
                 auto lowered = lower("raise ineffective");
                 lowered.rememberGame = decision.rememberGame;
                 return lowered;
             }
         }
         // One quiet step-down per game session (ADR 0029).
+        if (noGameRaise && quiet_.observe(pass.inFlight, pass.now100ns)) {
+            // No session to spend it on: new starvation may raise again.
+            auto lowered = lower("gpu quiet");
+            lowered.rememberGame = decision.rememberGame;
+            return lowered;
+        }
         if (game_ != quietGame_ && quiet_.observe(pass.inFlight, pass.now100ns)) {
             // Quiet because the game was left idle (minimized, paused behind
             // another window) says nothing about how it loads the GPU when
@@ -209,21 +233,23 @@ private:
     Decision observeLowered(const Pass& pass, const Drops& drops, const Remembered& remembered) {
         // Session marks end when their game exits.
         for (auto* game : { &quietGame_, &armed_, &blocked_ }) {
-            if (!game->empty() && !contains(pass.running, *game)) game->clear();
+            if (!game->empty() && *game != noGame() && !contains(pass.running, *game)) game->clear();
         }
+        // "No game" never exits; its block runs out instead.
+        if (blocked_ == noGame() && --blockedPasses_ <= 0) blocked_.clear();
         const auto& front = pass.foreground;
-        const bool eligible = !front.empty() && front != quietGame_ && front != blocked_;
+        const bool eligible = front != noGame() && front != quietGame_ && front != blocked_;
         if (eligible && front == armed_) return raise(front, "back in front");
         if (eligible && remembered && remembered(front)) return raise(front, "remembered");
 
-        // Starvation is judged per game in front; drops on the desktop or after a
-        // switch to another game start the history over.
+        // Starvation is judged per target in front; a switch between games, or
+        // to or from no game, starts the history over.
         if (front != tracked_) {
             tracked_ = front;
             starvation_.reset();
             before_.clear();
         }
-        if (front.empty() || front == blocked_) return {};
+        if (front == blocked_) return {};
         before_.add(drops);
         const auto verdict = starvation_.observe(pass.droppedTotal, pass.inFlight, pass.now100ns, pass.fps);
         if (verdict == GpuStarvationDetector::Verdict::None) return {};
@@ -241,6 +267,7 @@ private:
     std::string quietGame_;
     std::string armed_;
     std::string blocked_;
+    int blockedPasses_ = 0;
     std::optional<int64_t> lastAt_;
     uint64_t lastDropped_ = 0;
     DropRate before_;

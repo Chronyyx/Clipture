@@ -93,14 +93,19 @@ pub fn read(app: AppHandle, session: Arc<Session>, mut reader: impl Read) {
         let by_windows = code == Some(crate::platform::windows::ENDED_BY_WINDOWS);
         #[cfg(not(windows))]
         let by_windows = false;
+        let restarted = code == Some(super::worker_health::RESTART);
         let ending = match code {
             _ if by_windows => "window process ended by Windows (shutdown or sign-out)".to_owned(),
+            _ if restarted => "window was stuck and restarted itself".to_owned(),
             Some(code) => format!("window process ended unexpectedly (exit code {code:#x})"),
             None => "window process stopped answering or sent an invalid message".to_owned(),
         };
         tracing::warn!("{ending}");
         if !by_windows {
             crate::diagnostics::record_incident(&app.state::<AppState>().paths.data_dir, &ending);
+        }
+        if restarted {
+            app.state::<super::UiController>().reopen_after_restart();
         }
     }
     session.stop();

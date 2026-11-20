@@ -13,6 +13,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
 
@@ -26,7 +27,11 @@ pub struct UiController {
 struct Slot {
     session: Option<Arc<Session>>,
     reopen: bool,
+    last_restart: Option<Instant>,
 }
+
+/// A window that keeps getting stuck is not reopened faster than this.
+const RESTART_SPACING: Duration = Duration::from_secs(60);
 
 impl UiController {
     #[cfg(debug_assertions)]
@@ -155,6 +160,20 @@ impl UiController {
         if let Some(session) = session {
             session.stop();
         }
+    }
+
+    /// A window that restarted itself was wanted on screen, so it comes back
+    /// on its own; a page that can never load does not cycle, though.
+    pub fn reopen_after_restart(&self) {
+        let mut current = self
+            .current
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if current.last_restart.is_some_and(|last| last.elapsed() < RESTART_SPACING) {
+            return;
+        }
+        current.last_restart = Some(Instant::now());
+        current.reopen = true;
     }
 
     pub fn disconnected(&self, session: &Arc<Session>) -> bool {

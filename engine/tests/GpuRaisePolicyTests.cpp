@@ -22,6 +22,7 @@ struct Session {
     uint64_t dropped = 0;
     int64_t now = 0;
     bool realtime = false;
+    std::string app;  // the app in front when the front is no known game
     int reads = 0;
     GpuRaisePolicy::Decision last;
 
@@ -31,6 +32,7 @@ struct Session {
         now += kPass;
         GpuRaisePolicy::Pass input;
         input.foreground = front;
+        input.foregroundApp = app;
         input.running = std::move(running);
         input.droppedTotal = dropped;
         // As the engine does: the queue is read only when the policy can use it.
@@ -166,9 +168,62 @@ void quietStepDownOncePerSession() {
             "a session lowered for quiet is not raised from memory");
 }
 
-void desktopDropsNeverRaise() {
+void starvationWithNoGameRaises() {
     Session session;
-    require(session.until(Action::Raise, 30, "", {"game.exe"}, 30, 90) == 0, "drops at the desktop never raise");
+    // An elevated or unlisted game: nothing known in front, recording starves.
+    require(session.until(Action::Raise, 10, "", {"game.exe"}, 30, 90) > 0 && reasonIs(session.last, "queued drops"),
+            "queued drops with no known game in front raise");
+    require(session.last.game == GpuRaisePolicy::noGame(), "the raise is for no game");
+    // No game to close: running games come and go without a step-down.
+    require(session.until(Action::Lower, 30, "", {}, 0, 300) == 0, "a busy no-game raise never closes");
+    require(session.memory.empty(), "no game is never remembered");
+    // A quiet GPU steps down, and new starvation may raise again.
+    require(session.until(Action::Lower, 40, "", {}, 0, 5) > 0 && reasonIs(session.last, "gpu quiet"),
+            "a quiet GPU steps a no-game raise down");
+    require(session.until(Action::Raise, 10, "", {}, 30, 90) > 0, "new starvation raises again");
+}
+
+void ineffectiveNoGameRaiseWaits() {
+    Session session;
+    const uint64_t drops = 6;  // 5 % lost, shallow queue: steady drops
+    require(session.until(Action::Raise, 20, "", {}, drops, 10) > 0, "steady drops raise with no game");
+    require(session.until(Action::Lower, 30, "", {}, drops, 10) == GpuRaisePolicy::kEffectPasses &&
+                reasonIs(session.last, "raise ineffective"),
+            "an ineffective no-game raise is undone");
+    require(session.until(Action::Raise, GpuRaisePolicy::kNoGameRetryPasses - 1, "", {}, drops, 10) == 0,
+            "an ineffective no-game raise is not retried at once");
+    require(session.until(Action::Raise, 20, "", {}, drops, 10) > 0, "it may raise again once the wait is over");
+}
+
+void unlistedAppIsRaisedAndRemembered() {
+    Session session;
+    session.app = "rivals.exe";  // elevated or unlisted: no known game in front
+    require(session.until(Action::Raise, 10, "", {"rivals.exe"}, 30, 90) > 0 && session.last.game == "rivals.exe",
+            "starvation raises for the app in front");
+    // Two minutes of a deep queue while raised: remembered, as a game is.
+    require(session.until(Action::Raise, 80, "", {"rivals.exe"}, 0, 90) == 0 && session.memory.count("rivals.exe"),
+            "an app that keeps the queue deep is remembered");
+    require(session.until(Action::Lower, 2, "", {}, 0) == 2 && reasonIs(session.last, "game closed"),
+            "a raised app steps down when it closes");
+    // Next session: realtime as soon as it is in front, before any drop.
+    require(session.until(Action::Raise, 1, "", {"rivals.exe"}, 0) == 1 && reasonIs(session.last, "remembered"),
+            "a remembered app raises the moment it is in front");
+    // Another app in front does not inherit it.
+    Session other;
+    other.memory = session.memory;
+    other.app = "chrome.exe";
+    require(other.until(Action::Raise, 10, "", {"rivals.exe", "chrome.exe"}, 0) == 0,
+            "a remembered app in the background raises nothing");
+}
+
+void knownGameRaisesAfterNoGame() {
+    Session session;
+    require(session.until(Action::Raise, 10, "", {}, 30, 90) > 0, "no-game raise");
+    require(session.until(Action::Lower, 40, "", {}, 0, 5) > 0, "quiet step-down");
+    // The history starts over for the game, which then raises for itself.
+    require(session.until(Action::Raise, 10, "game.exe", {"game.exe"}, 30, 90) > 0 &&
+                session.last.game == "game.exe",
+            "a known game in front raises for itself");
 }
 
 void cleanGameReadsNoQueue() {
@@ -198,7 +253,10 @@ int main() {
     partialHelpStillCountsAsIneffectiveOnlyWhenLossRemainsHigh();
     heldRaiseIsNotJudged();
     quietStepDownOncePerSession();
-    desktopDropsNeverRaise();
+    starvationWithNoGameRaises();
+    ineffectiveNoGameRaiseWaits();
+    knownGameRaisesAfterNoGame();
+    unlistedAppIsRaisedAndRemembered();
     cleanGameReadsNoQueue();
     startRaisedHoldsUntilReset();
     std::cout << "GPU raise policy tests passed.\n";

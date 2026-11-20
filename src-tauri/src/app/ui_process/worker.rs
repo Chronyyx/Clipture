@@ -113,6 +113,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             })
             .build()?;
             crate::app::window_appearance::watch(&window);
+            super::worker_health::watch(&window);
             Ok(())
         })
         .on_window_event(move |window, event| {

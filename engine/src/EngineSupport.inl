@@ -616,6 +616,14 @@ ForegroundGameCaptureTarget detectForegroundGameCaptureTarget(
 // pass (ADR 0029): the known game in front, and the name of every running
 // process. Only a game that once starved recording matches the per-game memory,
 // and a raised game only needs to be found by name.
+// Every running process name, once each.
+void runningProcessNames(const RunningProcessSnapshot& processes, std::vector<std::string>& names) {
+    std::unordered_set<std::string> seen;
+    for (const auto& entry : processes.entries()) {
+        if (seen.insert(entry.lowerExeName).second) names.push_back(entry.exeName);
+    }
+}
+
 void detectGamesForGpuPriority(
     const ForegroundProcess& foreground,
     bool foregroundIsKnownGame,
@@ -623,10 +631,20 @@ void detectGamesForGpuPriority(
     std::string& foregroundGameExe,
     std::vector<std::string>& runningExes) {
     if (foregroundGameExe.empty() && foregroundIsKnownGame) foregroundGameExe = foreground.exeName;
-    std::unordered_set<std::string> seen;
-    for (const auto& entry : processes.entries()) {
-        if (seen.insert(entry.lowerExeName).second) runningExes.push_back(entry.exeName);
+    runningProcessNames(processes, runningExes);
+}
+
+// The app in front when no known game is, for GPU priority (ADR 0029,
+// 2026-11-20): an unlisted or elevated game is raised and remembered by its
+// executable name. Clipture itself and the Windows shell are no app.
+std::string gpuPriorityApp(const ForegroundProcess& foreground) {
+    if (isIgnoredForegroundProcess(foreground.exeName)) return {};
+    const auto lower = lowerAscii(foreground.exeName);
+    for (const char* shell : { "explorer.exe", "shellexperiencehost.exe", "startmenuexperiencehost.exe",
+                               "searchhost.exe", "lockapp.exe", "applicationframehost.exe" }) {
+        if (lower == shell) return {};
     }
+    return foreground.exeName;
 }
 
 // Lower-case process names of a list of audio source specs, for testing many

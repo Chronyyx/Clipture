@@ -472,19 +472,24 @@ void Engine::gameDetectionLoop() {
             }
         }
         if (fullPass) {
-            // Raises the engine's GPU class only on PCs where a game starves it.
+            // Raises the engine's GPU class only while recording starves (ADR 0029).
             // The audio pass lists running games only with game audio on.
             if (!settings_.captureGameAudio || !audioCaptureWorker_) {
                 detectGamesForGpuPriority(
                     foreground, foregroundIsKnownGame, *processList, foregroundGameExe, runningGameExes);
+            } else {
+                // An app raised in place of a game must be seen running, or
+                // it would step down as closed.
+                runningProcessNames(*processList, runningGameExes);
             }
+            const auto foregroundApp = foregroundGameExe.empty() ? gpuPriorityApp(foreground) : std::string {};
             GpuPriorityControl::PipelineProgress pipeline;
             if (encoderWorker_) {
                 pipeline.encoderSetups = encoderWorker_->encoderSetups();
                 pipeline.framesEncoded = static_cast<uint64_t>(std::max(0, encoderWorker_->framesEncoded()));
             }
-            gpuPriority_.observe(
-                foregroundGameExe, runningGameExes, videoDropTotal(), monotonicNow100ns(), settings_.fps, pipeline);
+            gpuPriority_.observe(foregroundGameExe, foregroundApp, runningGameExes, videoDropTotal(),
+                                 monotonicNow100ns(), settings_.fps, pipeline);
             // A removed device is final for this process; the host restarts the
             // engine on exit, and a fresh process gets fresh devices. Dead GPU
             // state cannot be trusted to tear down cleanly.

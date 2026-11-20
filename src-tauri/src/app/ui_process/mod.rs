@@ -11,6 +11,7 @@ mod server;
 mod session;
 mod wire;
 mod worker;
+mod worker_health;
 mod worker_media;
 
 pub(crate) use controller::UiController;
