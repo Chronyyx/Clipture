@@ -101,7 +101,21 @@ pub fn start(app: AppHandle) {
         }
     });
     let health_app = app.clone();
+    let monitor_store = settings_store.clone();
     tauri::async_runtime::spawn(async move {
+        // A monitor saved as \.\DISPLAYn is carried over once to the physical
+        // monitor it names now, before Windows can renumber it again.
+        let displays = configure_engine.list_display_devices().await.unwrap_or_default();
+        let startup_settings = match crate::settings::adopt_stable_monitor_id(&startup_settings, &displays) {
+            Some(adopted) => match monitor_store.save(adopted) {
+                Ok(saved) => saved,
+                Err(error) => {
+                    tracing::warn!(%error, "could not save the carried-over monitor choice");
+                    startup_settings
+                }
+            },
+            None => startup_settings,
+        };
         let diagnostics = match configure_engine.configure_settings(&startup_settings).await {
             Ok(diagnostics) => diagnostics,
             Err(error) => {

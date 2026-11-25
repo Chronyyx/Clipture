@@ -74,6 +74,30 @@ pub struct SaveClipResult {
     pub message: String,
     pub clip: Option<ClipRecord>,
     pub save_io_analysis: Option<Vec<Value>>,
+    /// What the saved clip shows, judged by the engine at save (telemetry).
+    pub content_check: Option<ClipContentCheck>,
+}
+
+/// The engine's verdict on a saved clip, from its encoded video and the
+/// capture source at save; see engine ClipContentCheck.hpp.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ClipContentCheck {
+    /// Every keyframe tiny: a black or flat picture.
+    pub blank: bool,
+    /// 10 s or more built from at most two distinct source frames.
+    pub frozen: bool,
+    pub span_seconds: f64,
+    pub frames: u64,
+    pub keyframes: u64,
+    pub distinct_source_frames: u64,
+    pub max_keyframe_bytes: u64,
+    pub mean_frame_bytes: u64,
+    /// "game-window" or "monitor".
+    pub recorded_source: String,
+    pub source_seconds: f64,
+    pub recorded_monitor_primary: bool,
+    pub foreground_on_recorded_monitor: bool,
 }
 
 impl SaveClipResult {
@@ -89,7 +113,12 @@ impl SaveClipResult {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DisplayDevice {
+    /// The physical monitor (`monitor:` + device path) when Windows reports
+    /// it, else the output name.
     pub id: String,
+    /// The Windows output name (`\.\DISPLAYn`), which can move between
+    /// monitors; kept to carry old saved choices over.
+    pub legacy_id: Option<String>,
     pub name: String,
     pub is_primary: bool,
     pub width: u32,

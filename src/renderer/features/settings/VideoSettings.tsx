@@ -28,6 +28,13 @@ const presets: Array<[ClipSettings['nvencPreset'], string]> = [
   [5, 'Best quality']
 ];
 
+/** A choice saved as a Windows output name (\.\DISPLAYn) shows as the monitor
+ * that name points at now, until the host carries it over to that monitor's id. */
+function selectedMonitorId(monitorId: string, displays: DisplayDevice[]): string {
+  if (!monitorId) return 'primary';
+  return displays.find((display) => display.legacyId === monitorId)?.id ?? monitorId;
+}
+
 export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
   const [displays, setDisplays] = useState<DisplayDevice[]>();
 
@@ -45,7 +52,7 @@ export function VideoSettings({ settings, onChange }: VideoSettingsProps) {
         title='Display'
         description='The screen Clipture records.'
         control={(id) => displays === undefined ? <span className='skeleton control-skeleton' aria-label='Loading displays' /> : (
-          <select id={id} value={settings.monitorId || 'primary'} onChange={(event) => onChange({ monitorId: event.target.value })}>
+          <select id={id} value={selectedMonitorId(settings.monitorId, displays)} onChange={(event) => onChange({ monitorId: event.target.value })}>
             <option value='primary'>Primary display</option>
             {displays.map((display) => (
               <option key={display.id} value={display.id}>

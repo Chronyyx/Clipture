@@ -1,10 +1,10 @@
 {
   "name": "clipture",
-  "version": "1.9.5",
+  "version": "1.9.6",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.9.5: Unstuck",
+  "releaseTitle": "Clipture 1.9.6: No More Black Clips",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {
@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@fontsource/cormorant-garamond": "^5.3.0",
+    "@fontsource/grenze-gotisch": "^5.3.0",
     "@fontsource/m-plus-rounded-1c": "^5.3.0",
     "@tauri-apps/api": "2.11.1",
     "electron-updater": "^6.8.9",

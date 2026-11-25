@@ -14,6 +14,7 @@ pub enum UiTheme {
     #[serde(alias = "milate")]
     Aero,
     MaidCafe,
+    GothCafe,
     Halloween,
     Custom,
     #[serde(other)]
@@ -402,6 +403,9 @@ mod tests {
             serde_json::from_str(r#"{"uiTheme":"maid-cafe"}"#).unwrap();
         assert_eq!(settings.ui_theme, UiTheme::MaidCafe);
         assert_eq!(serde_json::to_value(&settings).unwrap()["uiTheme"], "maid-cafe");
+        let goth: ClipSettings = serde_json::from_str(r#"{"uiTheme":"goth-cafe"}"#).unwrap();
+        assert_eq!(goth.ui_theme, UiTheme::GothCafe);
+        assert_eq!(serde_json::to_value(&goth).unwrap()["uiTheme"], "goth-cafe");
         let spooky: ClipSettings = serde_json::from_str(r#"{"uiTheme":"halloween"}"#).unwrap();
         assert_eq!(spooky.ui_theme, UiTheme::Halloween);
         let retired: ClipSettings = serde_json::from_str(r#"{"uiTheme":"milate"}"#).unwrap();

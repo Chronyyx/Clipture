@@ -3,12 +3,15 @@ use std::{
     process::Child,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     thread,
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Listener};
+
+/// How long a new window process has to finish its handshake.
+const STARTUP_PATIENCE: Duration = Duration::from_secs(20);
 
 pub struct Session {
     pub owner: String,
@@ -23,6 +26,8 @@ pub struct Session {
     #[cfg(windows)]
     job: Mutex<Option<crate::platform::windows::ChildJob>>,
     listeners: Mutex<Vec<tauri::EventId>>,
+    // Wakes the startup watchdog when the window becomes ready or dies.
+    settled: (Mutex<()>, Condvar),
 }
 
 impl Session {
@@ -50,6 +55,7 @@ impl Session {
             #[cfg(windows)]
             job: Mutex::new(Some(job)),
             listeners: Mutex::new(vec![]),
+            settled: (Mutex::new(()), Condvar::new()),
         })
     }
 
@@ -105,9 +111,28 @@ impl Session {
 
     /// Only the actual owned Child handle is used; PID reuse cannot target a
     /// different application. No engine or unrelated process is touched.
+    /// The window finished its handshake.
+    pub fn mark_ready(&self) {
+        self.ready.store(true, Ordering::Release);
+        self.wake_watchdog();
+    }
+
+    /// The window process is gone or no longer trusted.
+    pub fn mark_dead(&self) {
+        self.alive.store(false, Ordering::Release);
+        self.wake_watchdog();
+    }
+
+    // Takes the lock first, so a wake between the watchdog's check and its
+    // wait is not lost.
+    fn wake_watchdog(&self) {
+        drop(self.settled.0.lock().unwrap_or_else(|error| error.into_inner()));
+        self.settled.1.notify_all();
+    }
+
     pub fn stop(&self) {
         self.closing.store(true, Ordering::Release);
-        self.alive.store(false, Ordering::Release);
+        self.mark_dead();
         if let Some(mut child) = self
             .child
             .lock()
@@ -151,16 +176,21 @@ impl Session {
         }
     }
 
+    /// Stops a window that is neither ready nor dead after `STARTUP_PATIENCE`.
+    /// Sleeps until one of those happens instead of checking.
     pub fn startup_watchdog(self: &Arc<Self>) {
         let session = self.clone();
         thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(20);
-            while session.alive.load(Ordering::Acquire) && !session.ready.load(Ordering::Acquire) {
-                if Instant::now() >= deadline {
-                    session.stop();
-                    break;
-                }
-                thread::sleep(Duration::from_millis(50));
+            let (lock, settled) = &session.settled;
+            let guard = lock.lock().unwrap_or_else(|error| error.into_inner());
+            let (guard, waited) = settled
+                .wait_timeout_while(guard, STARTUP_PATIENCE, |_| {
+                    session.alive.load(Ordering::Acquire) && !session.ready.load(Ordering::Acquire)
+                })
+                .unwrap_or_else(|error| error.into_inner());
+            drop(guard);
+            if waited.timed_out() {
+                session.stop();
             }
         });
     }

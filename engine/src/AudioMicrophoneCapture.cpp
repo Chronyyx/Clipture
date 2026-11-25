@@ -80,8 +80,10 @@ void AudioCaptureWorker::runMicrophoneCapture() {
         if (!resolved.device) {
             nextPts100ns = now100ns();
 
+            // No microphone: sleep until one appears (the device notification
+            // thread asks for a refresh), the settings change, or a stop.
             std::unique_lock refreshLock(micRefreshMutex_);
-            micRefreshCv_.wait_for(refreshLock, std::chrono::milliseconds(500), [&] {
+            micRefreshCv_.wait(refreshLock, [&] {
                 return !running_.load() || (micStopRequested_ && micStopRequested_->load()) || micRefreshVersion_.load() != captureVersion;
             });
             continue;

@@ -58,6 +58,10 @@ private:
     void runDeviceNotificationLoop();
     void signalMicRefresh();
     void requestMicRefresh();
+    // Wakes the microphone thread waiting for a device. Takes its lock, so a
+    // wake between its check and its wait is not lost: it waits without a
+    // timeout.
+    void wakeMicThread();
     void runProcessLoopbackCapture(const std::string& processName, std::shared_ptr<std::atomic<bool>> stopRequested);
     void runProcessLoopbackCaptureSession(
         const std::string& captureName,

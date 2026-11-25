@@ -63,6 +63,7 @@ GpuPriorityControl::GpuPriorityControl() : startRaised_(startRaised()), gateBypa
     gateMemory_ = std::make_unique<platform::AdapterMemoryCounter>(adapter_.Get());
     vramTotal_ = platform::queryGpuAdapterFacts(adapter_.Get()).dedicatedVideoMemoryBytes;
     adapterBusy_ = std::make_unique<platform::AdapterBusyCounter>(adapter_.Get());
+    foregroundGpu_ = std::make_unique<platform::ProcessGpuTime>(adapter_.Get());
     inFlightSampler_ = std::make_unique<platform::PacketsInFlightSampler>(adapter_.Get());
     gpuIdentity_ = adapterIdentity(adapter_.Get());
 }
@@ -278,6 +279,14 @@ void GpuPriorityControl::refreshUsage(Diagnostics& diagnostics, bool sampleBusy)
         lastBusy_.reset();
     }
     diagnostics.gpuBusyPercent = lastBusy_.value_or(-1.0);
+    // Only on detailed samples, which the host asks for while something looks
+    // wrong; two in a row give the share between them.
+    diagnostics.foregroundGpuPercent = -1.0;
+    if (sampleBusy && foregroundGpu_) {
+        DWORD processId = 0;
+        if (const HWND foreground = GetForegroundWindow()) GetWindowThreadProcessId(foreground, &processId);
+        if (const auto share = foregroundGpu_->percent(processId, now100ns)) diagnostics.foregroundGpuPercent = *share;
+    }
 }
 
 }  // namespace clipture

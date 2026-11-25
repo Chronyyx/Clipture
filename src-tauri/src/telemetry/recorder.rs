@@ -45,7 +45,7 @@ struct OpenIncident {
 }
 
 /// Codes merged to one per minute: a bad stretch repeats them every sample.
-const ONCE_PER_MINUTE: [&str; 3] = ["drop_burst", "pressure_changed", "capture_backend_changed"];
+const ONCE_PER_MINUTE: [&str; 4] = ["drop_burst", "pressure_changed", "capture_backend_changed", "capture_stale"];
 
 /// A record and the session it belongs to.
 #[derive(Debug, PartialEq)]
@@ -113,6 +113,9 @@ pub struct Recorder {
     target_fps: u32,
     /// The engine's cumulative present count at the last sample.
     presents: Option<f64>,
+    /// The last sample could not tell a still screen from a frozen capture:
+    /// ask the engine for the game's GPU share on the next one.
+    stale_suspect: bool,
 }
 
 fn number(diagnostics: &EngineDiagnostics, key: &str) -> f64 {
@@ -201,7 +204,7 @@ impl Recorder {
     /// While an incident collects its after-samples, the host asks the engine
     /// for the costlier sample that includes GPU load.
     pub fn wants_detail(&self) -> bool {
-        self.incident.is_some()
+        self.incident.is_some() || self.stale_suspect
     }
 
     /// Opens an incident (or adds to the open one) unless rate-limited.
@@ -460,6 +463,34 @@ impl Recorder {
         }
         if pressure == CapturePressure::Critical {
             self.trigger(now_ms, "pressure_critical");
+        }
+        // The recording repeats an old picture while the game keeps drawing:
+        // full output fps and no drops, yet nothing new is recorded.
+        let game_gpu = number(diagnostics, "foregroundGpuPercent");
+        let game_gpu = diagnostics.details.contains_key("foregroundGpuPercent").then_some(game_gpu).filter(|share| *share >= 0.0);
+        let stale = super::stale_capture::judge(&super::stale_capture::Input {
+            game_in_front: sample.game_in_front,
+            fresh_fps: sample.capture_fps,
+            output_fps: sample.output_fps,
+            target_fps: target,
+            recording_game_window: flag(diagnostics, "captureRecordingGameWindow"),
+            game_gpu_percent: game_gpu,
+        });
+        self.stale_suspect = settled && stale == super::stale_capture::Verdict::Suspect;
+        if settled && stale == super::stale_capture::Verdict::Stale {
+            let source = if flag(diagnostics, "captureRecordingGameWindow") { "game-window" } else { "monitor" };
+            let mut event = Event::new(Level::Warn, "capture_stale")
+                .with("source", source)
+                .with("freshFps", sample.capture_fps)
+                .with("outputFps", sample.output_fps);
+            if let Some(share) = game_gpu {
+                event = event.with("gameGpuPercent", round1(share));
+            }
+            let game = text(diagnostics, "gpuPriorityForeground");
+            if !game.is_empty() {
+                event = event.with("game", game);
+            }
+            self.event(&mut out, now_ms, event);
         }
         // The stress situations the simulator reproduces, seen in the field.
         if settled && reasons.get("captureSlotExhaustion").copied().unwrap_or(0.0) >= 3.0 {
@@ -742,6 +773,41 @@ mod tests {
         let Body::Minute(minute) = &out[0].body else { panic!() };
         assert_eq!((minute.realtime_seconds, minute.game_front_seconds, minute.held_seconds), (2, 6, 2));
         assert_eq!((minute.dropped_realtime, minute.dropped_normal), (2, 8));
+    }
+
+    #[test]
+    fn a_frozen_capture_behind_a_drawing_game_is_reported_once_a_minute() {
+        // Full output fps, no fresh frames, a game in front: the field case
+        // that looked healthy (Gurt: 13 h of it).
+        let frozen = |extra: Value| {
+            let mut value = json!({ "fps": 60, "recentEncoderOutputFps": 60, "recentPublishedFreshFps": 0, "gpuPriorityForeground": "deadlock.exe" });
+            value.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            value
+        };
+        let stale = |out: &[Out]| out.iter().filter(|record| matches!(&record.body, Body::Event(event) if event.code == "capture_stale")).count();
+
+        // Recording the game window: stale straight away (after the 10 s settle).
+        let mut window = Recorder::default();
+        window.observe(&sample(true, frozen(json!({ "captureRecordingGameWindow": true }))), T0, &scrubber(), || "s".into());
+        let mut events = 0;
+        for step in 1..=10 {
+            events += stale(&window.observe(&sample(true, frozen(json!({ "captureRecordingGameWindow": true }))), T0 + step * 2_000, &scrubber(), || unreachable!()));
+        }
+        assert_eq!(events, 1, "one capture_stale per minute, not one per sample");
+
+        // Recording the monitor: suspect until the game's own GPU share is read.
+        let mut monitor = Recorder::default();
+        monitor.observe(&sample(true, frozen(json!({}))), T0, &scrubber(), || "s".into());
+        let out = monitor.observe(&sample(true, frozen(json!({ "foregroundGpuPercent": -1 }))), T0 + 12_000, &scrubber(), || unreachable!());
+        assert_eq!(stale(&out), 0);
+        assert!(monitor.wants_detail(), "a suspect sample asks for the game's GPU share");
+        // A still game (or another process loading the GPU): not stale.
+        let out = monitor.observe(&sample(true, frozen(json!({ "foregroundGpuPercent": 3 }))), T0 + 14_000, &scrubber(), || unreachable!());
+        assert_eq!(stale(&out), 0);
+        assert!(!monitor.wants_detail());
+        // The game draws while nothing reaches the recording: stale.
+        let out = monitor.observe(&sample(true, frozen(json!({ "foregroundGpuPercent": 80 }))), T0 + 16_000, &scrubber(), || unreachable!());
+        assert_eq!(stale(&out), 1);
     }
 
     #[test]

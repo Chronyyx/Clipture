@@ -1,4 +1,5 @@
 #include "CaptureBackend.hpp"
+#include "clipture/platform/windows/MonitorIdentity.hpp"
 #include "clipture/GpuTextureReadState.hpp"
 #include "clipture/CapturePipelinePolicy.hpp"
 #include "VramTrace.hpp"
@@ -144,6 +145,10 @@ bool isPrimaryMonitor(HMONITOR monitor) {
 
 bool monitorIdMatches(const std::string& requestedId, const DXGI_OUTPUT_DESC& desc) {
     if (requestedId.empty() || lowerAscii(requestedId) == "primary") return isPrimaryMonitor(desc.Monitor);
+    // A physical monitor, whichever \.\DISPLAYn Windows gave it this time.
+    if (clipture::platform::isStableMonitorId(requestedId)) {
+        return lowerAscii(requestedId) == clipture::platform::stableMonitorId(desc.DeviceName);
+    }
     return lowerAscii(requestedId) == lowerAscii(narrow(desc.DeviceName));
 }
 
@@ -492,6 +497,8 @@ void CaptureSharedState::publish(
 CaptureRuntimeStats CaptureSharedState::snapshot() const {
     CaptureRuntimeStats result;
     result.acquiredUpdates = acquiredUpdates.load(std::memory_order_relaxed);
+    result.recordingGameWindow = recordingGameWindow.load(std::memory_order_relaxed);
+    result.recordedSourceSince100ns = recordedSourceSince100ns.load(std::memory_order_relaxed);
     result.desktopPresents = desktopPresents.load(std::memory_order_relaxed);
     result.pointerUpdates = pointerUpdates.load(std::memory_order_relaxed);
     result.publishedFrames = publishedFrames.load(std::memory_order_relaxed);

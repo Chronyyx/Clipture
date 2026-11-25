@@ -115,10 +115,12 @@ Event codes:
 | --- | --- | --- |
 | `save` | info | every hotkey/UI save: duration ms, clip seconds, fps, resolution, encoder; the game name only when the clip was matched as a game |
 | `save_failed` | error | save result with its scrubbed message |
+| `clip_suspect` | warn | a saved clip that likely shows nothing useful, judged at save from the encoded clip (no capture-time probes): `reasons` among `black` (every keyframe under 1/256 byte per pixel), `frozen` (10 s or more from at most two distinct source frames) and `game_on_other_monitor` (a game was in front on a monitor other than the recorded one); with the recorded source (`monitor` or `game-window`) and how long it had been recorded, keyframe size, distinct source frames, whether the recorded monitor is primary, and the game name as on `save`. The `save` event carries the same measurements. Since 1.9.6 |
 | `drop_burst` | warn | 10 or more frames dropped in one 2-second sample, with the reasons |
 | `capture_backend_changed` | info | active backend differs from the previous sample |
 | `capture_fallback` | warn | `captureFallbacks` increased; `captureFallbackReason` |
 | `capture_access_lost` | warn | `captureAccessLosses` increased |
+| `capture_stale` | warn | at most once a minute: a game is in front, the capture got under 5 fresh frames per second while the encoder kept at least half the target rate, and there is evidence the game is still drawing: either the recording is the game's own window (Windows delivers every frame the game presents, so a running game that delivers none means the capture broke), or the game process's own busiest GPU engine is at least 15% busy. That share is read only on detailed samples, which the recorder asks for while a sample is suspect; it is the game's alone, so another process's GPU load (a local LLM) never counts, and a game that refuses the query never raises this. With the recorded source, fresh and output fps, the game's GPU share when read and the game's exe name. A still screen alone (no fresh frames, game idle) is normal and not reported. Since 1.9.6 |
 | `capture_recreated` | info | `captureRecreationSuccesses` increased |
 | `replay_write_failure` | error | `replayArchiveWriteFailures` increased |
 | `pressure_changed` | info/warn | capture pressure changed (warn when not healthy) |

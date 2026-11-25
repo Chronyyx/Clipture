@@ -1,6 +1,7 @@
 import type { EngineDiagnostics } from '../../../shared/types';
 import { SpookyRecorderPet } from '../../shared/halloween';
 import { CafeRecorderPet } from '../../shared/maid-cafe';
+import { GothRecorderPet } from '../../shared/goth-cafe';
 
 interface RecorderStatusProps {
   diagnostics: EngineDiagnostics;
@@ -40,6 +41,7 @@ export function RecorderStatus(props: RecorderStatusProps) {
     <div className={'recorder-status ' + state} title={diagnosticsError} role='status' aria-live='polite'>
       <CafeRecorderPet state={state} />
       <SpookyRecorderPet state={state} />
+      <GothRecorderPet state={state} />
       <div className='recorder-status-head'>
         <span className='recorder-tally' aria-hidden='true' />
         <strong>{headline[state]}</strong>

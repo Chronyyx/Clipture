@@ -18,6 +18,7 @@ namespace platform {
 class AdapterBusyCounter;
 class AdapterMemoryCounter;
 class PacketsInFlightSampler;
+class ProcessGpuTime;
 }
 
 // Owns the engine's GPU scheduling class (ADR 0025, ADR 0029). With the boost
@@ -135,6 +136,9 @@ private:
     // Read by the detection pass; adapterMemory_ serves diagnostics.
     std::unique_ptr<platform::AdapterMemoryCounter> gateMemory_;
     std::unique_ptr<platform::AdapterBusyCounter> adapterBusy_;
+    // The foreground process's own GPU share: tells a game still drawing
+    // from a static screen when capture sees no new frames.
+    std::unique_ptr<platform::ProcessGpuTime> foregroundGpu_;
     // Used by the detection pass only.
     std::unique_ptr<platform::PacketsInFlightSampler> inFlightSampler_;
     bool factsRecorded_ = false;

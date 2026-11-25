@@ -1,4 +1,5 @@
 #include "clipture/Diagnostics.hpp"
+#include "clipture/platform/windows/MonitorIdentity.hpp"
 
 #include <Windows.h>
 #include <dxgi1_6.h>
@@ -416,13 +417,19 @@ std::string displayDevicesJson() {
 
             const int width = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
             const int height = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
-            const auto id = narrow(desc.DeviceName);
+            // The saved choice names the physical monitor; the GDI name
+            // (\.\DISPLAYn) can move to another screen and is only kept
+            // so settings saved with it can be carried over once.
+            const auto legacyId = narrow(desc.DeviceName);
+            auto id = clipture::platform::stableMonitorId(desc.DeviceName);
+            if (id.empty()) id = legacyId;
             auto name = friendlyMonitorName(desc.DeviceName);
-            if (name.empty()) name = id.empty() ? "Display" : id;
+            if (name.empty()) name = legacyId.empty() ? "Display" : legacyId;
 
             if (wroteDisplay) out << ",";
             out << "{"
                 << "\"id\":\"" << jsonEscape(id) << "\","
+                << "\"legacyId\":\"" << jsonEscape(legacyId) << "\","
                 << "\"name\":\"" << jsonEscape(name) << "\","
                 << "\"isPrimary\":" << ((monitorInfo.dwFlags & MONITORINFOF_PRIMARY) ? "true" : "false") << ","
                 << "\"width\":" << width << ","
@@ -682,6 +689,8 @@ std::string toJson(const Diagnostics& diagnostics) {
         << "\"gpuPriorityRememberedGames\":" << diagnostics.gpuPriorityRememberedGames << ","
         << "\"gpuStarvationLossyWindows\":" << diagnostics.gpuStarvationLossyWindows << ","
         << "\"gpuBusyPercent\":" << diagnostics.gpuBusyPercent << ","
+        << "\"foregroundGpuPercent\":" << diagnostics.foregroundGpuPercent << ","
+        << "\"captureRecordingGameWindow\":" << (diagnostics.captureRecordingGameWindow ? "true" : "false") << ","
         << "\"gpuPacketsInFlight\":" << diagnostics.gpuPacketsInFlight << ","
         << "\"gpuSchedulingRequested\":\"" << jsonEscape(diagnostics.gpuSchedulingRequested) << "\","
         << "\"gpuSchedulingChangeReason\":\"" << jsonEscape(diagnostics.gpuSchedulingChangeReason) << "\","

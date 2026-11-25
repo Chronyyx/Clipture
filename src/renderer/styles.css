@@ -33,5 +33,7 @@
 @import './shared/aero.css';
 @import './shared/maid-cafe/maid-cafe.css';
 @import './shared/maid-cafe/mascots.css';
+@import './shared/goth-cafe/goth-cafe.css';
+@import './shared/goth-cafe/cast.css';
 @import './shared/halloween/halloween.css';
 @import './shared/halloween/spooks.css';

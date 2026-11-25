@@ -2,6 +2,7 @@
 //! then the host records what the ADR lists into a local journal and uploads
 //! it, signed, to the friend's server. Runs without any WebView.
 pub mod commands;
+mod clip_content;
 mod enrollment;
 mod gpu_users;
 mod journal;
@@ -9,6 +10,7 @@ mod log_layer;
 mod recorder;
 mod run_info;
 mod scrub;
+mod stale_capture;
 mod uploader;
 
 pub use log_layer::layer as log_layer;
@@ -235,13 +237,21 @@ impl TelemetryService {
     pub fn saved(&self, result: &SaveClipResult, elapsed_ms: u128, requested_seconds: u32) {
         if result.ok {
             let mut event = Event::new(Level::Info, "save").with("durationMs", elapsed_ms as u64).with("clipSeconds", requested_seconds);
+            let is_game = result.clip.as_ref().is_some_and(|clip| clip.is_game == Some(true));
+            let game = result.clip.as_ref().filter(|clip| is_game && !clip.game_or_app.is_empty()).map(|clip| clip.game_or_app.as_str());
             if let Some(clip) = &result.clip {
                 event = event.with("fps", clip.fps).with("resolution", clip.resolution.clone()).with("encoder", clip.encoder.clone());
-                if clip.is_game == Some(true) && !clip.game_or_app.is_empty() {
-                    event = event.with("game", clip.game_or_app.clone());
-                }
+            }
+            if let Some(game) = game {
+                event = event.with("game", game.to_string());
+            }
+            if let Some(check) = &result.content_check {
+                event = clip_content::with_content(event, check);
             }
             self.external(event);
+            if let Some(warning) = result.content_check.as_ref().and_then(|check| clip_content::suspect(check, is_game, game)) {
+                self.external(warning);
+            }
         } else {
             let event = Event::new(Level::Error, "save_failed").message(self.scrubber.scrub(&result.message)).with("durationMs", elapsed_ms as u64);
             self.external(event);

@@ -233,7 +233,7 @@ function normalizeSettings(settings: ClipSettings): ClipSettings {
   const resolutionPreset = validResolutionPresets.has(settings.resolutionPreset) ? settings.resolutionPreset : defaultSettings.resolutionPreset;
   // Milate was retired for Aero; settings saved with it carry over.
   const savedTheme = (settings.uiTheme as string) === "milate" ? "aero" : settings.uiTheme;
-  const uiTheme = savedTheme === "light" || savedTheme === "glitten" || savedTheme === "aero" || savedTheme === "maid-cafe" || savedTheme === "halloween" || savedTheme === "custom"
+  const uiTheme = savedTheme === "light" || savedTheme === "glitten" || savedTheme === "aero" || savedTheme === "maid-cafe" || savedTheme === "goth-cafe" || savedTheme === "halloween" || savedTheme === "custom"
     ? savedTheme
     : "graphite";
   const importedVideoDirectories = Array.from(new Set((settings.importedVideoDirectories ?? [])
@@ -301,7 +301,7 @@ async function bitrateResolution(settings: ClipSettings, targetResolution: { wid
 
   const displays = await engine.listDisplayDevices();
   const selected = settings.monitorId && settings.monitorId !== "primary"
-    ? displays.find((display) => display.id === settings.monitorId)
+    ? displays.find((display) => display.id === settings.monitorId || display.legacyId === settings.monitorId)
     : displays.find((display) => display.isPrimary);
   if (selected && selected.width > 0 && selected.height > 0) {
     return { width: selected.width, height: selected.height };
@@ -2854,6 +2854,7 @@ function windowAppearance(settings: ClipSettings): { backgroundColor: string; sy
   const isGlitten = settings.uiTheme === "glitten";
   const isAero = settings.uiTheme === "aero";
   const isMaidCafe = settings.uiTheme === "maid-cafe";
+  const isGothCafe = settings.uiTheme === "goth-cafe";
   const isHalloween = settings.uiTheme === "halloween";
   const isLight = settings.uiTheme === "light" || isGlitten || (settings.uiTheme === "custom" && isLightHexColor(settings.customMainColor));
   return {
@@ -2865,12 +2866,14 @@ function windowAppearance(settings: ClipSettings): { backgroundColor: string; sy
           ? "#0a4cc4"
         : isMaidCafe
           ? "#ffe3ec"
+        : isGothCafe
+          ? "#140d16"
         : isHalloween
           ? "#1b1530"
         : settings.uiTheme === "custom"
           ? settings.customMainColor
           : "#101114",
-    symbolColor: isGlitten ? "#4d4035" : isAero ? "#ffffff" : isMaidCafe ? "#7a3f63" : isHalloween ? "#f3ead8" : isLight ? "#465265" : "#a5adba"
+    symbolColor: isGlitten ? "#4d4035" : isAero ? "#ffffff" : isMaidCafe ? "#7a3f63" : isGothCafe ? "#eadfe8" : isHalloween ? "#f3ead8" : isLight ? "#465265" : "#a5adba"
   };
 }
 

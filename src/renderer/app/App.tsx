@@ -17,6 +17,7 @@ import { TitlebarUpdateControls, useUpdates } from "../features/updates";
 import { AeroShell, useAeroTheme } from "../shared/aero";
 import { HalloweenAmbience, SpookyNoticePet, SpookySaveCheer } from "../shared/halloween";
 import { CafeNoticePet, CafeSaveCheer } from "../shared/maid-cafe";
+import { GothAmbience, GothNoticePet, GothSaveCheer } from "../shared/goth-cafe";
 
 declare const __APP_VERSION__: string | undefined;
 
@@ -100,6 +101,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
       {ownFrame && <WindowControls />}
       <AeroShell />
       <HalloweenAmbience />
+      <GothAmbience />
       <aside className="sidebar">
         <div className="brand">
           <img src={logoUrl} alt="Clipture" className="mark" />
@@ -151,6 +153,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
                   <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${settings?.clipLengthSeconds ?? 30}s`}
                   <CafeSaveCheer saving={isSavingClip} />
                   <SpookySaveCheer saving={isSavingClip} />
+                  <GothSaveCheer saving={isSavingClip} />
                 </button>
               </div>
               {activeTab === "diagnostics" && (
@@ -184,6 +187,7 @@ export function App({ initialSettings }: { initialSettings?: ClipSettings }) {
               transition={viewTransition}>
               <CafeNoticePet />
               <SpookyNoticePet />
+              <GothNoticePet />
               {notice.message}
             </motion.div>
           )}

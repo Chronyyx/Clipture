@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [1.9.6] - 2026-11-25
+
+### Recording
+
+- **No more black clips in fullscreen games:** In games running in exclusive fullscreen, such as Deadlock and Fortnite, clips could come out completely black or stuck on one picture for their whole length. Clipture records a game's own window when the game fills the screen, and that window can go black or stop sending frames once a match starts, while the recording kept going as if nothing was wrong. Clipture now keeps checking that window's picture while it records and switches back to recording the monitor within about a second when it goes black or silent. The check reads a small sample of the picture without making capture wait, so recording stays as smooth as before.
+- **Remembers your actual monitor:** Clipture saved the monitor to record by Windows' number for it (Display 1, 2, 3). Windows renumbers monitors after a restart, a driver update or a monitor waking from sleep, so the setting could jump to another screen on its own. Clipture now remembers the physical monitor and finds it whatever number Windows gives it. An existing choice is carried over the first time this version starts.
+- **Recognises the games Windows knows:** Clipture only recognised games from your Steam and Epic lists as they were when it started, so a game installed afterwards (say, GTA V from Epic) or from another launcher (Rockstar, Battle.net, Xbox) was treated as a normal app: no game detection, no GPU boost for it, and no game audio track. Clipture now also uses Windows' own list of games, the one the Game Bar keeps, and picks up a new game as soon as Windows adds it, the first time you launch it. Apps marked as games by hand, such as Discord, are left out. A Steam or Epic game installed while Clipture runs is also recognised the first time it starts, even with the Game Bar off.
+
+### Interface
+
+- **Goth café theme:** A new theme in Settings, Appearance: near-black plum with fine mauve frames, little purple stars where the frames meet, ivy along the edges, gothic titles ("Clip Crypt"), and black cats peeking over the recorder and your clip list. Goth girls keep you company on the empty library and in Settings, and a bat drops into notifications.
+
+### Telemetry
+
+- **Spots black and frozen recordings:** Telemetry counted a recording that repeated one picture as perfectly healthy: full frame rate, no dropped frames. It now notices when a game in front keeps drawing but nothing new reaches the recording, telling that apart from a screen that is simply still by checking how busy the game itself keeps the GPU (other apps, such as a local AI model, never count).
+- **Checks every saved clip:** Each save notes whether the clip came out black, stuck on one picture, or recorded from a monitor other than the one the game was on. This is measured from the saved video itself, so nothing extra runs while you play.
+
+### Performance
+
+- **Fewer background wake-ups:** With no microphone connected, Clipture no longer checks for one twice a second; it waits for Windows to report a new device. The window's startup check also waits instead of polling.
+
 ## [1.9.5] - 2026-11-20
 
 ### Interface

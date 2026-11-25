@@ -1,12 +1,15 @@
 #include "clipture/Engine.hpp"
+#include "clipture/InstalledGames.hpp"
 #include "clipture/ProcessVerdictCache.hpp"
 #include "clipture/replay/BackfillPace.hpp"
 #include "clipture/platform/ThreadName.hpp"
 #include "clipture/platform/windows/AdminHotkeyRelay.hpp"
 #include "clipture/platform/windows/ProcessElevation.hpp"
+#include "clipture/platform/windows/WindowsGameList.hpp"
 #include "clipture/AudioProcessSpec.hpp"
 #include "clipture/CapturePipelinePolicy.hpp"
 #include "clipture/CaptureSession.hpp"
+#include "clipture/ClipContentCheck.hpp"
 #include "clipture/MediaClock.hpp"
 #include "clipture/Mp4Muxer.hpp"
 #include "clipture/NativeRuntime.hpp"
@@ -175,6 +178,7 @@ const Diagnostics& Engine::diagnostics(bool sampleGpuUsage) {
     refreshPacketCounts();
     gpuPriority_.publish(diagnostics_);
     gpuPriority_.refreshUsage(diagnostics_, sampleGpuUsage);
+    diagnostics_.captureRecordingGameWindow = captureSession_ && captureSession_->recordingGameWindow();
     if (adminHotkeyRelay_) {
         diagnostics_.adminGame = adminHotkeyRelay_->elevatedGame();
         diagnostics_.adminGameInFront = adminHotkeyRelay_->gameInFront();

@@ -24,7 +24,7 @@ pub fn read(app: AppHandle, session: Arc<Session>, mut reader: impl Read) {
             Message::Ready { version }
                 if version == PROTOCOL_VERSION && !session.ready.load(Ordering::Acquire) =>
             {
-                session.ready.store(true, Ordering::Release);
+                session.mark_ready();
             }
             Message::Closing {} => session.close(),
             #[cfg(debug_assertions)]
@@ -82,7 +82,7 @@ pub fn read(app: AppHandle, session: Arc<Session>, mut reader: impl Read) {
             _ => break, // Invalid direction, missing handshake, or invalid ID.
         }
     }
-    session.alive.store(false, Ordering::Release);
+    session.mark_dead();
     // Not closed by the user or Clipture: the window process died or sent
     // something invalid. Leave a trace; this otherwise leaves none.
     if !session.closing.load(Ordering::Acquire) {

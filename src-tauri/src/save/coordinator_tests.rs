@@ -119,6 +119,7 @@ fn run_save(processing_succeeds: bool) {
                 ..ClipRecord::default()
             }),
             save_io_analysis: Some(vec![json!({ "bytes": 42 })]),
+            content_check: None,
         },
     });
     let coordinator = SaveCoordinator::with_engine(

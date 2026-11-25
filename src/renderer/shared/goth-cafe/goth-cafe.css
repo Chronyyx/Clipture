@@ -1,0 +1,325 @@
+@import '@fontsource/grenze-gotisch/latin-500.css';
+@import '@fontsource/cormorant-garamond/latin-500-italic.css';
+@import '@fontsource/cormorant-garamond/latin-600.css';
+
+/* Goth café: near-black plum, hairline mauve frames, four-point stars where
+   frames meet and a little line-drawn ivy. Dusty rose marks what is chosen;
+   a gothic serif for titles; controls stay plain. No pictures, just line
+   work (see ambience.tsx). Everything is scoped here. */
+:root[data-theme="goth-cafe"] {
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --font-gothic: "Grenze Gotisch", "Cormorant Garamond", Georgia, serif;
+  --app-bg: #141014;
+  --sidebar-bg: #171217;
+  --surface: #1b1519;
+  --surface-deep: #130f13;
+  --surface-row: #1d171c;
+  --surface-control: #231b21;
+  --surface-hover: #2b2129;
+  --surface-active: #33262f;
+  --surface-video: #0b080b;
+  --border: #3a2e37;
+  --border-strong: #554452;
+  --text: #e9dfe4;
+  --text-strong: #f7eef2;
+  --text-muted: #a8959f;
+  --text-subtle: #8a7a84;
+  --icon: #c7b3be;
+  --accent: #d9a3c3;
+  --accent-hover: #e8b7d3;
+  --accent-soft: #2c1f29;
+  --accent-border: #7a5670;
+  --accent-text: #e8adcd;
+  --on-accent: #1b1519;
+  --primary-bg: #3d2b3b;
+  --primary-text: #f5e9ef;
+  --selection: #d9a3c3;
+  --selection-ring: rgb(217 163 195 / 40%);
+  --toggle-on: #9c6b8c;
+  --scrollbar: #3a2e37;
+  --scrollbar-hover: #554452;
+  --scrollbar-active: #6e5869;
+  --shadow: rgb(0 0 0 / 55%);
+  --inset-highlight: rgb(255 240 245 / 4%);
+  --tally: #ff4d6a;
+  --star: #c69be6;
+  --glass: #151015;
+  --frame: #3f3240;
+  color-scheme: dark;
+}
+
+/* --- Type: gothic for page and clip titles, a book serif for the brand and
+   the smaller headings. --- */
+:root[data-theme="goth-cafe"] :is(.library-title h1, .topbar h1, .share-header h1, .library-empty-state h2, .library-player-title-copy > span, .clip-rail-heading strong) {
+  font-family: var(--font-gothic);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+:root[data-theme="goth-cafe"] :is(.brand strong, .settings-section-header h2, .settings-content .audio-settings-heading h2, .modal-header h2) {
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+/* --- The room: a dark plum wall, a little lighter where the title sits. --- */
+:root[data-theme="goth-cafe"] .app-shell {
+  background: radial-gradient(ellipse 70% 45% at 45% 0%, #1d151c, transparent 70%), #110d11;
+}
+:root[data-theme="goth-cafe"] .workspace { background: transparent; }
+
+/* The sidebar: a double hairline down its edge (stars and ivy sit on it). */
+:root[data-theme="goth-cafe"] .sidebar {
+  border-right: 1px solid var(--frame);
+  background: #130e13;
+  box-shadow: inset -4px 0 0 #130e13, inset -5px 0 0 rgb(63 50 64 / 55%);
+}
+:root[data-theme="goth-cafe"] .sidebar-version { background: none; }
+
+/* --- Brand --- */
+:root[data-theme="goth-cafe"] .brand { margin-top: 4px; }
+:root[data-theme="goth-cafe"] .brand .mark { border-radius: 50%; box-shadow: 0 0 0 1px var(--border-strong), 0 0 16px -4px rgb(217 163 195 / 40%); }
+:root[data-theme="goth-cafe"] .brand strong { color: #eadde4; font-size: 30px; line-height: 0.9; letter-spacing: 0.01em; }
+:root[data-theme="goth-cafe"] .brand strong::after {
+  content: "goth café";
+  display: block;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font: 500 10px/1 "Segoe UI", system-ui, sans-serif;
+  letter-spacing: 0.38em;
+  text-transform: uppercase;
+}
+
+/* --- Navigation: the chosen item gets a rose edge and a quiet frame. --- */
+:root[data-theme="goth-cafe"] .nav { height: 44px; margin-bottom: 2px; border-radius: 6px; isolation: isolate; color: var(--text-muted); }
+:root[data-theme="goth-cafe"] .nav:hover { color: var(--text); background: rgb(255 255 255 / 3%); }
+:root[data-theme="goth-cafe"] .nav.active { background: transparent; color: var(--text-strong); }
+:root[data-theme="goth-cafe"] .nav.active svg { color: var(--accent); }
+:root[data-theme="goth-cafe"] :is(.nav-indicator, .settings-rail-indicator) {
+  z-index: -1;
+  inset: 0;
+  width: auto;
+  height: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgb(217 163 195 / 9%), rgb(217 163 195 / 2%));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+:root[data-theme="goth-cafe"] .nav-indicator::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 11px;
+  height: 11px;
+  transform: translateY(-50%);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 11 11'%3E%3Cpath d='M4.7 0h1.6v4.7H11v1.6H6.3V11H4.7V6.3H0V4.7h4.7z' fill='%23c7b3be'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* --- Titles: soft gold four-point stars either side. --- */
+:root[data-theme="goth-cafe"] :is(.library-title h1, .topbar h1, .share-header h1) {
+  color: #e8d6df;
+  font-size: 46px;
+  line-height: 1;
+  text-shadow: 0 0 24px rgb(217 163 195 / 18%), 0 2px 1px #000;
+}
+:root[data-theme="goth-cafe"] :is(.topbar, .share-header) h1 { line-height: 48px; }
+:root[data-theme="goth-cafe"] .library-heading-default { display: none; }
+:root[data-theme="goth-cafe"] .library-heading-goth { display: inline; }
+:root[data-theme="goth-cafe"] .library-title-icon { display: none; }
+:root[data-theme="goth-cafe"] :is(.library-title, .topbar h1)::before,
+:root[data-theme="goth-cafe"] .library-title h1::after {
+  content: "";
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M9 0C9.8 6 12 8.2 18 9 12 9.8 9.8 12 9 18 8.2 12 6 9.8 0 9 6 8.2 8.2 6 9 0z' fill='%23c69be6'/%3E%3C/svg%3E") center / contain no-repeat;
+  filter: drop-shadow(0 0 7px rgb(176 120 230 / 60%));
+}
+:root[data-theme="goth-cafe"] .topbar h1::before { margin-right: 16px; vertical-align: 4px; }
+:root[data-theme="goth-cafe"] .library-title h1::after { margin-left: 16px; vertical-align: 6px; }
+:root[data-theme="goth-cafe"] :is(.settings-section-header h2, .settings-content .audio-settings-heading h2, .modal-header h2) { color: var(--text-strong); font-size: 27px; }
+:root[data-theme="goth-cafe"] .library-empty-state h2 { color: #e8d6df; font-size: 34px; }
+:root[data-theme="goth-cafe"] .clip-rail-heading strong { color: #e8d6df; font-size: 26px; line-height: 1; }
+:root[data-theme="goth-cafe"] .library-player-title-copy > span { color: #e8d6df; font-size: 30px; font-weight: 500; line-height: 1.1; }
+
+/* --- Buttons: smoky glass with a mauve edge; Save glows a little. --- */
+:root[data-theme="goth-cafe"] .primary {
+  position: relative;
+  border: 1px solid #8c6a84;
+  border-radius: 6px;
+  padding: 0 18px;
+  color: var(--primary-text);
+  background: linear-gradient(rgb(98 70 94 / 70%), rgb(58 41 56 / 85%));
+  box-shadow: inset 0 1px 0 rgb(255 230 245 / 10%), 0 0 20px -8px rgb(217 163 195 / 55%);
+  font-weight: 600;
+  transition: box-shadow 200ms ease, border-color 200ms ease, transform 120ms ease;
+}
+:root[data-theme="goth-cafe"] .primary:hover:not(:disabled) { border-color: var(--accent); box-shadow: inset 0 1px 0 rgb(255 230 245 / 14%), 0 0 26px -6px rgb(217 163 195 / 70%); }
+:root[data-theme="goth-cafe"] .primary:active:not(:disabled) { transform: translateY(1px); }
+
+:root[data-theme="goth-cafe"] :is(.secondary-button, .modal-footer button:not(.primary), .danger-button) {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: rgb(22 17 21 / 72%);
+  transition: border-color 160ms ease, background 160ms ease;
+}
+:root[data-theme="goth-cafe"] :is(.secondary-button, .modal-footer button:not(.primary)):hover:not(:disabled) { border-color: #7a6274; background: rgb(43 33 41 / 85%); }
+:root[data-theme="goth-cafe"] .icon-button { border-radius: 6px; }
+
+:root[data-theme="goth-cafe"] .chip { border: 1px solid var(--border-strong); border-radius: 6px; color: #d8c8d0; background: rgb(22 17 21 / 70%); }
+:root[data-theme="goth-cafe"] .chip:hover { border-color: #7a6274; color: var(--text-strong); }
+:root[data-theme="goth-cafe"] .chip.active { border-color: var(--accent); color: var(--text-strong); background: rgb(217 163 195 / 12%); }
+
+/* --- Library header: see-through, so the window shows behind the title. --- */
+:root[data-theme="goth-cafe"] .library-top {
+  border-bottom: 1px solid rgb(85 68 82 / 45%);
+  background: #110d11;
+  box-shadow: none;
+}
+/* A small diamond-and-stars ornament in the middle of the header's rule. */
+:root[data-theme="goth-cafe"] .library-top::after {
+  content: "";
+  position: absolute;
+  bottom: -7px;
+  left: 50%;
+  width: 60px;
+  height: 14px;
+  transform: translateX(-50%);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 14'%3E%3Cpath d='M0 7h22M38 7h22' stroke='%23554452'/%3E%3Cpath d='M30 0c.6 4.6 1.6 5.8 6 7-4.4 1.2-5.4 2.4-6 7-.6-4.6-1.6-5.8-6-7 4.4-1.2 5.4-2.4 6-7z' fill='%23c69be6'/%3E%3Ccircle cx='20' cy='7' r='1.3' fill='%23c69be6'/%3E%3Ccircle cx='40' cy='7' r='1.3' fill='%23c69be6'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+:root[data-theme="goth-cafe"] .library-tabs { gap: 6px; border-bottom: 0; }
+:root[data-theme="goth-cafe"] .library-tab {
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+:root[data-theme="goth-cafe"] .library-tab:hover { color: var(--text); background: rgb(255 255 255 / 3%); }
+:root[data-theme="goth-cafe"] .library-tab.active { border-color: #7a6274; color: var(--text-strong); background: rgb(61 43 59 / 75%); }
+:root[data-theme="goth-cafe"] :is(.library-search, .diagnostics-search) { border: 1px solid var(--border-strong); border-radius: 6px; background: rgb(19 15 19 / 78%); }
+:root[data-theme="goth-cafe"] :is(.library-search, .diagnostics-search) svg { color: var(--icon); }
+:root[data-theme="goth-cafe"] :is(.library-search, .diagnostics-search):focus-within { border-color: var(--accent-border); }
+
+/* --- Panels: a thin frame with a small star in each corner. --- */
+:root[data-theme="goth-cafe"] :is(.settings-group, .panel:not(.player)) { border-radius: 8px; }
+:root[data-theme="goth-cafe"] :is(.library-player, .settings-rows, .modal) {
+  position: relative;
+  border: 1px solid var(--frame);
+  border-radius: 8px;
+  background: var(--glass);
+  box-shadow: inset 0 1px 0 var(--inset-highlight), 0 26px 50px -28px #000;
+}
+:root[data-theme="goth-cafe"] .library-player::before {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  inset: 5px;
+  pointer-events: none;
+  --gc-corner-star: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-5 -5 10 10'%3E%3Cpath d='M0-4.5c.4 3.4 1 4.1 4.5 4.5C1 .4.4 1 0 4.5-.4 1-1 .4-4.5 0-1-.4-.4-1 0-4.5z' fill='%23b48cd6'/%3E%3C/svg%3E");
+  background: var(--gc-corner-star) left top / 9px no-repeat, var(--gc-corner-star) right top / 9px no-repeat,
+    var(--gc-corner-star) left bottom / 9px no-repeat, var(--gc-corner-star) right bottom / 9px no-repeat;
+}
+:root[data-theme="goth-cafe"] .library-player-sidebar { border-left: 1px solid var(--frame); background: #151015; }
+:root[data-theme="goth-cafe"] .library-player-details { background: transparent; }
+:root[data-theme="goth-cafe"] .library-player-sidebar::after { background: linear-gradient(to bottom, transparent, #151015 88%); }
+:root[data-theme="goth-cafe"] .clip-rail-item { border-top: 0; border-radius: 6px; padding-left: 8px; }
+:root[data-theme="goth-cafe"] .clip-rail-item:hover { background: rgb(255 255 255 / 3%); }
+:root[data-theme="goth-cafe"] .clip-rail-item.active {
+  padding-left: 8px;
+  background: linear-gradient(90deg, rgb(217 163 195 / 12%), rgb(217 163 195 / 3%));
+  box-shadow: inset 2px 0 0 #e08ab8, inset 0 0 0 1px rgb(217 163 195 / 14%);
+}
+:root[data-theme="goth-cafe"] .clip-rail-copy strong { font-weight: 600; }
+:root[data-theme="goth-cafe"] .clip-rail-item.active .clip-rail-copy strong { color: var(--accent-text); }
+/* Thumbnails take on the room's low light until you point at them. */
+:root[data-theme="goth-cafe"] .clip-rail-thumbnail { border-radius: 4px; box-shadow: 0 0 0 1px var(--frame); filter: saturate(0.7) brightness(0.88); transition: filter 200ms ease; }
+:root[data-theme="goth-cafe"] .clip-rail-item:is(:hover, .active) .clip-rail-thumbnail { filter: none; }
+:root[data-theme="goth-cafe"] .setting-row + .setting-row { border-top-color: var(--border); }
+:root[data-theme="goth-cafe"] :is(input:not([type="range"], [type="checkbox"], [type="radio"], .library-search input, .diagnostics-search input), select, .keybind-button) {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-deep);
+}
+
+:root[data-theme="goth-cafe"] :is(.field-transport, .edit-deck, .edit-notice, .edit-rail) {
+  --transport-face: #171216;
+  --transport-key: #231b21;
+  --transport-edge: #554452;
+  --transport-ink: #e9dfe4;
+  --transport-muted: #a8959f;
+  --transport-track: #33262f;
+  --transport-fill: #d9a3c3;
+  --transport-marker: #c69be6;
+  --transport-highlight: rgb(255 240 245 / 4%);
+  --transport-display: #0f0b0f;
+  --transport-display-ink: #e8adcd;
+  --transport-on-marker: #141014;
+  --transport-shade: 0 0 0;
+}
+:root[data-theme="goth-cafe"] .field-transport { border-radius: 8px; }
+
+/* --- Recorder: framed, with room above for the note card and the cat. --- */
+:root[data-theme="goth-cafe"] .recorder-status {
+  position: relative;
+  margin-top: 96px;
+  border: 1px solid var(--frame);
+  border-radius: 8px;
+  background: rgb(22 17 21 / 85%);
+}
+:root[data-theme="goth-cafe"] .recorder-status.live .recorder-tally {
+  background: #ff4d6a;
+  box-shadow: 0 0 10px 1px rgb(255 77 106 / 55%);
+  animation: gc-heartbeat 1.8s ease-in-out infinite;
+}
+:root[data-theme="goth-cafe"] .recorder-buffer-track {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgb(217 163 195 / 25%), var(--accent));
+}
+
+/* --- Settings --- */
+:root[data-theme="goth-cafe"] .settings-rail-item { border-radius: 6px; color: var(--text-muted); }
+:root[data-theme="goth-cafe"] .settings-rail-item.active { color: var(--text-strong); }
+:root[data-theme="goth-cafe"] .settings-rail-item.active svg { color: var(--accent); }
+:root[data-theme="goth-cafe"] .settings-rail-item:not(.active):hover { color: var(--text); background: rgb(255 255 255 / 3%); }
+:root[data-theme="goth-cafe"] .progress-fill { background: linear-gradient(90deg, #9c6b8c, var(--accent)); }
+
+:root[data-theme="goth-cafe"] input[type="checkbox"].toggle-switch { background: #33262f; }
+:root[data-theme="goth-cafe"] input[type="checkbox"].toggle-switch::after { background: #a8959f; box-shadow: none; }
+:root[data-theme="goth-cafe"] input[type="checkbox"].toggle-switch:checked { background: var(--toggle-on); box-shadow: 0 0 12px -4px rgb(217 163 195 / 70%); }
+:root[data-theme="goth-cafe"] input[type="checkbox"].toggle-switch:checked::after { background: #f5e9ef; }
+
+/* --- Notices, dialogs, diagnostics --- */
+:root[data-theme="goth-cafe"] .notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--frame);
+  border-radius: 8px;
+  padding: 9px 16px 9px 12px;
+  color: var(--text);
+  background: rgb(22 17 21 / 94%);
+  box-shadow: 0 12px 30px -18px rgb(217 163 195 / 45%);
+}
+:root[data-theme="goth-cafe"] .workspace > .notice:first-child { margin-top: 36px; }
+:root[data-theme="goth-cafe"] .modal { background: rgb(24 18 23 / 97%); }
+:root[data-theme="goth-cafe"] .modal-backdrop { background: rgb(6 4 6 / 70%); }
+:root[data-theme="goth-cafe"] .metric { border: 1px solid var(--frame); border-radius: 8px; background: var(--glass); }
+:root[data-theme="goth-cafe"] .metric strong { color: var(--accent-text); }
+
+:root[data-theme="goth-cafe"] :is(.skeleton, .thumbnail-skeleton) { background: var(--surface-control); }
+:root[data-theme="goth-cafe"] :is(.skeleton, .thumbnail-skeleton)::after { background: linear-gradient(100deg, transparent 20%, rgb(255 179 92 / 5%) 45%, transparent 70%); }
+:root[data-theme="goth-cafe"] .library-preview-main > .thumbnail-skeleton { background: #110d11; }
+:root[data-theme="goth-cafe"] ::selection { color: #fff; background: #6e4a66; }
+
+@keyframes gc-heartbeat { 0%, 40%, 100% { transform: scale(1); } 12% { transform: scale(1.3); } 24% { transform: scale(1.05); } 30% { transform: scale(1.2); } }
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="goth-cafe"] .recorder-status.live .recorder-tally { animation: none; }
+}
+@media (max-width: 900px) {
+  :root[data-theme="goth-cafe"] .recorder-status { margin-top: 0; }
+}

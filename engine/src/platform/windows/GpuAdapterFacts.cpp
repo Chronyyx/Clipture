@@ -292,4 +292,74 @@ std::optional<double> AdapterBusyCounter::busyPercent() {
     return std::min(total, 100.0);
 }
 
+std::optional<double> busiestEngineSharePercent(
+    const std::vector<int64_t>& before, const std::vector<int64_t>& after, int64_t elapsed100ns) {
+    if (elapsed100ns <= 0 || before.size() != after.size() || before.empty()) return std::nullopt;
+    int64_t busiest = 0;
+    for (std::size_t node = 0; node < before.size(); ++node) {
+        busiest = std::max(busiest, after[node] - before[node]);
+    }
+    return std::clamp(100.0 * static_cast<double>(busiest) / static_cast<double>(elapsed100ns), 0.0, 100.0);
+}
+
+struct ProcessGpuTime::State {
+    LUID luid {};
+    bool hasAdapter = false;
+    unsigned long processId = 0;
+    int64_t readAt100ns = 0;
+    std::vector<int64_t> running;
+};
+
+ProcessGpuTime::ProcessGpuTime(IDXGIAdapter1* adapter) : state_(std::make_unique<State>()) {
+    DXGI_ADAPTER_DESC1 desc {};
+    if (!adapter || FAILED(adapter->GetDesc1(&desc))) return;
+    state_->luid = desc.AdapterLuid;
+    state_->hasAdapter = true;
+}
+
+ProcessGpuTime::~ProcessGpuTime() = default;
+
+std::optional<double> ProcessGpuTime::percent(unsigned long processId, int64_t now100ns) {
+    using QueryStatisticsFn = NTSTATUS(APIENTRY*)(const D3DKMT_QUERYSTATISTICS*);
+    static const auto queryStatistics = [] {
+        const HMODULE gdi = LoadLibraryW(L"gdi32.dll");
+        return gdi ? reinterpret_cast<QueryStatisticsFn>(GetProcAddress(gdi, "D3DKMTQueryStatistics")) : nullptr;
+    }();
+    if (!queryStatistics || !state_->hasAdapter || processId == 0) return std::nullopt;
+    D3DKMT_QUERYSTATISTICS adapterQuery {};
+    adapterQuery.Type = D3DKMT_QUERYSTATISTICS_ADAPTER;
+    adapterQuery.AdapterLuid = state_->luid;
+    if (queryStatistics(&adapterQuery) != 0) return std::nullopt;
+    const ULONG nodes = adapterQuery.QueryResult.AdapterInformation.NodeCount;
+
+    // The per-process node statistics need full query rights: with
+    // PROCESS_QUERY_LIMITED_INFORMATION every node answers
+    // STATUS_INVALID_PARAMETER. A game whose anti-cheat refuses them simply
+    // gives no reading, which never counts as a broken capture.
+    const HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, processId);
+    if (!process) return std::nullopt;
+    std::vector<int64_t> running(nodes, 0);
+    bool ok = true;
+    for (ULONG node = 0; node < nodes && ok; ++node) {
+        D3DKMT_QUERYSTATISTICS query {};
+        query.Type = D3DKMT_QUERYSTATISTICS_PROCESS_NODE;
+        query.AdapterLuid = state_->luid;
+        query.hProcess = process;
+        query.QueryProcessNode.NodeId = node;
+        ok = queryStatistics(&query) == 0;
+        if (ok) running[node] = query.QueryResult.ProcessNodeInformation.RunningTime.QuadPart;
+    }
+    CloseHandle(process);
+    if (!ok) return std::nullopt;
+
+    std::optional<double> share;
+    if (state_->processId == processId) {
+        share = busiestEngineSharePercent(state_->running, running, now100ns - state_->readAt100ns);
+    }
+    state_->processId = processId;
+    state_->readAt100ns = now100ns;
+    state_->running = std::move(running);
+    return share;
+}
+
 }  // namespace clipture::platform

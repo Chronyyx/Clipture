@@ -6,7 +6,7 @@ pub use clip_repair::{ClipRepairPhase, ClipRepairStatus};
 
 pub use engine::{
     AudioInputDevice, CapturePressure, ClipRecord, DisplayDevice, EngineConfigure,
-    EngineDiagnostics, EngineStatusEvent, HostInfo, HotkeyEvent, HotkeyStatus, SaveClipResult,
+    EngineDiagnostics, EngineStatusEvent, HostInfo, HotkeyEvent, HotkeyStatus, SaveClipResult, ClipContentCheck,
     SaveLifecycleEvent, SavePhase, SaveSource,
 };
 pub use settings::{AudioSourceKind, ClipSettings, NotificationPosition, UiTheme};

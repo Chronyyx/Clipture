@@ -38,6 +38,8 @@ struct CaptureRuntimeStats {
     uint64_t recreationSuccesses = 0;
     uint64_t fallbackCount = 0;
     std::string clockMode = "capture-sampled";
+    bool recordingGameWindow = false;
+    int64_t recordedSourceSince100ns = 0;  // monotonic; 0 when unknown
     uint64_t clockTickRequests = 0;
     uint64_t clockTickWakeups = 0;
     uint64_t clockTickCoalesced = 0;
@@ -95,6 +97,8 @@ public:
     std::string status() const;
     void* activeMonitor() const;
     CaptureRuntimeStats runtimeStats() const;
+    // Cheap: one atomic, written when hybrid capture switches source.
+    bool recordingGameWindow() const;
     // The GPU reported a capture device removed (driver reset): 0 while fine.
     long deviceRemovedHr() const;
 

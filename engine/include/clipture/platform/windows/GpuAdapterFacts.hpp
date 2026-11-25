@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 struct IDXGIAdapter1;
 
@@ -88,5 +89,30 @@ private:
     struct State;
     std::unique_ptr<State> state_;
 };
+
+// How busy one process keeps the GPU: the busiest engine's running time for
+// that process since the previous read, as a percentage of the time between
+// the reads. Per process, so another program's load (a local LLM, a video)
+// never counts toward it. Reads only when asked (one kernel call per engine),
+// keeps no thread, never sleeps. The first read of a process, or a process
+// the caller may not query, gives nothing.
+class ProcessGpuTime {
+public:
+    explicit ProcessGpuTime(IDXGIAdapter1* adapter);
+    ~ProcessGpuTime();
+    ProcessGpuTime(const ProcessGpuTime&) = delete;
+    ProcessGpuTime& operator=(const ProcessGpuTime&) = delete;
+
+    std::optional<double> percent(unsigned long processId, int64_t now100ns);
+
+private:
+    struct State;
+    std::unique_ptr<State> state_;
+};
+
+// The pure part of ProcessGpuTime: per-engine running times (100 ns) at two
+// reads `elapsed100ns` apart, to the busiest engine's share in percent.
+std::optional<double> busiestEngineSharePercent(
+    const std::vector<int64_t>& before, const std::vector<int64_t>& after, int64_t elapsed100ns);
 
 }  // namespace clipture::platform

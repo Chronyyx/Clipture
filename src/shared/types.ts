@@ -388,7 +388,7 @@ export interface EngineDiagnostics {
 }
 
 export interface ClipSettings {
-  uiTheme: "graphite" | "light" | ThemeFontId | "aero" | "maid-cafe" | "halloween" | "custom";
+  uiTheme: "graphite" | "light" | ThemeFontId | "aero" | "maid-cafe" | "goth-cafe" | "halloween" | "custom";
   customMainColor: string;
   customAccentColor: string;
   clipLengthSeconds: number;
@@ -458,7 +458,10 @@ export interface ClipSoundOption {
 }
 
 export interface DisplayDevice {
+  /** The physical monitor (`monitor:` + device path), or the output name when Windows reports none. */
   id: string;
+  /** The Windows output name (`\.\DISPLAYn`); it can move between monitors. */
+  legacyId?: string;
   name: string;
   isPrimary: boolean;
   width: number;
@@ -582,6 +585,26 @@ export interface SaveClipResult {
   message: string;
   clip?: ClipRecord;
   saveIoAnalysis?: SaveIoAnalysis[];
+  /** What the saved clip shows, judged by the engine at save (telemetry only). */
+  contentCheck?: ClipContentCheck;
+}
+
+/** The engine's verdict on a saved clip; see engine ClipContentCheck.hpp. */
+export interface ClipContentCheck {
+  /** Every keyframe tiny: a black or flat picture. */
+  blank: boolean;
+  /** 10 s or more built from at most two distinct source frames. */
+  frozen: boolean;
+  spanSeconds: number;
+  frames: number;
+  keyframes: number;
+  distinctSourceFrames: number;
+  maxKeyframeBytes: number;
+  meanFrameBytes: number;
+  recordedSource: "game-window" | "monitor";
+  sourceSeconds: number;
+  recordedMonitorPrimary: boolean;
+  foregroundOnRecordedMonitor: boolean;
 }
 
 export type UpdateStatus = "idle" | "checking" | "available" | "downloading" | "ready" | "error";

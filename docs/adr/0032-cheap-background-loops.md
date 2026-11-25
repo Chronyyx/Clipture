@@ -132,3 +132,37 @@ than clean numbers.
   exit within 15 s of its input closing (old and new builds), and the
   `audio-mic` thread used about 120 ms of CPU per second with the microphone
   track off in the test configuration.
+
+## Amendment 2026-11-20: the Windows game list, and two waits instead of polls
+
+The installed-game folders were scanned once per engine run, so a game
+installed while Clipture ran stayed unknown until a restart (see
+Consequences). GTA V from Epic, installed mid-session on the 3080 PC, recorded
+with `gameInFront=0` for the rest of it: no game raise, no game audio.
+
+- The engine now also reads the games Windows recognised itself, the Game Bar
+  list under `HKCU\System\GameConfigStore\Children`, whatever launcher
+  installed them (`platform::WindowsGameList`). Only entries carrying a
+  `TitleId`, which Windows matched to its game database, count; entries
+  without one are apps marked by hand (Discord, Java runtimes). Windows adds a
+  game when it first runs, so it is known by the time it is played.
+- The list is read once (about 7 ms for 74 games) and again only when Windows
+  signals a change through `RegNotifyChangeKeyValue`. The detection pass
+  checks that signal without waiting (about 0.2 us) and, after a reread,
+  forgets the per-process verdicts so a running game is asked again.
+- Steam and Epic manifests stay as the fallback and for display names
+  (`InstalledGamesCatalog`): read on first use, and again only when an unknown
+  process runs from inside a launcher library (`\steamapps\common\`, or
+  beside an existing Epic install), once per executable. A game installed
+  mid-session is then known even where the Windows list is unavailable.
+- With no microphone, the `audio-mic` thread no longer wakes every 500 ms. The
+  device notification thread already asks it to refresh when a device
+  appears; every wake now takes its lock, so the wait has no timeout.
+- The UI process startup check waits on a condition for the handshake or the
+  process's death instead of checking every 50 ms (ADR 0004).
+
+Not changed: merging the host watchdog's `getProgress` (every second) into
+the 2 s diagnostics sample. The two have different lifetimes (the watchdog
+lives per engine generation and pauses during long requests; the sampler runs
+throughout and reports an engine that never answers), and both together cost
+the engine about 0.3 ms of CPU per second (Evidence above).

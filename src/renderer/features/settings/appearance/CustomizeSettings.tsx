@@ -1,9 +1,10 @@
-import { Check, Droplets, ExternalLink, Feather, Ghost, Heart, Moon, Palette, RefreshCw, Sun } from 'lucide-react';
+import { Check, Droplets, ExternalLink, Feather, Ghost, Heart, Moon, Palette, RefreshCw, Skull, Sun } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { ClipSettings, ThemeFontId } from '../../../../shared/types';
 import { clipture } from '../../../platform';
 import { SpookyMascot } from '../../../shared/halloween';
+import { GothMascot } from '../../../shared/goth-cafe';
 import { Mascot } from '../../../shared/maid-cafe';
 import { applyUiTheme, refreshLocalThemeFont } from '../../../theme';
 import { ThemeColorField } from './ThemeColorField';
@@ -19,6 +20,7 @@ const themes = [
   { id: 'glitten', label: 'Glitten', Icon: Feather },
   { id: 'aero', label: 'Aero', Icon: Droplets },
   { id: 'maid-cafe', label: 'Maid café', Icon: Heart },
+  { id: 'goth-cafe', label: 'Goth café', Icon: Skull },
   { id: 'halloween', label: 'Halloween', Icon: Ghost },
   { id: 'custom', label: 'Custom', Icon: Palette }
 ] as const;
@@ -85,6 +87,7 @@ export function CustomizeSettings({ settings, onChange }: CustomizeSettingsProps
                   <span className='theme-preview-button' />
                 </span>
                 {id === 'maid-cafe' && <Mascot character='mochi' mood='wink' />}
+                {id === 'goth-cafe' && <GothMascot character='shade' mood='smirk' />}
                 {id === 'halloween' && <SpookyMascot character='jack' mood='wink' />}
               </span>
               <span className='theme-option-label'><Icon size={17} /> {label}</span>

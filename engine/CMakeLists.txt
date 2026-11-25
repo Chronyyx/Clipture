@@ -105,6 +105,10 @@ add_executable(clipture_engine
   src/platform/windows/GpuAdapterFacts.cpp
   src/GpuPriorityControl.cpp
   src/GpuPriorityMemory.cpp
+  src/InstalledGames.cpp
+  src/platform/windows/WindowsGameList.cpp
+  src/platform/windows/MonitorIdentity.cpp
+  src/ClipContentCheck.cpp
   src/platform/windows/AdminHotkeyRelay.cpp
   src/RawInputHotkey.cpp
   src/Tonemapper.cpp
@@ -149,6 +153,13 @@ if(BUILD_TESTING)
   target_include_directories(clipture_gpu_raise_policy_tests PRIVATE include)
   target_compile_features(clipture_gpu_raise_policy_tests PRIVATE cxx_std_20)
   add_test(NAME clipture_gpu_raise_policy COMMAND clipture_gpu_raise_policy_tests)
+  add_executable(clipture_game_frame_probe_tests tests/GameFrameProbeTests.cpp src/GameFrameProbe.cpp)
+  target_compile_features(clipture_game_frame_probe_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_game_frame_probe COMMAND clipture_game_frame_probe_tests)
+  add_executable(clipture_clip_content_check_tests tests/ClipContentCheckTests.cpp src/ClipContentCheck.cpp)
+  target_include_directories(clipture_clip_content_check_tests PRIVATE include)
+  target_compile_features(clipture_clip_content_check_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_clip_content_check COMMAND clipture_clip_content_check_tests)
   add_executable(clipture_rnnoise_kernel_tests tests/audio/RnnoiseKernelTests.cpp)
   target_link_libraries(clipture_rnnoise_kernel_tests PRIVATE clipture_rnnoise)
   target_include_directories(clipture_rnnoise_kernel_tests PRIVATE third_party/rnnoise/src)
@@ -160,6 +171,11 @@ if(BUILD_TESTING)
   target_compile_features(clipture_gpu_priority_memory_tests PRIVATE cxx_std_20)
   target_link_libraries(clipture_gpu_priority_memory_tests PRIVATE bcrypt)
   add_test(NAME clipture_gpu_priority_memory COMMAND clipture_gpu_priority_memory_tests)
+  add_executable(clipture_installed_games_tests tests/InstalledGamesTests.cpp src/InstalledGames.cpp
+    src/platform/windows/WindowsGameList.cpp)
+  target_include_directories(clipture_installed_games_tests PRIVATE include)
+  target_compile_features(clipture_installed_games_tests PRIVATE cxx_std_20)
+  add_test(NAME clipture_installed_games COMMAND clipture_installed_games_tests)
   add_executable(clipture_json_fields_tests tests/JsonFieldsTests.cpp)
   target_link_libraries(clipture_json_fields_tests PRIVATE clipture_json_fields)
   add_test(NAME clipture_json_fields COMMAND clipture_json_fields_tests)
@@ -192,7 +208,8 @@ if(BUILD_TESTING)
   target_compile_features(clipture_admin_relay_tests PRIVATE cxx_std_20)
   add_test(NAME clipture_admin_relay_protocol COMMAND clipture_admin_relay_tests)
   add_executable(clipture_shared_reader_tests tests/SharedTextureReaderTests.cpp
-    src/SharedTextureReader.cpp src/CaptureBackend.cpp src/FrameQueue.cpp)
+    src/SharedTextureReader.cpp src/CaptureBackend.cpp src/FrameQueue.cpp
+    src/platform/windows/MonitorIdentity.cpp)
   target_include_directories(clipture_shared_reader_tests PRIVATE src include)
   target_compile_features(clipture_shared_reader_tests PRIVATE cxx_std_20)
   target_compile_definitions(clipture_shared_reader_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -218,7 +235,8 @@ if(BUILD_TESTING)
   add_executable(clipture_preparation_gpu_tests
     tests/DesktopPreparationGpuTests.cpp
     src/DesktopFramePreparation.cpp src/WgcFramePreparation.cpp src/OverlayCompositor.cpp src/DesktopPointerCompositor.cpp
-    src/DesktopPointerShape.cpp src/Tonemapper.cpp src/CaptureBackend.cpp src/FrameQueue.cpp)
+    src/DesktopPointerShape.cpp src/Tonemapper.cpp src/CaptureBackend.cpp src/FrameQueue.cpp
+    src/platform/windows/MonitorIdentity.cpp)
   target_include_directories(clipture_preparation_gpu_tests PRIVATE include src)
   target_compile_features(clipture_preparation_gpu_tests PRIVATE cxx_std_20)
   target_compile_definitions(clipture_preparation_gpu_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -264,6 +282,13 @@ if(BUILD_TESTING)
   target_compile_features(clipture_packets_in_flight_tests PRIVATE cxx_std_20)
   target_compile_definitions(clipture_packets_in_flight_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
   target_link_libraries(clipture_packets_in_flight_tests PRIVATE dxgi pdh)
+  add_executable(clipture_process_gpu_time_tests tests/ProcessGpuTimeTests.cpp
+    src/platform/windows/GpuAdapterFacts.cpp)
+  target_include_directories(clipture_process_gpu_time_tests PRIVATE include)
+  target_compile_features(clipture_process_gpu_time_tests PRIVATE cxx_std_20)
+  target_compile_definitions(clipture_process_gpu_time_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(clipture_process_gpu_time_tests PRIVATE d3d11 dxgi pdh)
+  add_test(NAME clipture_process_gpu_time COMMAND clipture_process_gpu_time_tests)
   add_test(NAME clipture_packets_in_flight COMMAND clipture_packets_in_flight_tests)
   set_tests_properties(clipture_packets_in_flight PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20)
   add_executable(clipture_packet_tests

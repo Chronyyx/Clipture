@@ -75,6 +75,8 @@ struct SaveClipResult {
     std::string message;
     std::string clipJson;
     std::string ioAnalysisJson;
+    // What the clip shows and where it came from (ClipContentCheck), for telemetry.
+    std::string contentCheckJson;
 };
 
 namespace platform { class AdminHotkeyRelay; }

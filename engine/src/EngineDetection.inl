@@ -27,6 +27,9 @@ void Engine::gameDetectionLoop() {
         const auto passStartedAt = std::chrono::steady_clock::now();
         const bool fullPass = passStartedAt >= nextFullPass;
         const bool audioPass = (settings_.captureGameAudio || settings_.captureForegroundSystemAudio) && audioCaptureWorker_;
+        // Windows listed a new game (it does when one first runs): ask the
+        // running processes again, since one may be it. A non-blocking check.
+        if (fullPass && windowsGameList().refreshIfChanged()) gameVerdicts = {};
         ForegroundProcess foreground;
         bool foregroundIsKnownGame = false;
         if (fullPass || audioPass) {

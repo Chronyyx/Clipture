@@ -215,122 +215,27 @@ std::string narrowWide(const wchar_t* value) {
     return result;
 }
 
-std::string readTextFile(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) return {};
-    std::ostringstream content;
-    content << file.rdbuf();
-    return content.str();
+std::string friendlyProcessName(const std::string& processName);
+
+// The games Windows recognised, whatever launcher installed them. The
+// detection loop rereads it when Windows signals a change.
+platform::WindowsGameList& windowsGameList() {
+    static platform::WindowsGameList list;
+    return list;
 }
 
-std::string extractQuotedField(const std::string& text, const std::string& field) {
-    const std::regex pattern("\"" + field + "\"\\s+\"([^\"]+)\"");
-    std::smatch match;
-    if (std::regex_search(text, match, pattern) && match.size() > 1) return match[1].str();
-    const std::regex jsonPattern("\"" + field + "\"\\s*:\\s*\"([^\"]+)\"");
-    if (std::regex_search(text, match, jsonPattern) && match.size() > 1) return match[1].str();
-    return {};
+// Steam and Epic manifests: they give a game its name, and catch games
+// Windows has not listed (Game Bar off, never run yet).
+InstalledGamesCatalog& installedGamesCatalog() {
+    static InstalledGamesCatalog catalog;
+    return catalog;
 }
 
-struct GameInstall {
-    std::string name;
-    // Lower-case normalized install folder with a trailing separator, compared
-    // as a prefix; empty when the folder is unknown.
-    std::string rootPrefix;
-    // Length of the folder as its manifest wrote it: the longest match wins.
-    std::size_t rootLength = 0;
-};
-
-// Normalized once per path; matching runs for every process and game.
-std::string comparablePath(const std::filesystem::path& path) {
-    try {
-        return lowerAscii(path.lexically_normal().string());
-    } catch (const std::exception&) {
-        return {};  // not representable in the process code page
-    }
-}
-
-GameInstall makeGameInstall(std::string name, const std::filesystem::path& root) {
-    GameInstall install { std::move(name), comparablePath(root), 0 };
-    if (!install.rootPrefix.empty()) {
-        if (install.rootPrefix.back() != '/' && install.rootPrefix.back() != '\\') install.rootPrefix.push_back('\\');
-        try { install.rootLength = root.string().size(); } catch (const std::exception&) { install.rootPrefix.clear(); }
-    }
-    return install;
-}
-
-std::vector<std::filesystem::path> steamLibraries() {
-    std::vector<std::filesystem::path> libraries;
-    const char* programFilesX86 = std::getenv("ProgramFiles(x86)");
-    std::filesystem::path steamRoot = programFilesX86 ? std::filesystem::path(programFilesX86) / "Steam" : "C:\\Program Files (x86)\\Steam";
-    libraries.push_back(steamRoot);
-
-    const auto libraryFile = steamRoot / "steamapps" / "libraryfolders.vdf";
-    const auto text = readTextFile(libraryFile);
-    const std::regex pathPattern("\"path\"\\s+\"([^\"]+)\"");
-    for (std::sregex_iterator it(text.begin(), text.end(), pathPattern), end; it != end; ++it) {
-        auto value = (*it)[1].str();
-        std::replace(value.begin(), value.end(), '\\', '/');
-        libraries.emplace_back(value);
-    }
-    return libraries;
-}
-
-std::vector<GameInstall> scanInstalledGames() {
-    std::vector<GameInstall> cachedGames;
-    for (const auto& library : steamLibraries()) {
-        const auto steamApps = library / "steamapps";
-        std::error_code ignored;
-        if (!std::filesystem::exists(steamApps, ignored)) continue;
-        for (const auto& entry : std::filesystem::directory_iterator(steamApps, ignored)) {
-            if (!entry.is_regular_file(ignored) || entry.path().filename().string().rfind("appmanifest_", 0) != 0) continue;
-            const auto text = readTextFile(entry.path());
-            const auto name = extractQuotedField(text, "name");
-            const auto installDir = extractQuotedField(text, "installdir");
-            if (!name.empty() && !installDir.empty()) {
-                cachedGames.push_back(makeGameInstall(name, steamApps / "common" / installDir));
-            }
-        }
-    }
-
-    const char* programData = std::getenv("ProgramData");
-    const std::filesystem::path epicManifests = (programData ? std::filesystem::path(programData) : "C:\\ProgramData") /
-        "Epic" / "EpicGamesLauncher" / "Data" / "Manifests";
-    std::error_code ignored;
-    if (std::filesystem::exists(epicManifests, ignored)) {
-        for (const auto& entry : std::filesystem::directory_iterator(epicManifests, ignored)) {
-            if (!entry.is_regular_file(ignored) || entry.path().extension() != ".item") continue;
-            const auto text = readTextFile(entry.path());
-            const auto name = extractQuotedField(text, "DisplayName");
-            const auto installLocation = extractQuotedField(text, "InstallLocation");
-            if (!name.empty() && !installLocation.empty()) {
-                cachedGames.push_back(makeGameInstall(name, installLocation));
-            }
-        }
-    }
-    return cachedGames;
-}
-
-// Scanned once per engine run.
-const std::vector<GameInstall>& installedGames() {
-    static const std::vector<GameInstall> games = scanInstalledGames();
-    return games;
-}
-
+// The game the executable belongs to, or empty when it is no known game.
 std::string detectInstalledGameByPath(const std::string& processPath) {
-    if (processPath.empty()) return {};
-    const auto path = comparablePath(std::filesystem::path(processPath));
-    if (path.empty()) return {};
-    std::size_t bestLength = 0;
-    const std::string* bestName = nullptr;
-    for (const auto& game : installedGames()) {
-        if (game.rootPrefix.empty() || !path.starts_with(game.rootPrefix)) continue;
-        if (game.rootLength > bestLength) {
-            bestLength = game.rootLength;
-            bestName = &game.name;
-        }
-    }
-    return bestName ? *bestName : std::string();
+    auto name = installedGamesCatalog().match(processPath);
+    if (name.empty() && windowsGameList().contains(processPath)) name = friendlyProcessName(processPath);
+    return name;
 }
 
 std::string friendlyProcessName(const std::string& processName) {

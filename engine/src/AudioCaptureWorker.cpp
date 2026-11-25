@@ -96,7 +96,7 @@ void AudioCaptureWorker::stop() {
     if (!running_.exchange(false)) return;
     notificationPending_.store(true);
     notificationCv_.notify_all();
-    micRefreshCv_.notify_all();
+    wakeMicThread();
     stopMicThread();
     stopSystemThread();
     std::vector<std::thread> appThreadsToJoin;
@@ -304,7 +304,7 @@ void AudioCaptureWorker::stopMicThread() {
         stopRequested = micStopRequested_;
         if (stopRequested) stopRequested->store(true);
     }
-    micRefreshCv_.notify_all();
+    wakeMicThread();
     if (micThread_.joinable()) micThread_.join();
     {
         std::lock_guard lock(configMutex_);
@@ -314,6 +314,11 @@ void AudioCaptureWorker::stopMicThread() {
 
 void AudioCaptureWorker::requestMicRefresh() {
     micRefreshVersion_.fetch_add(1);
+    wakeMicThread();
+}
+
+void AudioCaptureWorker::wakeMicThread() {
+    { std::lock_guard lock(micRefreshMutex_); }
     micRefreshCv_.notify_all();
 }
 

@@ -269,6 +269,9 @@ int main() {
                 }
                 if (result.ok) {
                     payload << ",\"clip\":" << result.clipJson;
+                    if (!result.contentCheckJson.empty()) {
+                        payload << ",\"contentCheck\":" << result.contentCheckJson;
+                    }
                 }
                 payload << "}";
                 respond(id, payload.str());

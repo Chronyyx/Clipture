@@ -203,6 +203,29 @@ SaveClipResult Engine::saveClip(const SaveClipRequest& request) {
         return result;
     }
     int actualDuration = actualClipDurationSeconds(clipPackets, duration);
+    {
+        // Judged from the encoded clip and facts captured when the source last
+        // changed: nothing runs while recording for this.
+        ClipSourceFacts source;
+        if (captureSession_) {
+            const auto stats = captureSession_->runtimeStats();
+            source.recordingGameWindow = stats.recordingGameWindow;
+            if (stats.recordedSourceSince100ns > 0) {
+                source.sourceSeconds = static_cast<double>(monotonicNow100ns() - stats.recordedSourceSince100ns) / 10'000'000.0;
+            }
+            if (const auto recorded = static_cast<HMONITOR>(captureSession_->activeMonitor())) {
+                MONITORINFO info {};
+                info.cbSize = sizeof(info);
+                if (GetMonitorInfoW(recorded, &info)) source.recordedMonitorPrimary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
+                if (const HWND foreground = GetForegroundWindow()) {
+                    const HMONITOR shown = MonitorFromWindow(foreground, MONITOR_DEFAULTTONULL);
+                    source.foregroundOnRecordedMonitor = !shown || shown == recorded;
+                }
+            }
+        }
+        result.contentCheckJson = toJson(
+            checkClipContent(std::span<const EncodedPacket>(clipPackets.data(), clipPackets.size())), source);
+    }
     diagnostics_.lastClipCadence = analyzeVideoCadence(
         std::span<const EncodedPacket>(clipPackets.data(), clipPackets.size()),
         diagnostics_.fps);

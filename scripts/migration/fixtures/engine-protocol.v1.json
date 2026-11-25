@@ -31,6 +31,10 @@
       "segmentFiles": ["C:/Fixture/one.mp4", "C:/Fixture/two.mp4"],
       "segmentResolutions": ["320x180", "160x90"],
       "segmentAudioTracks": [["microphone-pcm"], ["app:chat.exe", "microphone-pcm"]]
+    }, "contentCheck": {
+      "blank": false, "frozen": false, "spanSeconds": 2.0, "frames": 60, "keyframes": 1, "distinctSourceFrames": 60,
+      "maxKeyframeBytes": 4096, "meanFrameBytes": 900, "recordedSource": "monitor", "sourceSeconds": 30.5,
+      "recordedMonitorPrimary": true, "foregroundOnRecordedMonitor": true
     } } },
     "request": { "id": 1, "type": "getDiagnostics" },
     "success": { "id": 1, "payload": { "engineRunning": true } },

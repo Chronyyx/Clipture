@@ -485,6 +485,10 @@ void* CaptureSession::activeMonitor() const {
     return impl_->shared->activeMonitor.load(std::memory_order_acquire);
 }
 
+bool CaptureSession::recordingGameWindow() const {
+    return impl_->shared->recordingGameWindow.load(std::memory_order_relaxed);
+}
+
 CaptureRuntimeStats CaptureSession::runtimeStats() const {
     return impl_->shared->snapshot();
 }

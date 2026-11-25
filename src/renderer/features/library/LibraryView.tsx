@@ -4,6 +4,7 @@ import type { ClipRecord, ClipSettings } from "../../../shared/types";
 import { ClipPlayer } from "../player";
 import { SpookyPerch, SpookySaveCheer, WatchingEye } from "../../shared/halloween";
 import { CafePeeker, CafeSaveCheer } from "../../shared/maid-cafe";
+import { GothPeeker, GothSaveCheer } from "../../shared/goth-cafe";
 import { clipSourceLabels } from "../../shared/clips/clipMetadata";
 import { LibraryClipDetails } from "./LibraryClipDetails";
 import { LibraryPlayerSidebar } from "./LibraryPlayerSidebar";
@@ -177,6 +178,7 @@ export function LibraryView({
                 <span className="library-heading-default">Clip Library</span>
                 <span className="library-heading-glitten">Clips</span>
                 <span className="library-heading-cafe">Clip menu</span>
+                <span className="library-heading-goth">Clip Crypt</span>
                 <span className="library-heading-halloween">
                   <span aria-hidden="true">Cl<span className="hw-i">ı<WatchingEye /></span>p</span>
                   <span className="hw-sr">Clip</span>
@@ -221,6 +223,7 @@ export function LibraryView({
                 <Save size={18} /> {isSavingClip ? "Saving..." : `Save last ${clipLengthSeconds}s`}
                 <CafeSaveCheer saving={isSavingClip} />
                 <SpookySaveCheer saving={isSavingClip} />
+                <GothSaveCheer saving={isSavingClip} />
               </button>
             </div>
           </div>
@@ -283,6 +286,7 @@ export function LibraryView({
         ) : editorialPreviewClip ? (<>
           <CafePeeker />
           <SpookyPerch />
+          <GothPeeker />
           {selectedClip ? (
             <ClipPlayer
               clip={selectedClip}

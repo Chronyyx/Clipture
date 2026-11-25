@@ -81,6 +81,10 @@ struct CaptureSharedState {
     // Detected game window that monitor WGC may record in place of the desktop
     // while it covers the monitor unobstructed. Survives backend restarts.
     std::atomic<void*> hybridGameWindow = nullptr;
+    // What the recording shows and since when (monotonic), written only when
+    // capture starts or hybrid capture switches source.
+    std::atomic<bool> recordingGameWindow = false;
+    std::atomic<int64_t> recordedSourceSince100ns = 0;
     std::atomic<int> targetFps = 60;
     std::atomic<FrameQueue*> frameQueue = nullptr;
     std::atomic<CaptureTickGate*> captureTickGate = nullptr;

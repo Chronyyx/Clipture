@@ -272,10 +272,12 @@ impl Event {
 pub const EVENT_CODES: &[&str] = &[
     "save",
     "save_failed",
+    "clip_suspect",
     "drop_burst",
     "capture_backend_changed",
     "capture_fallback",
     "capture_access_lost",
+    "capture_stale",
     "capture_recreated",
     "replay_write_failure",
     "pressure_changed",

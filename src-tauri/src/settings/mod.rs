@@ -6,6 +6,9 @@ use std::{
 
 use tempfile::NamedTempFile;
 
+mod monitor_identity;
+pub use monitor_identity::adopt_stable_monitor_id;
+
 use crate::{
     contracts::ClipSettings,
     error::{AppError, AppResult},

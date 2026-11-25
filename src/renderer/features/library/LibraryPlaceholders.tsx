@@ -1,6 +1,7 @@
 import { Clapperboard } from "lucide-react";
 import { SpookyBrew, SpookyEmptyArt, useHalloween } from "../../shared/halloween";
 import { CafeEmptyArt, CafeNap, useMaidCafe } from "../../shared/maid-cafe";
+import { GothEmptyArt, GothLoading, useGothCafe } from "../../shared/goth-cafe";
 
 export function LibraryEmptyState({
   title,
@@ -19,9 +20,10 @@ export function LibraryEmptyState({
 }) {
   const cafe = useMaidCafe();
   const spooky = useHalloween();
+  const goth = useGothCafe();
   return (
     <div className="library-empty-state">
-      {cafe ? <CafeEmptyArt imported={imported} /> : spooky ? <SpookyEmptyArt imported={imported} /> : (
+      {cafe ? <CafeEmptyArt imported={imported} /> : spooky ? <SpookyEmptyArt imported={imported} /> : goth ? <GothEmptyArt imported={imported} /> : (
         <div className="library-empty-art" aria-hidden="true">
           <Clapperboard size={74} />
         </div>
@@ -44,6 +46,7 @@ export function LibrarySkeleton() {
         <span className="thumbnail-skeleton" aria-hidden="true" />
         <CafeNap />
         <SpookyBrew />
+        <GothLoading />
       </div>
       <div className="library-player-details" aria-hidden="true">
         <div className="library-player-side-header">

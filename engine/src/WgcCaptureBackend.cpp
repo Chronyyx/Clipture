@@ -172,10 +172,22 @@ struct WgcCaptureBackend::Impl {
         DirectXPixelFormat format = DirectXPixelFormat::B8G8R8A8UIntNormalized;
         bool verified = false;  // a captured frame showed content (never black-only)
         int64_t lastProbe100ns = 0;
+        // While its frames are recorded: some games' windows capture black
+        // after showing content once (Deadlock once in a match), so recorded
+        // frames keep being checked and a blank window returns to the desktop.
+        GameFrameWatch watch;
+        BlankWindowDetector blank;
+        int64_t lastWatch100ns = 0;
+        // When the window last delivered a frame. In exclusive fullscreen a
+        // window can stop delivering altogether; the encoder would then repeat
+        // its last picture at the full rate (Deadlock, Fortnite in the field).
+        int64_t lastFrame100ns = 0;
     };
     GameSource game;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> probeStaging;
     static constexpr int64_t kGameProbeInterval100ns = 2'500'000;  // 250 ms
+    static constexpr int64_t kGameWatchInterval100ns = 5'000'000;  // 500 ms
+    static constexpr int64_t kGameSilence100ns = 10'000'000;       // 1 s without a game frame
     HWND failedGameWindow = nullptr;
     std::atomic<bool> recordGame = false;
     int64_t coveredSince100ns = 0;
@@ -319,6 +331,7 @@ struct WgcCaptureBackend::Impl {
                         try { frame.Close(); } catch (...) {}
                         game.size = size;
                         game.verified = false;
+                        game.blank.reset();
                         heldFrame.drop(closePending);
                         sender.Recreate(direct3DDevice, game.format, resourceSizingPolicy().wgcBuffers, size);
                         return;
@@ -326,6 +339,14 @@ struct WgcCaptureBackend::Impl {
                     if (size.Width != framePoolSize.Width || size.Height != framePoolSize.Height) {
                         try { frame.Close(); } catch (...) {}
                         continue;
+                    }
+                    game.lastFrame100ns = monotonicNow100ns();
+                    if (!watchRecordedGameFrame(frame, size)) {
+                        // Went blank: this and later game frames wait for
+                        // verification again; the desktop fills the gap.
+                        try { frame.Close(); } catch (...) {}
+                        heldFrame.drop(closePending);
+                        return;
                     }
                 } else if (size.Width != framePoolSize.Width || size.Height != framePoolSize.Height) {
                     try { frame.Close(); } catch (...) {}
@@ -391,6 +412,35 @@ struct WgcCaptureBackend::Impl {
         }
     }
 
+    // Checks recorded game frames without stalling capture: one patch readback
+    // in flight at a time, collected once the GPU has finished it. Returns
+    // false once the window has gone blank, which unverifies it so hybrid
+    // capture returns to the desktop. Called with callbackMutex held.
+    bool watchRecordedGameFrame(winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame const& frame,
+        winrt::Windows::Graphics::SizeInt32 size) {
+        if (auto content = game.watch.poll(d3dContext.Get())) {
+            if (game.blank.observe(*content)) {
+                game.verified = false;
+                game.blank.reset();
+                game.lastProbe100ns = 0;
+                std::cerr << "[capture] Hybrid capture saw only black game-window frames; returning to the desktop.\n";
+                return false;
+            }
+        }
+        const int64_t now = monotonicNow100ns();
+        if (!game.watch.pending() && now - game.lastWatch100ns >= kGameWatchInterval100ns) {
+            game.lastWatch100ns = now;
+            auto access = frame.Surface().template as<
+                ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+            if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(&texture))) && texture) {
+                game.watch.request(d3dDevice.Get(), d3dContext.Get(), texture.Get(),
+                    static_cast<UINT>(size.Width), static_cast<UINT>(size.Height));
+            }
+        }
+        return true;
+    }
+
     // Game frames are recorded only after one is seen with content; a window
     // that captures black-only (hidden from capture, exclusive fullscreen)
     // keeps the desktop. Called with callbackMutex held.
@@ -413,6 +463,9 @@ struct WgcCaptureBackend::Impl {
                 gameFrameHasContent(d3dDevice.Get(), d3dContext.Get(), texture.Get(),
                     static_cast<UINT>(size.Width), static_cast<UINT>(size.Height), probeStaging)) {
                 game.verified = true;
+                game.blank.reset();
+                game.lastWatch100ns = now;
+                game.lastFrame100ns = now;
                 std::cerr << "[capture] Hybrid capture verified game-window frames.\n";
             }
         }
@@ -500,6 +553,8 @@ struct WgcCaptureBackend::Impl {
         if (auto* queue = shared->frameQueue.load(std::memory_order_acquire)) {
             queue->traceCapture('s', monotonicNow100ns(), next ? 1u : 0u);
         }
+        shared->recordingGameWindow.store(next, std::memory_order_relaxed);
+        shared->recordedSourceSince100ns.store(monotonicNow100ns(), std::memory_order_relaxed);
         std::cerr << "[capture] Hybrid capture records "
                   << (next ? "the game window" : "the desktop: " + reason) << ".\n";
     }
@@ -553,6 +608,14 @@ struct WgcCaptureBackend::Impl {
             std::lock_guard callbackLock(callbackMutex);
             if (!game.verified) {
                 coverage = { false, "waiting for game-window frames with content" };
+            } else if (recordGame.load(std::memory_order_acquire) && game.lastFrame100ns > 0 &&
+                monotonicNow100ns() - game.lastFrame100ns > kGameSilence100ns) {
+                // Checked on the backend's existing poll; verification starts
+                // over, so recording returns only once frames with content do.
+                game.verified = false;
+                game.blank.reset();
+                game.lastProbe100ns = 0;
+                coverage = { false, "game window stopped delivering frames" };
             } else if (game.size.Width != framePoolSize.Width || game.size.Height != framePoolSize.Height) {
                 coverage = { false, "game window is " + std::to_string(game.size.Width) + "x" +
                     std::to_string(game.size.Height) + ", monitor is " +
@@ -693,6 +756,8 @@ BackendStartResult WgcCaptureBackend::start() {
             state.session.IsBorderRequired(false);
         } catch (...) {
         }
+        state.shared->recordingGameWindow.store(false, std::memory_order_relaxed);
+        state.shared->recordedSourceSince100ns.store(monotonicNow100ns(), std::memory_order_relaxed);
         state.started.store(true, std::memory_order_release);
         if (capturePipelinePolicy().holdUntilTick) {
             if (auto* queue = state.shared->frameQueue.load(std::memory_order_acquire)) {

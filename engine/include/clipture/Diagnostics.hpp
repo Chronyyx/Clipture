@@ -203,6 +203,11 @@ struct Diagnostics {
     // detection pass that needed them (a game in front, or raised). -1 when
     // unknown or not read.
     double gpuBusyPercent = -1.0;
+    // The foreground process's busiest GPU engine since the previous detailed
+    // sample, in percent; -1 when not read.
+    double foregroundGpuPercent = -1.0;
+    // Hybrid capture is recording the game's window rather than the monitor.
+    bool captureRecordingGameWindow = false;
     double gpuPacketsInFlight = -1.0;
     std::string gpuSchedulingRequested = "default";
     bool gpuSchedulingOverride = false;

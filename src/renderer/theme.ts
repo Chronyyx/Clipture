@@ -111,7 +111,7 @@ function clearCustomProperties(root: HTMLElement): void {
 function normalizeUiTheme(value: unknown): UiTheme {
   // Milate was retired for Aero; settings saved with it carry over.
   if (value === "milate") return "aero";
-  return value === "light" || value === "glitten" || value === "aero" || value === "maid-cafe" || value === "halloween" || value === "custom" ? value : "graphite";
+  return value === "light" || value === "glitten" || value === "aero" || value === "maid-cafe" || value === "goth-cafe" || value === "halloween" || value === "custom" ? value : "graphite";
 }
 
 export function refreshLocalThemeFont(theme: ThemeFontId): Promise<boolean> {

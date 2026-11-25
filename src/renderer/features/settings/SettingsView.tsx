@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { ClipSettings, ClipSoundOption } from '../../../shared/types';
 import { SpookyRailPet } from '../../shared/halloween';
 import { CafeRailPet } from '../../shared/maid-cafe';
+import { GothRailPet } from '../../shared/goth-cafe';
 import { AudioSettings } from './audio/AudioSettings';
 import { CustomizeSettings } from './appearance/CustomizeSettings';
 import { NotificationSettings } from './NotificationSettings';
@@ -58,6 +59,7 @@ export function SettingsView({ settings, clipSounds, onChange, onPreviewSound, o
         ))}
         <CafeRailPet section={active} />
         <SpookyRailPet section={active} />
+        <GothRailPet section={active} />
       </nav>
       <AnimatePresence mode='wait' initial={false}>
         <motion.div
