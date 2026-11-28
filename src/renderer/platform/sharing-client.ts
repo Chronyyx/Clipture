@@ -40,3 +40,9 @@ function selectSharingClient(): SharingApi {
 }
 
 export const sharing = selectSharingClient();
+
+/** False in the public web demo (clipture.app/demo): its friend code and
+ * invite link are placeholders, and a copied link would send whoever opens it
+ * a request to a friend who does not exist. */
+export const sharingInvitesAvailable =
+  hostKind !== 'mock' || !new URLSearchParams(previewSearch(window.location.search)).has('demo');

@@ -1,5 +1,5 @@
 export { clipture, hostKind } from './client';
-export { sharing } from './sharing-client';
+export { sharing, sharingInvitesAvailable } from './sharing-client';
 export { telemetry } from './telemetry-client';
 export { createMockSharingAdapter } from './mock-sharing-adapter';
 export { controlMainWindow, drawsWindowControls, revealMainWindow, startWindowResize, watchWindowFill } from './window-presentation';

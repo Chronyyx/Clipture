@@ -24,11 +24,14 @@ function useCopied() {
 export function FriendCodeCard({
   code,
   inviteLink,
+  invitesAvailable = true,
   displayName,
   onRename
 }: {
   code?: string | null;
   inviteLink?: string | null;
+  /** False in the web demo, whose code and link are placeholders. */
+  invitesAvailable?: boolean;
   displayName: string;
   onRename: (name: string) => Promise<boolean>;
 }) {
@@ -73,7 +76,11 @@ export function FriendCodeCard({
           )}
         </span>
       </div>
-      {code && inviteLink ? (
+      {!invitesAvailable ? (
+        <p className="share-hint">
+          Invite links work in the Clipture desktop app. This demo can't send one.
+        </p>
+      ) : code && inviteLink ? (
         <>
           <p className="share-hint">
             Send your link in any chat to add a friend.

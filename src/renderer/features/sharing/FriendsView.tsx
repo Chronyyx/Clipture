@@ -1,6 +1,7 @@
 import { Lock, MonitorUp, RotateCcw, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import type { SharingSnapshot } from "../../../shared/sharing";
+import { sharingInvitesAvailable } from "../../platform";
 import { AddFriendForm, FriendList, FriendRequests } from "./FriendList";
 import { FriendCodeCard } from "./FriendCodeCard";
 import { SharedClips } from "./SharedClips";
@@ -68,6 +69,7 @@ export function FriendsView({
         <SharedClips snapshot={snapshot} controller={controller} focusFriendId={focusFriendId} onClearFocus={onClearFocus} />
         <div className="share-people">
           <FriendCodeCard code={snapshot.friendCode} inviteLink={snapshot.inviteLink}
+            invitesAvailable={sharingInvitesAvailable}
             displayName={snapshot.displayName} onRename={controller.setDisplayName} />
           <FriendRequests
             requests={requests}
