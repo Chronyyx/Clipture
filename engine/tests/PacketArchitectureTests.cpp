@@ -1171,6 +1171,34 @@ bool testPidAudioProcessSpecsAndTreeCollapse() {
         "an independent audio helper should remain a separate capture root");
 }
 
+bool testSiblingSameNameAppSessionsAreAllCaptured() {
+    // Discord as observed: a silent main process whose renderer (voice) and
+    // audio service (join sounds) both hold sounding sessions.
+    const std::vector<clipture::RunningProcessInfo> processes {
+        { 26108, 26072, "Discord.exe", "discord.exe" },
+        { 2756, 26108, "Discord.exe", "discord.exe" },
+        { 26556, 26108, "Discord.exe", "discord.exe" },
+        { 39468, 38400, "chrome.exe", "chrome.exe" }
+    };
+    const auto specs = clipture::appAudioCaptureSpecs(
+        processes, { { 2756, "Discord.exe" }, { 26556, "Discord.exe" }, { 39468, "chrome.exe" } });
+    if (!require(specs.size() == 3, "each sounding sibling should get its own capture")) return false;
+    for (const char* wanted : { "app-pid:2756:Discord.exe", "app-pid:26556:Discord.exe", "app-pid:39468:chrome.exe" }) {
+        if (!require(std::find(specs.begin(), specs.end(), wanted) != specs.end(), wanted)) return false;
+    }
+    if (!require(
+            clipture::audioProcessSourceId(specs[0]) == clipture::audioProcessSourceId(specs[1]),
+            "same-name captures should share one track source id")) {
+        return false;
+    }
+    // A sounding main process covers its children with one tree capture.
+    const auto covered = clipture::appAudioCaptureSpecs(
+        processes, { { 26108, "Discord.exe" }, { 26556, "Discord.exe" } });
+    return require(
+        covered.size() == 1 && covered[0] == "app-pid:26108:Discord.exe",
+        "a sounding ancestor should own its tree");
+}
+
 bool testPreferredProcessAudioTreeRoot() {
     const std::vector<clipture::RunningProcessInfo> browserProcesses {
         { 10, 0, "explorer.exe", "explorer.exe" },
@@ -1818,6 +1846,7 @@ int main() {
     if (!testFrameQueueDropAccounting()) return 1;
     if (!testImmutableAudioRouting()) return 1;
     if (!testPidAudioProcessSpecsAndTreeCollapse()) return 1;
+    if (!testSiblingSameNameAppSessionsAreAllCaptured()) return 1;
     if (!testPreferredProcessAudioTreeRoot()) return 1;
     if (!testLiveAacCoordinator()) return 1;
     if (!testLiveAacTimelineStaysContinuousThroughSilence()) return 1;

@@ -1,10 +1,10 @@
 {
   "name": "clipture",
-  "version": "1.9.6",
+  "version": "1.9.7",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "description": "Low-footprint Tauri desktop client for the native Clipture capture engine.",
-  "releaseTitle": "Clipture 1.9.6: No More Black Clips",
+  "releaseTitle": "Clipture 1.9.7: Hear Your Friends",
   "main": "dist/main/main.js",
   "author": "Clipture",
   "scripts": {

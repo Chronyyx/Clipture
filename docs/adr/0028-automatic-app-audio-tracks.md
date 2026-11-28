@@ -99,3 +99,13 @@ it is a game, the process list is taken once per full pass and reused by
 audio-only passes, and the watcher's rescan asks the sessions it already
 holds, listing all sessions again on a session notification and on every
 third rescan.
+
+## Correction (2026-11-28): every sounding root of an app
+
+"One track per app name" was enforced by capturing only the first process
+tree root of each name and dropping the rest. Discord plays voice from its
+renderer and join/leave sounds from its Chromium audio service, sibling
+processes under a main process that holds no session, so the clip kept the
+join sounds (the lower PID) and lost the call. Every sounding root now gets a
+capture (`appAudioCaptureSpecs`); roots of the same name still share one
+track, because the source id carries no PID and the coordinator mixes them.

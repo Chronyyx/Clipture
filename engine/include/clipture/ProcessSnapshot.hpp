@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <new>
 #include <string>
@@ -270,6 +271,25 @@ inline std::vector<DWORD> collapseProcessTreeRoots(
         roots.push_back(processId);
     }
     return roots;
+}
+
+// The app captures for the sounding processes (process ID -> executable name):
+// one per process tree, every root kept. Roots with the same executable name
+// share its track, since their source id carries no PID. Discord plays voice
+// from its renderer and join sounds from its audio service, sibling processes
+// under a silent main process, so keeping only one root per name lost voices.
+inline std::vector<std::string> appAudioCaptureSpecs(
+    const std::vector<RunningProcessInfo>& entries,
+    const std::map<DWORD, std::string>& soundingExeById) {
+    std::vector<DWORD> processIds;
+    processIds.reserve(soundingExeById.size());
+    for (const auto& [processId, _] : soundingExeById) processIds.push_back(processId);
+    std::vector<std::string> specs;
+    for (const DWORD root : collapseProcessTreeRoots(entries, processIds)) {
+        auto spec = makePidAudioProcessSpec(AudioProcessKind::App, root, soundingExeById.at(root));
+        if (!spec.empty()) specs.push_back(std::move(spec));
+    }
+    return specs;
 }
 
 inline DWORD preferredProcessTreeRootForName(

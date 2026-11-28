@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.9.7] - 2026-11-28
+
+### Recording
+
+- **Friends' voices in Discord clips:** The Discord track caught Discord's join and leave sounds, but not the people talking in the call. Discord plays those from two separate processes, and Clipture recorded only one of them. It now records every Discord process that plays sound, all into the same Discord track. Other apps that play sound from more than one process get the same fix.
+
 ## [1.9.6] - 2026-11-25
 
 ### Recording

@@ -361,17 +361,14 @@ void Engine::gameDetectionLoop() {
                     return !info || lowerAscii(info->exeName) != lowerAscii(item.second.exeName) ||
                         now - item.second.lastActive > kAutoAppGrace;
                 });
-                std::vector<DWORD> autoProcessIds;
-                for (const auto& [processId, _] : autoAppSessions_) autoProcessIds.push_back(processId);
+                std::map<DWORD, std::string> soundingApps;
+                for (const auto& [processId, session] : autoAppSessions_) soundingApps[processId] = session.exeName;
                 std::set<std::string> autoAppNames;
-                for (const DWORD rootProcessId : collapseProcessTreeRoots(processSnapshot.entries(), autoProcessIds)) {
-                    const auto& exeName = autoAppSessions_.at(rootProcessId).exeName;
-                    // One track per app name; a second unrelated instance shares it.
-                    if (!autoAppNames.insert(lowerAscii(exeName)).second) continue;
-                    const auto sourceSpec = appPidSourceSpec(rootProcessId, exeName);
-                    if (sourceSpec.empty() || containsExactSourceSpec(dynamicSources, sourceSpec)) continue;
+                for (const auto& sourceSpec : appAudioCaptureSpecs(processSnapshot.entries(), soundingApps)) {
+                    if (containsExactSourceSpec(dynamicSources, sourceSpec)) continue;
                     dynamicSources.push_back(sourceSpec);
-                    autoApps.push_back(exeName);
+                    const auto exeName = audioProcessName(sourceSpec);
+                    if (autoAppNames.insert(lowerAscii(exeName)).second) autoApps.push_back(exeName);
                 }
             }
 
